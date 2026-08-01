@@ -1,0 +1,124 @@
+@import "tailwindcss";
+
+:root {
+  --background: #05050a;
+  --foreground: #f5f5f7;
+  --surface: #101018;
+  --surface-alt: #15151f;
+  --border-subtle: rgba(255, 255, 255, 0.08);
+
+  /* ClipsyReel brand gradient: electric violet -> magenta -> orange (creator/AI energy) */
+  --brand-from: #7c3aed;
+  --brand-via: #d946ef;
+  --brand-to: #f97316;
+
+  --pro-from: #fbbf24;
+  --pro-to: #f97316;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-alt: var(--surface-alt);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background: radial-gradient(circle at 20% -10%, rgba(124, 58, 237, 0.25), transparent 45%),
+    radial-gradient(circle at 90% 0%, rgba(217, 70, 239, 0.15), transparent 40%),
+    var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+  min-height: 100dvh;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 999px;
+}
+
+.brand-gradient {
+  background: linear-gradient(135deg, var(--brand-from), var(--brand-via) 55%, var(--brand-to));
+}
+
+.brand-gradient-text {
+  background: linear-gradient(135deg, var(--brand-from), var(--brand-via) 55%, var(--brand-to));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.pro-gradient {
+  background: linear-gradient(135deg, var(--pro-from), var(--pro-to));
+}
+
+.glass-card {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+  border: 1px solid var(--border-subtle);
+  backdrop-filter: blur(20px);
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* --- GPX route map (src/components/gpx/*) --- */
+
+/* Dark, premium tile theme so the OSM map matches the app's aesthetic instead of looking like a plain daytime map. */
+.gpx-map-tiles {
+  filter: brightness(0.62) contrast(1.12) saturate(0.35) invert(1) hue-rotate(180deg);
+}
+
+.gpx-route-line {
+  filter: drop-shadow(0 0 6px rgba(56, 189, 248, 0.65));
+}
+
+.gpx-marker {
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 0 4px rgba(0, 0, 0, 0.35);
+}
+.gpx-marker-start {
+  width: 14px;
+  height: 14px;
+  background: linear-gradient(135deg, #34d399, #22d3ee);
+}
+.gpx-marker-end {
+  width: 14px;
+  height: 14px;
+  background: linear-gradient(135deg, var(--brand-via), var(--brand-to));
+}
+.gpx-marker-video {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 10, 16, 0.9);
+  color: #fff;
+  font-size: 11px;
+}
+.gpx-marker-video.gpx-marker-video-gps {
+  border-color: #34d399;
+}
+.gpx-marker-video.gpx-marker-video-timestamp {
+  border-color: #fbbf24;
+}
