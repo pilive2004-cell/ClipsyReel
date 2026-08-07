@@ -148,6 +148,7 @@ export interface UploadedVideo {
 /** Result of a real, in-browser ffmpeg.wasm montage render (see `src/lib/video-engine.ts`). */
 export interface MontageResult {
   url: string;
+  blob: Blob;
   durationSeconds: number;
   clipCount: number;
 }

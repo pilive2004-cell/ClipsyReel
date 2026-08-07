@@ -22,31 +22,31 @@ export interface TransitionPool {
 
 export const STYLE_TRANSITIONS: Record<ReelStyle, TransitionPool> = {
   viral: {
-    names: ["zoomin", "slideleft", "slideright"],
-    durationRange: [0.3, 0.5],
+    names: ["fade"],
+    durationRange: [0.22, 0.32],
   },
   adventure: {
-    names: ["zoomin", "dissolve", "smoothleft", "smoothright"],
-    durationRange: [0.5, 1],
+    names: ["fade"],
+    durationRange: [0.24, 0.34],
   },
   cinematic: {
-    names: ["fade", "dissolve", "fadeblack", "radial"],
-    durationRange: [1, 1.5],
+    names: ["fade"],
+    durationRange: [0.3, 0.42],
   },
   // Not specified by the product brief — extended in the same spirit as the
   // three defined styles (fast/punchy vs. slow/premium) so every style has a
   // sensible transition pool.
   sport: {
-    names: ["zoomin", "slideleft", "slideright", "circleopen"],
-    durationRange: [0.25, 0.45],
+    names: ["fade"],
+    durationRange: [0.2, 0.3],
   },
   travel: {
-    names: ["dissolve", "smoothleft", "smoothright", "fade"],
-    durationRange: [0.6, 1],
+    names: ["fade"],
+    durationRange: [0.26, 0.36],
   },
   luxury: {
-    names: ["fade", "dissolve", "circleopen", "radial"],
-    durationRange: [0.9, 1.4],
+    names: ["fade"],
+    durationRange: [0.3, 0.42],
   },
 };
 

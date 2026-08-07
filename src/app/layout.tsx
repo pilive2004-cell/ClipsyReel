@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import "leaflet/dist/leaflet.css";
+import "maplibre-gl/dist/maplibre-gl.css";
 import { PlanProvider } from "@/lib/plan-context";
 
 const geistSans = Geist({
@@ -36,4 +37,3 @@ export default function RootLayout({
     </html>
   );
 }
-

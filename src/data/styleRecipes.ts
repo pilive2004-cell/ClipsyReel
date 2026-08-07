@@ -28,45 +28,45 @@ export interface StyleRecipe {
 
 export const STYLE_RECIPES: Record<ReelStyle, StyleRecipe> = {
   viral: {
-    clipDuration: 1.5,
+    clipDuration: 6.8,
     zoom: "alternate",
-    zoomIntensity: 1.25,
-    speed: 1.05,
-    reelClipCount: 6,
-  },
-  travel: {
-    clipDuration: 2.6,
-    zoom: "in",
-    zoomIntensity: 1.15,
+    zoomIntensity: 1.1,
     speed: 1.0,
-    reelClipCount: 5,
-  },
-  adventure: {
-    clipDuration: 1.8,
-    zoom: "alternate",
-    zoomIntensity: 1.2,
-    speed: 1.05,
-    reelClipCount: 6,
-  },
-  sport: {
-    clipDuration: 1.2,
-    zoom: "in",
-    zoomIntensity: 1.3,
-    speed: 1.08,
-    reelClipCount: 6,
-  },
-  cinematic: {
-    clipDuration: 3.2,
-    zoom: "out",
-    zoomIntensity: 1.18,
-    speed: 0.96,
     reelClipCount: 4,
   },
-  luxury: {
-    clipDuration: 2.8,
+  travel: {
+    clipDuration: 7.0,
+    zoom: "in",
+    zoomIntensity: 1.08,
+    speed: 1.0,
+    reelClipCount: 4,
+  },
+  adventure: {
+    clipDuration: 6.8,
+    zoom: "alternate",
+    zoomIntensity: 1.1,
+    speed: 1.0,
+    reelClipCount: 4,
+  },
+  sport: {
+    clipDuration: 5.8,
     zoom: "in",
     zoomIntensity: 1.12,
     speed: 1.0,
-    reelClipCount: 5,
+    reelClipCount: 4,
+  },
+  cinematic: {
+    clipDuration: 7.4,
+    zoom: "out",
+    zoomIntensity: 1.08,
+    speed: 0.98,
+    reelClipCount: 4,
+  },
+  luxury: {
+    clipDuration: 7.0,
+    zoom: "in",
+    zoomIntensity: 1.08,
+    speed: 0.98,
+    reelClipCount: 4,
   },
 };

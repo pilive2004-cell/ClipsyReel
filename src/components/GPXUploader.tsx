@@ -16,11 +16,11 @@ const GPXMap = dynamic(() => import("./gpx/GPXMap"), {
   ssr: false,
   loading: () => <div className="h-40 w-full animate-pulse rounded-xl bg-white/5" />,
 });
-
 interface GPXUploaderProps {
   onLockedClick: () => void;
   /** Uploaded source clips — used to auto-place video markers along the parsed route. */
   videos: UploadedVideo[];
+  onRouteDataChange?: (route: { points: GpxTrackPoint[] | null; stats: GpxRouteStats | null }) => void;
 }
 
 /**
@@ -33,7 +33,11 @@ interface GPXUploaderProps {
  * real ExifTool/`exifr`-extracted GPS + capture timestamps once a backend
  * exists.
  */
-export default function GPXUploader({ onLockedClick, videos }: GPXUploaderProps) {
+export default function GPXUploader({
+  onLockedClick,
+  videos,
+  onRouteDataChange,
+}: GPXUploaderProps) {
   const { isFree } = usePlan();
   const inputRef = useRef<HTMLInputElement>(null);
   const [gpxText, setGpxText] = useState<string | null>(null);
@@ -58,6 +62,7 @@ export default function GPXUploader({ onLockedClick, videos }: GPXUploaderProps)
     setFileName("");
     setStats(null);
     setPoints(null);
+    onRouteDataChange?.({ points: null, stats: null });
     if (inputRef.current) inputRef.current.value = "";
   };
 
@@ -111,6 +116,7 @@ export default function GPXUploader({ onLockedClick, videos }: GPXUploaderProps)
           onReady={(pts, st) => {
             setPoints(pts);
             setStats(st);
+            onRouteDataChange?.({ points: pts, stats: st });
           }}
         />
 
@@ -141,7 +147,7 @@ export default function GPXUploader({ onLockedClick, videos }: GPXUploaderProps)
           <Map className="h-4.5 w-4.5 text-emerald-300" />
         </div>
         <div>
-          <p className="text-sm font-medium text-white/85">Add a GPX route map</p>
+          <p className="text-sm font-medium text-white/85">Importation GPX (pro)</p>
           <p className="mt-0.5 text-[11px] leading-relaxed text-white/45">
             Upload the .gpx file from your ride, hike or road trip — ClipsyReel plots it on a real interactive map with
             distance, elevation, duration and your video locations.

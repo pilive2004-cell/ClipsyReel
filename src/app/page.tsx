@@ -11,18 +11,21 @@ import StyleSelector from "@/components/StyleSelector";
 import AIAnalysisPanel from "@/components/AIAnalysisPanel";
 import RenderPanel from "@/components/RenderPanel";
 import ReelPreview from "@/components/ReelPreview";
-import HookCaptionPanel, { CUSTOM_HOOK_ID } from "@/components/HookCaptionPanel";
-import MusicSuggestionPanel from "@/components/MusicSuggestionPanel";
+import HookCaptionPanel from "@/components/HookCaptionPanel";
 import GPXUploader from "@/components/GPXUploader";
-import StoryPanel from "@/components/StoryPanel";
 import PricingModal from "@/components/PricingModal";
 import UpgradePrompt from "@/components/UpgradePrompt";
 import ExportPanel from "@/components/ExportPanel";
+import CreationExtrasPanel from "@/components/CreationExtrasPanel";
+import { RouteIntroClip } from "@/components/gpx/Route3DIntro";
+import Route3DIntro from "@/components/gpx/Route3DIntro";
 
 import { usePlan } from "@/lib/plan-context";
+import { generateGearSummaryClip, GearSummaryClip } from "@/lib/gear-summary-clip";
 import { buildAnalysisResult, generateMockAnalysisMulti, STYLES } from "@/data/mock";
 import { buildMontage, qualityForPlan } from "@/lib/video-engine";
-import { AppStep, BestMoment, MontageResult, ReelAnalysisResult, ReelStyle, UploadedVideo } from "@/types";
+import { buildGearSummaryEntries, DEFAULT_GEAR_SELECTIONS } from "@/data/gearCatalog";
+import { AppStep, BestMoment, GpxRouteStats, GpxTrackPoint, MontageResult, ReelAnalysisResult, ReelStyle, UploadedVideo } from "@/types";
 
 const STEP_ORDER: AppStep[] = ["upload", "style", "analyze", "render", "preview"];
 const STEP_LABELS: Record<AppStep, string> = {
@@ -41,13 +44,18 @@ export default function Home() {
   const [style, setStyle] = useState<ReelStyle | null>(null);
   const [analysis, setAnalysis] = useState<ReelAnalysisResult | null>(null);
   const [selectedHookId, setSelectedHookId] = useState<string>("");
-  const [selectedCaptionId, setSelectedCaptionId] = useState<string>("");
-  const [customHookText, setCustomHookText] = useState("");
-  const [customCaptionText, setCustomCaptionText] = useState("");
+  const [gearSelections, setGearSelections] = useState(DEFAULT_GEAR_SELECTIONS);
+  const [overlayTexts, setOverlayTexts] = useState<[string, string, string]>(["", "", ""]);
+  const [routeIntroClip, setRouteIntroClip] = useState<RouteIntroClip | null>(null);
+  const [hasRouteIntro, setHasRouteIntro] = useState(false);
+  const [routeIntroStatus, setRouteIntroStatus] = useState<"idle" | "rendering" | "ready" | "error">("idle");
+  const [routeIntroPoints, setRouteIntroPoints] = useState<GpxTrackPoint[] | null>(null);
+  const [routeIntroStats, setRouteIntroStats] = useState<GpxRouteStats | null>(null);
+  const [gearSummaryClip, setGearSummaryClip] = useState<GearSummaryClip | null>(null);
+  const [gearSummaryStatus, setGearSummaryStatus] = useState<"idle" | "rendering" | "ready" | "error">("idle");
 
   const [montage, setMontage] = useState<MontageResult | null>(null);
   const [renderProgress, setRenderProgress] = useState<number | null>(null);
-  const [renderPhase, setRenderPhase] = useState("Loading editing engine…");
   const [renderError, setRenderError] = useState<string | null>(null);
 
   const [pricingOpen, setPricingOpen] = useState(false);
@@ -70,6 +78,67 @@ export default function Home() {
     setStep("analyze");
   };
 
+  const startRender = () => {
+    if (!analysis || !style) return;
+    setStep("render");
+  };
+
+  const equipmentSummary = buildGearSummaryEntries(gearSelections);
+  const selectedOverlayTexts = overlayTexts.filter((text) => text.trim().length > 0);
+  const selectedOverlayTextKey = selectedOverlayTexts.join("\n");
+
+  const clearGearSummaryClip = (nextStatus: "idle" | "rendering" | "ready" | "error" = "idle") => {
+    setGearSummaryStatus(nextStatus);
+    setGearSummaryClip((current) => {
+      if (current?.url) URL.revokeObjectURL(current.url);
+      return null;
+    });
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (equipmentSummary.length === 0) return;
+
+    queueMicrotask(() => {
+      if (cancelled) return;
+
+      void generateGearSummaryClip({ selections: gearSelections })
+        .then((clip) => {
+          if (cancelled) {
+            if (clip?.url) URL.revokeObjectURL(clip.url);
+            return;
+          }
+          setGearSummaryClip((current) => {
+            if (current?.url) URL.revokeObjectURL(current.url);
+            return clip;
+          });
+          setGearSummaryStatus(clip ? "ready" : "idle");
+        })
+        .catch((error) => {
+          console.error(error);
+          if (cancelled) return;
+          setGearSummaryStatus("error");
+        });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [equipmentSummary.length, gearSelections]);
+
+  useEffect(() => {
+    return () => {
+      if (gearSummaryClip?.url) URL.revokeObjectURL(gearSummaryClip.url);
+    };
+  }, [gearSummaryClip]);
+
+  useEffect(() => {
+    return () => {
+      if (routeIntroClip?.url) URL.revokeObjectURL(routeIntroClip.url);
+    };
+  }, [routeIntroClip]);
+
   const handleAnalysisComplete = (realBestMoments: BestMoment[] | null) => {
     if (videos.length === 0 || !style) return;
     const totalDuration = videos.reduce((sum, v) => sum + v.durationSeconds, 0);
@@ -82,8 +151,7 @@ export default function Home() {
         : generateMockAnalysisMulti(videos, style);
     setAnalysis(result);
     setSelectedHookId(result.hooks[0].id);
-    setSelectedCaptionId(result.captions[0].id);
-    setStep("render");
+    setStep("style");
   };
 
   // Runs the real ffmpeg.wasm montage (cuts + Ken Burns zoom + randomized,
@@ -91,12 +159,17 @@ export default function Home() {
   // analysis has produced best-moment timestamps to cut from.
   useEffect(() => {
     if (step !== "render" || videos.length === 0 || !analysis || !style) return;
+    if (hasRouteIntro && routeIntroStatus === "rendering" && routeIntroClip === null) {
+      return;
+    }
+    if (equipmentSummary.length > 0 && gearSummaryStatus === "rendering" && gearSummaryClip === null) {
+      return;
+    }
     let cancelled = false;
 
     (async () => {
       setRenderProgress(null);
       setRenderError(null);
-      setRenderPhase("Loading editing engine…");
 
       try {
         const result = await buildMontage({
@@ -105,11 +178,14 @@ export default function Home() {
           style,
           mode: "reel",
           bestMoments: analysis.bestMoments,
-          quality: qualityForPlan(plan),
+          introClip: routeIntroClip ?? undefined,
+          outroClip: gearSummaryClip ?? undefined,
+          quality: qualityForPlan(),
+          renderSpeedProfile: "fast",
           watermark: isFree,
+          overlayTexts: selectedOverlayTexts,
           onProgress: (ratio) => {
             if (cancelled) return;
-            setRenderPhase("Cutting, zooming & cross-fading your clips…");
             setRenderProgress(ratio);
           },
         });
@@ -128,7 +204,7 @@ export default function Home() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step]);
+  }, [step, videos.length, analysis, style, routeIntroClip, gearSummaryClip, isFree, plan, hasRouteIntro, routeIntroStatus, equipmentSummary.length, gearSummaryStatus, selectedOverlayTextKey]);
 
   const retryRender = () => {
     setStep("analyze");
@@ -147,34 +223,34 @@ export default function Home() {
     setStyle(null);
     setAnalysis(null);
     setSelectedHookId("");
-    setSelectedCaptionId("");
-    setCustomHookText("");
-    setCustomCaptionText("");
+    setGearSelections(DEFAULT_GEAR_SELECTIONS);
+    setOverlayTexts(["", "", ""]);
+    setRouteIntroClip(null);
+    setHasRouteIntro(false);
+    setRouteIntroStatus("idle");
+    setRouteIntroPoints(null);
+    setRouteIntroStats(null);
+    clearGearSummaryClip("idle");
     setMontage(null);
     setStep("upload");
   };
 
-  const selectedHookText =
-    selectedHookId === CUSTOM_HOOK_ID ? customHookText : analysis?.hooks.find((h) => h.id === selectedHookId)?.text ?? "";
+  const selectedHookText = analysis?.hooks.find((h) => h.id === selectedHookId)?.text ?? analysis?.hooks[0]?.text ?? "";
   const previewUrl = montage?.url ?? videos[0]?.previewUrl ?? "";
   const combinedName = videos.length > 1 ? `${videos.length}-clips-montage` : videos[0]?.name ?? "reel";
+  const renderPhaseLabel =
+    hasRouteIntro && routeIntroStatus === "rendering" && routeIntroClip === null
+      ? "Preparing 3D terrain flyover…"
+      : equipmentSummary.length > 0 && gearSummaryStatus === "rendering" && gearSummaryClip === null
+        ? "Preparing equipment summary card…"
+      : renderProgress !== null
+        ? "Cutting, zooming & cross-fading your clips…"
+        : "Loading editing engine…";
 
   return (
     <AppShell onOpenPricing={() => setPricingOpen(true)}>
-      {step === "upload" && (
-        <div className="space-y-5">
+      <div className={step === "upload" ? "space-y-5" : "hidden"}>
           <HeroSection />
-
-          {isFree && (
-            <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-2.5 text-[11px] text-white/50">
-              <span>
-                Free plan: {Math.max(0, weeklyFreeLimit - reelsUsedThisWeek)} of {weeklyFreeLimit} Reel this week
-              </span>
-              <button onClick={() => setPricingOpen(true)} className="font-semibold text-fuchsia-300">
-                Upgrade
-              </button>
-            </div>
-          )}
 
           <div>
             <h2 className="mb-2 text-sm font-semibold text-white/85">1. Upload your video{videos.length > 1 ? "s" : ""}</h2>
@@ -184,9 +260,19 @@ export default function Home() {
 
           {/* GPX route map lives right under the video import, per Pro-tier UX request. */}
           <div>
-            <h2 className="mb-2 text-sm font-semibold text-white/85">Route map (optional)</h2>
+            <h2 className="mb-2 text-sm font-semibold text-white/85">Importation GPX (pro)</h2>
             <GPXUploader
               videos={videos}
+              onRouteDataChange={({ points, stats }) => {
+                setRouteIntroPoints(points);
+                setRouteIntroStats(stats);
+                const available = !!points && points.length > 1;
+                setHasRouteIntro(available);
+                if (!available) {
+                  setRouteIntroClip(null);
+                  setRouteIntroStatus("idle");
+                }
+              }}
               onLockedClick={() =>
                 showUpgrade("GPX route maps are a Pro feature", "Upload your ride/hike GPX file and plot it on a real interactive map with Creator Pro.")
               }
@@ -200,11 +286,9 @@ export default function Home() {
           >
             Choose a style <ArrowRight className="h-4 w-4" />
           </button>
-        </div>
-      )}
+      </div>
 
-      {step === "style" && (
-        <div className="space-y-5">
+      <div className={step === "style" ? "space-y-5" : "hidden"}>
           <StepBar step={step} />
           <div>
             <h2 className="mb-1 text-sm font-semibold text-white/85">2. Pick a Reel style</h2>
@@ -218,24 +302,101 @@ export default function Home() {
             />
           </div>
 
+          {analysis && (
+            <div className="space-y-4 rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+              <div>
+                <h2 className="text-sm font-semibold text-white/85">Hook text</h2>
+                <p className="mt-1 text-xs text-white/45">Ajoute ici tes 3 textes personnalisés.</p>
+              </div>
+              <HookCaptionPanel
+                overlayTexts={overlayTexts}
+                onChangeOverlayText={(index, value) =>
+                  setOverlayTexts((current) => {
+                    const next = [...current] as [string, string, string];
+                    next[index] = value;
+                    return next;
+                  })
+                }
+              />
+            </div>
+          )}
+
+          {analysis && (
+            <CreationExtrasPanel
+            selections={gearSelections}
+            onSelectGearBrand={(key, brand) =>
+              setGearSelections((current) => {
+                const next = {
+                  ...current,
+                  [key]: {
+                    brand,
+                    model: "",
+                    customModel: "",
+                  },
+                };
+                const nextSummary = buildGearSummaryEntries(next);
+                clearGearSummaryClip(nextSummary.length > 0 ? "rendering" : "idle");
+                return next;
+              })
+            }
+            onSelectGearModel={(key, model) =>
+              setGearSelections((current) => {
+                const next = {
+                 ...current,
+                 [key]: {
+                   ...current[key],
+                   model: current[key].model === model ? "" : model,
+                   customModel: "",
+                 },
+                };
+                const nextSummary = buildGearSummaryEntries(next);
+                clearGearSummaryClip(nextSummary.length > 0 ? "rendering" : "idle");
+                return next;
+              })
+            }
+            onChangeCustomGearModel={(key, value) =>
+              setGearSelections((current) => {
+                const next = {
+                 ...current,
+                 [key]: {
+                   ...current[key],
+                   customModel: value,
+                 },
+                };
+                const nextSummary = buildGearSummaryEntries(next);
+                clearGearSummaryClip(nextSummary.length > 0 ? "rendering" : "idle");
+                return next;
+              })
+            }
+            />
+          )}
+
           <div className="flex gap-2">
             <BackButton onClick={() => setStep("upload")} />
-            <button
-              onClick={startAnalysis}
-              disabled={!style}
-              className="flex flex-1 items-center justify-center gap-2 rounded-2xl brand-gradient py-3.5 text-sm font-semibold text-white shadow-lg shadow-fuchsia-500/25 transition disabled:cursor-not-allowed disabled:opacity-30"
-            >
-              Analyze video{videos.length > 1 ? "s" : ""} <ArrowRight className="h-4 w-4" />
-            </button>
+            {!analysis ? (
+              <button
+                onClick={startAnalysis}
+                disabled={!style}
+                className="flex flex-1 items-center justify-center gap-2 rounded-2xl brand-gradient py-3.5 text-sm font-semibold text-white shadow-lg shadow-fuchsia-500/25 transition disabled:cursor-not-allowed disabled:opacity-30"
+              >
+                Analyze video{videos.length > 1 ? "s" : ""} <ArrowRight className="h-4 w-4" />
+              </button>
+            ) : (
+              <button
+                onClick={startRender}
+                className="flex flex-1 items-center justify-center gap-2 rounded-2xl brand-gradient py-3.5 text-sm font-semibold text-white shadow-lg shadow-fuchsia-500/25 transition"
+              >
+                Generate Reel <ArrowRight className="h-4 w-4" />
+              </button>
+            )}
           </div>
-        </div>
-      )}
+      </div>
 
       {step === "analyze" && <AIAnalysisPanel videos={videos} onComplete={handleAnalysisComplete} />}
 
       {step === "render" && style && (
         <div className="space-y-4">
-          <RenderPanel progress={renderProgress} phaseLabel={renderPhase} styleLabel={STYLES.find((s) => s.id === style)?.label ?? style} />
+          <RenderPanel progress={renderProgress} phaseLabel={renderPhaseLabel} styleLabel={STYLES.find((s) => s.id === style)?.label ?? style} />
           {renderError && (
             <div className="space-y-2 rounded-2xl border border-rose-400/20 bg-rose-400/[0.06] px-4 py-3 text-xs text-rose-300">
               <p>{renderError}</p>
@@ -263,40 +424,16 @@ export default function Home() {
 
           <ReelPreview
             videoUrl={previewUrl}
+            videoBlob={montage?.blob}
             style={analysis.style}
             hookText={selectedHookText}
-            overallScore={analysis.overallScore}
             bestMoments={analysis.bestMoments}
             watermark={isFree && !montage}
+            overlayTexts={selectedOverlayTexts}
+            introDurationSeconds={routeIntroClip?.durationSeconds ?? 0}
+            outroDurationSeconds={gearSummaryClip?.durationSeconds ?? 0}
             montageInfo={montage ? { clipCount: montage.clipCount, durationSeconds: montage.durationSeconds } : undefined}
           />
-
-          <Section title="Hook & caption">
-            <HookCaptionPanel
-              hooks={analysis.hooks}
-              captions={analysis.captions}
-              hashtags={analysis.hashtags}
-              selectedHookId={selectedHookId}
-              selectedCaptionId={selectedCaptionId}
-              onSelectHook={setSelectedHookId}
-              onSelectCaption={setSelectedCaptionId}
-              customHookText={customHookText}
-              customCaptionText={customCaptionText}
-              onCustomHookChange={setCustomHookText}
-              onCustomCaptionChange={setCustomCaptionText}
-              onLockedClick={() =>
-                showUpgrade("More variants with Pro", "Free includes 1 hook & caption variant. Upgrade to unlock every AI-generated option.")
-              }
-            />
-          </Section>
-
-          <Section title="Music suggestion">
-            <MusicSuggestionPanel music={analysis.music} />
-          </Section>
-
-          <Section title="Instagram Story">
-            <StoryPanel videos={videos} style={analysis.style} bestMoments={analysis.bestMoments} watermark={isFree} />
-          </Section>
 
           <Section title="Export">
             <ExportPanel videoUrl={previewUrl} videoName={combinedName} onLockedClick={() => setPricingOpen(true)} />
@@ -313,6 +450,15 @@ export default function Home() {
       )}
 
       <PricingModal open={pricingOpen} onClose={() => setPricingOpen(false)} />
+      {routeIntroPoints && routeIntroPoints.length > 1 && (
+        <Route3DIntro
+          points={routeIntroPoints}
+          routeStats={routeIntroStats}
+          onClipReady={setRouteIntroClip}
+          onStatusChange={setRouteIntroStatus}
+          hideUi
+        />
+      )}
       <UpgradePrompt
         open={!!upgradePrompt}
         title={upgradePrompt?.title ?? ""}

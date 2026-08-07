@@ -3,12 +3,6 @@
 import { motion } from "framer-motion";
 import { Film, Sparkles, Zap } from "lucide-react";
 
-const STATS = [
-  { label: "Reels created", value: "128k+" },
-  { label: "Avg. time saved", value: "22 min" },
-  { label: "Creators onboard", value: "6,400+" },
-];
-
 export default function HeroSection() {
   return (
     <section className="relative overflow-hidden rounded-3xl border border-white/5 glass-card px-5 py-7 text-center">
@@ -35,15 +29,6 @@ export default function HeroSection() {
           Upload your MP4, pick a style, and let ClipsyReel find the best
           moments, write your hook &amp; caption, and export a ready-to-post 9:16 Reel.
         </p>
-
-        <div className="mt-2 grid w-full grid-cols-3 gap-2">
-          {STATS.map((s) => (
-            <div key={s.label} className="rounded-2xl border border-white/5 bg-white/[0.03] px-2 py-2.5">
-              <div className="text-sm font-bold sm:text-base">{s.value}</div>
-              <div className="text-[10px] leading-tight text-white/50">{s.label}</div>
-            </div>
-          ))}
-        </div>
 
         <div className="mt-1 flex items-center gap-4 text-[11px] text-white/40">
           <span className="flex items-center gap-1">

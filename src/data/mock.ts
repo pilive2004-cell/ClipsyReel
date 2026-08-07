@@ -123,9 +123,9 @@ export const STYLES: StyleDefinition[] = [
 
 const HOOKS_BY_STYLE: Record<ReelStyle, string[]> = {
   viral: [
-    "You won't believe what happened next 👀",
     "Wait for it... this changes everything.",
     "POV: you found the best spot before everyone else.",
+    "The moment everything changed.",
   ],
   travel: [
     "This place shouldn't even be real.",

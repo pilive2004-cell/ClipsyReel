@@ -26,7 +26,7 @@ export default function ExportPanel({ videoUrl, videoName, onLockedClick }: Expo
   const [isExporting, setIsExporting] = useState(false);
   const [done, setDone] = useState(false);
 
-  const quality = plan === "business" ? "4K" : plan === "creator" ? "HD (1080p)" : "720p";
+  const quality = plan === "business" ? "4K" : "1080p";
 
   const handleExport = () => {
     setIsExporting(true);

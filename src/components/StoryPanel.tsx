@@ -49,7 +49,7 @@ export default function StoryPanel({ videos, style, bestMoments, watermark }: St
         mode: "story",
         bestMoments,
         maxStorySeconds: MAX_STORY_SECONDS,
-        quality: qualityForPlan(plan),
+        quality: qualityForPlan(),
         watermark,
         onProgress: (ratio) => setProgress(ratio),
       });

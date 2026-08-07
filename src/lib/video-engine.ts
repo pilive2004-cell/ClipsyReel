@@ -2,7 +2,7 @@
 
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile } from "@ffmpeg/util";
-import { BestMoment, PlanId, ReelStyle } from "@/types";
+import { BestMoment, ReelStyle } from "@/types";
 import { STYLE_RECIPES, StyleRecipe } from "@/data/styleRecipes";
 import { pickTransitionName, randomTransitionDuration, STYLE_TRANSITIONS } from "@/data/transitions";
 
@@ -40,6 +40,10 @@ import { pickTransitionName, randomTransitionDuration, STYLE_TRANSITIONS } from 
 
 let ffmpegSingleton: FFmpeg | null = null;
 let loadingPromise: Promise<FFmpeg> | null = null;
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
 
 /** Lazily loads & caches a single ffmpeg.wasm instance (core files are self-hosted in /public/ffmpeg). */
 async function loadFFmpeg(): Promise<FFmpeg> {
@@ -88,7 +92,7 @@ interface Segment {
 }
 
 /** How much a `slowMo` segment's playback speed is scaled down relative to the style's base speed. */
-const SLOW_MO_FACTOR = 0.5;
+const SLOW_MO_FACTOR = 0.84;
 
 /** The effective playback speed (base style speed, optionally halved for slow-mo segments) used both for the ffmpeg `setpts` filter and for computing the resulting clip duration. */
 function effectiveSpeed(seg: Segment, recipe: StyleRecipe): number {
@@ -103,29 +107,28 @@ function effectiveSpeed(seg: Segment, recipe: StyleRecipe): number {
  * skipped for very short/snappy clips where slow-mo would just look choppy.
  */
 function applySlowMoToStandoutMoments(segments: Segment[], moments: BestMoment[]): Segment[] {
-  const MIN_LENGTH_FOR_SLOWMO = 0.9;
-  const confidenceThreshold = 78;
-  let lastWasSlowMo = false;
-  let slowMoCount = 0;
-  const maxSlowMo = Math.max(1, Math.ceil(segments.length / 3));
+  // The current UX target forbids shots that appear frozen/over-held.
+  // Disable automatic slow-motion tagging entirely to keep every shot moving.
+  void moments;
+  return segments;
+}
 
-  return segments.map((seg, i) => {
-    const moment = moments[i];
-    const eligible =
-      !!moment &&
-      moment.confidence >= confidenceThreshold &&
-      seg.length >= MIN_LENGTH_FOR_SLOWMO &&
-      !lastWasSlowMo &&
-      slowMoCount < maxSlowMo;
+function pickDistinctMoments(moments: BestMoment[], clipDuration: number): BestMoment[] {
+  const minGap = Math.max(2.2, clipDuration * 0.85);
+  const chosen: BestMoment[] = [];
 
-    if (eligible) {
-      lastWasSlowMo = true;
-      slowMoCount++;
-      return { ...seg, slowMo: true };
-    }
-    lastWasSlowMo = false;
-    return seg;
-  });
+  for (const moment of [...moments].sort((a, b) => b.confidence - a.confidence)) {
+    const overlapsExisting = chosen.some((picked) => {
+      const startGap = Math.abs(picked.startSeconds - moment.startSeconds);
+      const endGap = Math.abs(picked.endSeconds - moment.endSeconds);
+      const intersects =
+        moment.startSeconds < picked.endSeconds + minGap * 0.2 && picked.startSeconds < moment.endSeconds + minGap * 0.2;
+      return intersects || (startGap < minGap && endGap < minGap);
+    });
+    if (!overlapsExisting) chosen.push(moment);
+  }
+
+  return chosen.sort((a, b) => a.startSeconds - b.startSeconds);
 }
 
 /** Picks up to `recipe.reelClipCount` of the AI-detected best moments, fairly distributed across every source video (round-robin by per-video confidence) so a multi-video upload doesn't get dominated by whichever video happened to produce its moments first in the list. */
@@ -136,8 +139,9 @@ function planReelSegments(bestMoments: BestMoment[], recipe: StyleRecipe, videoD
     if (list) list.push(m);
     else byVideo.set(m.sourceIndex, [m]);
   }
-  // Best moment of each video first, so round-robin picks the strongest ones before dipping into weaker ones.
-  for (const list of byVideo.values()) list.sort((a, b) => b.confidence - a.confidence);
+  for (const [sourceIndex, list] of byVideo.entries()) {
+    byVideo.set(sourceIndex, pickDistinctMoments(list, recipe.clipDuration));
+  }
 
   const activeSources = Array.from(byVideo.keys()).sort((a, b) => a - b);
   const selected: BestMoment[] = [];
@@ -154,19 +158,20 @@ function planReelSegments(bestMoments: BestMoment[], recipe: StyleRecipe, videoD
     if (!addedThisRound) break;
   }
 
-  // Group clips by source (in upload order) and chronologically within each source, so the montage reads as "video 1 highlights → video 2 highlights → video 3 highlights" rather than jumping randomly between sources.
-  selected.sort((a, b) => a.sourceIndex - b.sourceIndex || a.startSeconds - b.startSeconds);
-
   const segments = selected
     .map((m) => {
       const videoDuration = videoDurations[m.sourceIndex] ?? 0;
-      const start = Math.min(Math.max(0, m.startSeconds), Math.max(0, videoDuration - 0.3));
+      const targetLength = Math.max(3.4, recipe.clipDuration);
+      const momentCenter = (m.startSeconds + m.endSeconds) / 2;
+      const start = Math.min(
+        Math.max(0, momentCenter - targetLength / 2),
+        Math.max(0, videoDuration - 0.3)
+      );
       const available = Math.max(0, videoDuration - start);
-      const momentLen = Math.max(0.3, m.endSeconds - m.startSeconds);
-      const length = Math.max(0.3, Math.min(recipe.clipDuration, momentLen, available));
+      const length = Math.max(3.0, Math.min(targetLength, available));
       return { sourceIndex: m.sourceIndex, start, length };
     })
-    .filter((s) => s.length > 0.15);
+    .filter((s) => s.length > 2.9);
 
   return applySlowMoToStandoutMoments(segments, selected);
 }
@@ -231,6 +236,7 @@ function buildSegmentFilter(seg: Segment, index: number, recipe: StyleRecipe, w:
 
 export type MontageMode = "reel" | "story";
 export type RenderQuality = "720p" | "1080p";
+export type RenderSpeedProfile = "standard" | "fast";
 
 const QUALITY_DIMENSIONS: Record<RenderQuality, { w: number; h: number }> = {
   "720p": { w: 720, h: 1280 },
@@ -238,8 +244,8 @@ const QUALITY_DIMENSIONS: Record<RenderQuality, { w: number; h: number }> = {
 };
 
 /** Maps the demo plan tier to a render resolution — Pro plans render sharper (and, being fewer pixels for Free, faster too). */
-export function qualityForPlan(plan: PlanId): RenderQuality {
-  return plan === "free" ? "720p" : "1080p";
+export function qualityForPlan(): RenderQuality {
+  return "1080p";
 }
 
 const RENDER_FPS = 24;
@@ -308,11 +314,96 @@ async function generateWatermarkPng(frameWidth: number): Promise<Uint8Array> {
   return new Uint8Array(await blob.arrayBuffer());
 }
 
+function wrapCanvasText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
+  const words = text.trim().split(/\s+/);
+  const lines: string[] = [];
+  let current = "";
+
+  for (const word of words) {
+    const next = current ? `${current} ${word}` : word;
+    if (ctx.measureText(next).width <= maxWidth || !current) {
+      current = next;
+    } else {
+      lines.push(current);
+      current = word;
+    }
+  }
+  if (current) lines.push(current);
+  return lines.slice(0, 3);
+}
+
+async function generateOverlayTextPng(frameWidth: number, frameHeight: number, text: string): Promise<Uint8Array> {
+  const canvas = document.createElement("canvas");
+  canvas.width = frameWidth;
+  canvas.height = frameHeight;
+  const ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
+  ctx.clearRect(0, 0, frameWidth, frameHeight);
+
+  const cardWidth = Math.round(frameWidth * 0.82);
+  const paddingX = Math.round(frameWidth * 0.06);
+  const y = Math.round(frameHeight * 0.64);
+  const x = Math.round((frameWidth - cardWidth) / 2);
+  const maxTextWidth = cardWidth - paddingX * 2;
+
+  ctx.font = `700 ${Math.round(frameWidth * 0.058)}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+  const lines = wrapCanvasText(ctx, text, maxTextWidth);
+  const lineHeight = Math.round(frameWidth * 0.072);
+  const cardHeight = Math.max(Math.round(frameHeight * 0.1), paddingX * 2 + lines.length * lineHeight);
+
+  ctx.fillStyle = "rgba(0,0,0,0.46)";
+  roundRectPath(ctx, x, y, cardWidth, cardHeight, Math.round(cardHeight / 2));
+  ctx.fill();
+
+  ctx.strokeStyle = "rgba(255,255,255,0.16)";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  ctx.fillStyle = "rgba(255,255,255,0.98)";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const centerX = frameWidth / 2;
+  const startY = y + cardHeight / 2 - ((lines.length - 1) * lineHeight) / 2;
+  lines.forEach((line, index) => {
+    ctx.fillText(line, centerX, startY + index * lineHeight);
+  });
+
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Overlay text canvas export failed"))), "image/png");
+  });
+
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+function planOverlayTextWindows(texts: string[], totalDuration: number, introDuration: number, outroDuration: number) {
+  if (texts.length === 0) return [];
+
+  const startBoundary = Math.max(0.35, introDuration + 0.35);
+  const endBoundary = Math.max(startBoundary, totalDuration - Math.max(0.35, outroDuration + 0.35));
+  const available = endBoundary - startBoundary;
+  if (available < 1.8) return [];
+
+  const gap = texts.length > 1 ? 0.45 : 0;
+  const rawDuration = (available - gap * Math.max(0, texts.length - 1)) / texts.length;
+  const overlayDuration = clamp(rawDuration, 1.8, 4.2);
+  const totalNeeded = overlayDuration * texts.length + gap * Math.max(0, texts.length - 1);
+  const offset = Math.max(0, (available - totalNeeded) / 2);
+
+  return texts.map((text, index) => {
+    const start = startBoundary + offset + index * (overlayDuration + gap);
+    const end = Math.min(endBoundary, start + overlayDuration);
+    return { text, start, end };
+  });
+}
+
 export interface BuildMontageParams {
   /** Up to 3 source videos to combine into one montage. */
   files: File[];
   /** Real duration (seconds) of each file in `files`, same order. */
   videoDurations: number[];
+  /** Optional intro clip prepended before the best-moment montage (e.g. a 3D route flyover). */
+  introClip?: { file: File; durationSeconds: number };
+  /** Optional end card appended after the montage (e.g. gear summary). */
+  outroClip?: { file: File; durationSeconds: number };
   style: ReelStyle;
   mode: MontageMode;
   bestMoments: BestMoment[];
@@ -322,6 +413,10 @@ export interface BuildMontageParams {
   quality?: RenderQuality;
   /** Burns a small "ClipsyReel" badge into the bottom-right corner of the exported MP4 (Free plan). */
   watermark?: boolean;
+  /** Controls encoder speed at fixed 1080p: "fast" is quicker with a small quality trade-off. */
+  renderSpeedProfile?: RenderSpeedProfile;
+  /** Up to three custom overlay texts burned into the final exported MP4. */
+  overlayTexts?: string[];
   onProgress?: (ratio: number) => void;
 }
 
@@ -330,6 +425,14 @@ export interface BuildMontageResult {
   blob: Blob;
   durationSeconds: number;
   clipCount: number;
+}
+
+function ensureNonEmptyVideoBlob(data: Uint8Array, mimeType: string) {
+  const bytes = new Uint8Array(data);
+  if (bytes.byteLength === 0) {
+    throw new Error("Rendered video output was empty.");
+  }
+  return new Blob([bytes], { type: mimeType });
 }
 
 /**
@@ -344,19 +447,26 @@ export async function buildMontage(params: BuildMontageParams): Promise<BuildMon
   const {
     files,
     videoDurations,
+    introClip,
+    outroClip,
     style,
     mode,
     bestMoments,
     maxStorySeconds = 60,
     quality = "720p",
     watermark = false,
+    renderSpeedProfile = "standard",
+    overlayTexts = [],
     onProgress,
   } = params;
 
   const recipe = STYLE_RECIPES[style];
   const transitionPool = STYLE_TRANSITIONS[style];
   const { w, h } = QUALITY_DIMENSIONS[quality];
+  const finalPreset = renderSpeedProfile === "fast" ? "superfast" : "veryfast";
+  const finalCrf = renderSpeedProfile === "fast" ? "25" : "23";
   const watermarkMargin = Math.round(w * 0.035);
+  const cleanedOverlayTexts = overlayTexts.map((text) => text.trim()).filter(Boolean).slice(0, 3);
 
   const segments = mode === "reel" ? planReelSegments(bestMoments, recipe, videoDurations) : planStorySegments(videoDurations, recipe, maxStorySeconds);
 
@@ -374,6 +484,18 @@ export async function buildMontage(params: BuildMontageParams): Promise<BuildMon
     })
   );
 
+  let introSourceName: string | null = null;
+  if (introClip) {
+    introSourceName = `intro_${stamp}.webm`;
+    await ffmpeg.writeFile(introSourceName, await fetchFile(introClip.file));
+  }
+
+  let outroSourceName: string | null = null;
+  if (outroClip) {
+    outroSourceName = `outro_${stamp}.webm`;
+    await ffmpeg.writeFile(outroSourceName, await fetchFile(outroClip.file));
+  }
+
   let watermarkName: string | null = null;
   if (watermark) {
     watermarkName = `wm_${stamp}.png`;
@@ -384,8 +506,9 @@ export async function buildMontage(params: BuildMontageParams): Promise<BuildMon
   // final compose pass. The compose pass happens whenever there's more than
   // 1 clip (cross-fade) OR a watermark needs burning in (even for a single
   // clip, that now requires one extra encode pass).
-  const needsComposePass = segments.length > 1 || !!watermark;
-  const totalUnits = segments.length + (needsComposePass ? 1 : 0);
+  const normalizedClipUnits = (introClip ? 1 : 0) + (outroClip ? 1 : 0);
+  const needsComposePass = segments.length + (introClip ? 1 : 0) + (outroClip ? 1 : 0) > 1 || !!watermark;
+  const totalUnits = normalizedClipUnits + segments.length + (needsComposePass ? 1 : 0);
   let completedUnits = 0;
   // ffmpeg.wasm's own "progress" events aren't always monotonic within a
   // single exec() call (short/ultrafast passes can briefly report a ratio
@@ -406,9 +529,91 @@ export async function buildMontage(params: BuildMontageParams): Promise<BuildMon
 
   const segmentClipNames: string[] = [];
   const segmentDurations: number[] = [];
-  const tempFiles: string[] = [...inputNames, ...(watermarkName ? [watermarkName] : [])];
+  const tempFiles: string[] = [...inputNames, ...(introSourceName ? [introSourceName] : []), ...(outroSourceName ? [outroSourceName] : []), ...(watermarkName ? [watermarkName] : [])];
+  const overlayTextNames: string[] = [];
 
   try {
+    for (let i = 0; i < cleanedOverlayTexts.length; i++) {
+      const name = `overlay_text_${stamp}_${i}.png`;
+      await ffmpeg.writeFile(name, await generateOverlayTextPng(w, h, cleanedOverlayTexts[i]));
+      overlayTextNames.push(name);
+      tempFiles.push(name);
+    }
+
+    const appendOverlayFilters = (
+      filterParts: string[],
+      baseLabel: string,
+      firstInputIndex: number,
+      durationSeconds: number,
+      labelPrefix: string
+    ) => {
+      if (overlayTextNames.length === 0) {
+        return { finalLabel: baseLabel, overlaysUsed: 0 };
+      }
+
+      const overlays = planOverlayTextWindows(
+        cleanedOverlayTexts,
+        durationSeconds,
+        introClip?.durationSeconds ?? 0,
+        outroClip?.durationSeconds ?? 0
+      );
+      if (overlays.length === 0) {
+        return { finalLabel: baseLabel, overlaysUsed: 0 };
+      }
+
+      let currentLabel = baseLabel;
+      overlays.forEach((overlay, index) => {
+        const inputIndex = firstInputIndex + index;
+        const textLabel = `${labelPrefix}_txtsrc_${index}`;
+        const outLabel = `${labelPrefix}_txt_${index}`;
+        filterParts.push(`[${inputIndex}:v]format=rgba[${textLabel}]`);
+        filterParts.push(
+          `[${currentLabel}][${textLabel}]overlay=(W-w)/2:H*0.64:enable='between(t,${overlay.start.toFixed(3)},${overlay.end.toFixed(3)})'[${outLabel}]`
+        );
+        currentLabel = outLabel;
+      });
+
+      return { finalLabel: currentLabel, overlaysUsed: overlays.length };
+    };
+
+    let introName: string | null = null;
+    if (introSourceName) {
+      introName = `intro_norm_${stamp}.mp4`;
+      await ffmpeg.exec([
+        "-fflags", "+genpts",
+        "-i", introSourceName,
+        "-vf", `fps=${RENDER_FPS},scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setpts=PTS-STARTPTS,format=yuv420p`,
+        "-an",
+        "-r", String(RENDER_FPS),
+        "-c:v", "libx264",
+        "-preset", finalPreset,
+        "-crf", finalCrf,
+        "-pix_fmt", "yuv420p",
+        introName,
+      ]);
+      tempFiles.push(introName);
+      completedUnits++;
+    }
+
+    let outroName: string | null = null;
+    if (outroSourceName) {
+      outroName = `outro_norm_${stamp}.mp4`;
+      await ffmpeg.exec([
+        "-fflags", "+genpts",
+        "-i", outroSourceName,
+        "-vf", `fps=${RENDER_FPS},scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setpts=PTS-STARTPTS,format=yuv420p`,
+        "-an",
+        "-r", String(RENDER_FPS),
+        "-c:v", "libx264",
+        "-preset", finalPreset,
+        "-crf", finalCrf,
+        "-pix_fmt", "yuv420p",
+        outroName,
+      ]);
+      tempFiles.push(outroName);
+      completedUnits++;
+    }
+
     // --- Phase 1: extract + Ken Burns zoom each segment (fast seek, small decode) ---
     for (let i = 0; i < segments.length; i++) {
       const seg = segments[i];
@@ -445,77 +650,129 @@ export async function buildMontage(params: BuildMontageParams): Promise<BuildMon
       completedUnits++;
     }
 
+    const finalClipNames = [...(introName ? [introName] : []), ...segmentClipNames, ...(outroName ? [outroName] : [])];
+    const finalDurations = [...(introName ? [introClip!.durationSeconds] : []), ...segmentDurations, ...(outroName ? [outroClip!.durationSeconds] : [])];
+
     // --- Single clip, no watermark: no re-encode needed, it *is* the final montage ---
-    if (segments.length === 1 && !watermark) {
-      const data = await ffmpeg.readFile(segmentClipNames[0]);
-      const bytes = new Uint8Array(data as Uint8Array);
-      const blob = new Blob([bytes], { type: "video/mp4" });
-      return { url: URL.createObjectURL(blob), blob, durationSeconds: segmentDurations[0], clipCount: 1 };
+    if (finalClipNames.length === 1 && !watermark) {
+      if (overlayTextNames.length === 0) {
+        const data = await ffmpeg.readFile(finalClipNames[0]);
+        const blob = ensureNonEmptyVideoBlob(data as Uint8Array, "video/mp4");
+        return { url: URL.createObjectURL(blob), blob, durationSeconds: finalDurations[0], clipCount: 1 };
+      }
+
+      const outputName = `out_${stamp}.mp4`;
+      const filterParts: string[] = [];
+      const { finalLabel, overlaysUsed } = appendOverlayFilters(filterParts, "0:v", 1, finalDurations[0], "single");
+      if (overlaysUsed === 0) {
+        const data = await ffmpeg.readFile(finalClipNames[0]);
+        const blob = ensureNonEmptyVideoBlob(data as Uint8Array, "video/mp4");
+        return { url: URL.createObjectURL(blob), blob, durationSeconds: finalDurations[0], clipCount: 1 };
+      }
+      await ffmpeg.exec([
+        "-i",
+        finalClipNames[0],
+        ...overlayTextNames.slice(0, overlaysUsed).flatMap((name) => ["-i", name]),
+        "-filter_complex",
+        filterParts.join(";"),
+        "-map",
+        `[${finalLabel}]`,
+        "-an",
+        "-r",
+        String(RENDER_FPS),
+        "-c:v",
+        "libx264",
+        "-preset",
+        finalPreset,
+        "-crf",
+        finalCrf,
+        "-pix_fmt",
+        "yuv420p",
+        outputName,
+      ]);
+      completedUnits++;
+      const data = await ffmpeg.readFile(outputName);
+      const blob = ensureNonEmptyVideoBlob(data as Uint8Array, "video/mp4");
+      tempFiles.push(outputName);
+      return { url: URL.createObjectURL(blob), blob, durationSeconds: finalDurations[0], clipCount: 1 };
     }
 
     // --- Single clip + watermark: one lightweight overlay pass, no cross-fade needed ---
-    if (segments.length === 1 && watermark) {
+    if (finalClipNames.length === 1 && watermark) {
       const outputName = `out_${stamp}.mp4`;
+      const filterParts = [`[1:v]format=rgba[wm]`, `[0:v][wm]overlay=W-w-${watermarkMargin}:H-h-${watermarkMargin}[vwm]`];
+      const { finalLabel, overlaysUsed } = appendOverlayFilters(filterParts, "vwm", 2, finalDurations[0], "singlewm");
       await ffmpeg.exec([
-        "-i", segmentClipNames[0],
+        "-i", finalClipNames[0],
         "-i", watermarkName as string,
-        "-filter_complex", `[1:v]format=rgba[wm];[0:v][wm]overlay=W-w-${watermarkMargin}:H-h-${watermarkMargin}[vout]`,
-        "-map", "[vout]",
+        ...overlayTextNames.slice(0, overlaysUsed).flatMap((name) => ["-i", name]),
+        "-filter_complex",
+        filterParts.join(";"),
+        "-map",
+        `[${finalLabel}]`,
         "-an",
         "-r", String(RENDER_FPS),
         "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-crf", "23",
+        "-preset", finalPreset,
+        "-crf", finalCrf,
         "-pix_fmt", "yuv420p",
         outputName,
       ]);
       completedUnits++;
       const data = await ffmpeg.readFile(outputName);
-      const bytes = new Uint8Array(data as Uint8Array);
-      const blob = new Blob([bytes], { type: "video/mp4" });
+      const blob = ensureNonEmptyVideoBlob(data as Uint8Array, "video/mp4");
       tempFiles.push(outputName);
-      return { url: URL.createObjectURL(blob), blob, durationSeconds: segmentDurations[0], clipCount: 1 };
+      return { url: URL.createObjectURL(blob), blob, durationSeconds: finalDurations[0], clipCount: 1 };
     }
 
     // --- Phase 2: cross-fade the small pre-rendered clips together (+ optional watermark overlay) ---
     const filterParts: string[] = [];
     let prevLabel = "0:v";
-    let acc = segmentDurations[0];
+    let acc = finalDurations[0];
     let prevTransitionName: string | null = null;
 
-    for (let i = 1; i < segmentClipNames.length; i++) {
+    for (let i = 1; i < finalClipNames.length; i++) {
       const transitionName = pickTransitionName(transitionPool, prevTransitionName);
-      const transitionDuration = Math.min(randomTransitionDuration(transitionPool), segmentDurations[i - 1], segmentDurations[i]);
+      const transitionDuration = Math.min(randomTransitionDuration(transitionPool), finalDurations[i - 1], finalDurations[i]);
       prevTransitionName = transitionName;
 
       const offset = Math.max(0, acc - transitionDuration);
-      const outLabel = i === segmentClipNames.length - 1 ? "vpre" : `x${i}`;
+      const outLabel = i === finalClipNames.length - 1 ? "vpre" : `x${i}`;
       filterParts.push(
         `[${prevLabel}][${i}:v]xfade=transition=${transitionName}:duration=${transitionDuration.toFixed(3)}:offset=${offset.toFixed(3)}[${outLabel}]`
       );
-      acc = acc + segmentDurations[i] - transitionDuration;
+      acc = acc + finalDurations[i] - transitionDuration;
       prevLabel = outLabel;
     }
 
-    const execArgs = segmentClipNames.flatMap((name) => ["-i", name]);
+    const execArgs = finalClipNames.flatMap((name) => ["-i", name]);
     let mapTarget = "[vpre]";
+    const overlayStartIndex = finalClipNames.length + (watermark ? 1 : 0);
     if (watermark) {
-      const wmInputIndex = segmentClipNames.length;
+      const wmInputIndex = finalClipNames.length;
       execArgs.push("-i", watermarkName as string);
       filterParts.push(`[${wmInputIndex}:v]format=rgba[wm]`);
       filterParts.push(`[vpre][wm]overlay=W-w-${watermarkMargin}:H-h-${watermarkMargin}[vout]`);
       mapTarget = "[vout]";
     }
+    const { finalLabel, overlaysUsed } = appendOverlayFilters(
+      filterParts,
+      mapTarget.slice(1, -1),
+      overlayStartIndex,
+      Math.max(acc, 0.5),
+      "multi"
+    );
+    execArgs.push(...overlayTextNames.slice(0, overlaysUsed).flatMap((name) => ["-i", name]));
 
     const outputName = `out_${stamp}.mp4`;
     execArgs.push(
       "-filter_complex", filterParts.join(";"),
-      "-map", mapTarget,
+      "-map", `[${finalLabel}]`,
       "-an",
       "-r", String(RENDER_FPS),
       "-c:v", "libx264",
-      "-preset", "veryfast",
-      "-crf", "23",
+      "-preset", finalPreset,
+      "-crf", finalCrf,
       "-pix_fmt", "yuv420p",
       outputName
     );
@@ -524,10 +781,9 @@ export async function buildMontage(params: BuildMontageParams): Promise<BuildMon
     completedUnits++;
 
     const data = await ffmpeg.readFile(outputName);
-    const bytes = new Uint8Array(data as Uint8Array);
-    const blob = new Blob([bytes], { type: "video/mp4" });
+    const blob = ensureNonEmptyVideoBlob(data as Uint8Array, "video/mp4");
     tempFiles.push(outputName);
-    return { url: URL.createObjectURL(blob), blob, durationSeconds: Math.max(acc, 0.5), clipCount: segments.length };
+    return { url: URL.createObjectURL(blob), blob, durationSeconds: Math.max(acc, 0.5), clipCount: finalClipNames.length };
   } finally {
     ffmpeg.off("progress", progressHandler);
     await Promise.all(tempFiles.map((name) => ffmpeg.deleteFile(name).catch(() => {})));
