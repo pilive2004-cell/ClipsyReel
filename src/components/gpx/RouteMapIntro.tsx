@@ -296,6 +296,103 @@ function pickMimeType(): string {
   return "";
 }
 
+/**
+ * Draws a cinematic title banner (departure → destination) directly onto the
+ * compositing canvas using the Canvas 2D API.
+ *
+ * Shown in two moments:
+ *   Phase 0 (0 – T_OVERVIEW):   viewer reads route endpoints while the overview
+ *                                 establishes geographic context.
+ *   Phase 4 (T_HOLD+1 – end):   brief reprise as the camera zooms out.
+ *
+ * Layout (bottom 42% of frame, 9:16):
+ *   • ROUTE •         ← micro-label in route red
+ *   START CITY        ← departure, medium weight
+ *   ──────            ← red separator line
+ *   END CITY          ← destination, large bold — the hero text
+ */
+function drawTitleCard(
+  ctx: CanvasRenderingContext2D,
+  elapsed: number,
+  startName: string,
+  endName: string,
+  w: number,
+  h: number,
+) {
+  // Alpha envelope — smooth fade-in/out at phase transitions
+  let alpha = 0;
+  if (elapsed < 1.2) {
+    alpha = easeInOut(elapsed / 1.2);                                   // fade in
+  } else if (elapsed < T_OVERVIEW - 0.7) {
+    alpha = 1;                                                           // hold
+  } else if (elapsed < T_OVERVIEW + 0.6) {
+    alpha = easeInOut(Math.max(0, (T_OVERVIEW + 0.6 - elapsed) / 1.3)); // fade out
+  } else if (elapsed > T_HOLD + 1.0 && elapsed < CLIP_DURATION_SECONDS - 0.8) {
+    // Phase-4 reprise: fade in → hold → fade out
+    const repriseLen = CLIP_DURATION_SECONDS - 0.8 - (T_HOLD + 1.0);
+    const t = (elapsed - (T_HOLD + 1.0)) / repriseLen;
+    alpha = easeInOut(Math.min(1, t < 0.3 ? t / 0.3 : t > 0.7 ? (1 - t) / 0.3 : 1));
+  }
+  if (alpha < 0.01) return;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  // Dark gradient fills the bottom 42% of the frame
+  const gradH = Math.round(h * 0.42);
+  const grad = ctx.createLinearGradient(0, h - gradH, 0, h);
+  grad.addColorStop(0, "rgba(0,0,0,0)");
+  grad.addColorStop(0.35, "rgba(0,0,0,0.78)");
+  grad.addColorStop(1, "rgba(0,0,0,0.90)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, h - gradH, w, gradH);
+
+  const cx = w / 2;
+  ctx.textAlign = "center";
+
+  // ── Destination (large, 800-weight) ───────────────────────────────────────
+  const destSize = Math.round(w * 0.082);
+  const destY = h - Math.round(h * 0.10);
+  ctx.font = `800 ${destSize}px -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif`;
+  ctx.textBaseline = "alphabetic";
+  ctx.shadowColor = "rgba(0,0,0,0.95)";
+  ctx.shadowBlur = 20;
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fillText(endName.toUpperCase(), cx, destY);
+
+  // ── Red separator line ─────────────────────────────────────────────────────
+  const sepY = destY - destSize - 12;
+  const sepHalfW = Math.round(w * 0.12);
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = "#FF3B30";
+  ctx.lineWidth = 3;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(cx - sepHalfW, sepY);
+  ctx.lineTo(cx + sepHalfW, sepY);
+  ctx.stroke();
+
+  // ── Departure (medium, lighter) ────────────────────────────────────────────
+  const startSize = Math.round(w * 0.048);
+  const startY = sepY - 14;
+  ctx.font = `300 ${startSize}px -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif`;
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = "rgba(255,255,255,0.65)";
+  ctx.shadowColor = "rgba(0,0,0,0.8)";
+  ctx.shadowBlur = 12;
+  ctx.fillText(startName.toUpperCase(), cx, startY);
+
+  // ── "• ROUTE •" micro-label ────────────────────────────────────────────────
+  const microSize = Math.round(w * 0.026);
+  ctx.font = `600 ${microSize}px -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif`;
+  ctx.fillStyle = "rgba(255,59,48,0.85)";
+  ctx.shadowBlur = 0;
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText("• ROUTE •", cx, startY - startSize - 16);
+
+  ctx.restore();
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 /**
@@ -406,7 +503,8 @@ export default function RouteMapIntro({
         },
         bounds,
         // OVERVIEW_MAX_ZOOM caps fitBounds so we never start at continent scale.
-        fitBoundsOptions: { padding: 70, maxZoom: OVERVIEW_MAX_ZOOM, animate: false },
+        // Padding 50px (not 70) keeps the route as the visual focus with minimal empty space.
+        fitBoundsOptions: { padding: 50, maxZoom: OVERVIEW_MAX_ZOOM, animate: false },
         // preserveDrawingBuffer: required for canvas.captureStream() under COEP.
         canvasContextAttributes: { preserveDrawingBuffer: true, antialias: true },
         interactive: false,
@@ -418,7 +516,8 @@ export default function RouteMapIntro({
       map.on("load", () => {
         if (cancelled || !map) return;
 
-        // Full-route ghost underlay (visible from the very first frame)
+        // Full-route ghost underlay (visible from the very first frame).
+        // Intentionally dim so the bright revealed line reads as the hero.
         map.addSource("route-ghost", {
           type: "geojson",
           data: buildLineGeoJSON(resampled, resampled.length),
@@ -427,35 +526,36 @@ export default function RouteMapIntro({
           id: "route-ghost-casing",
           type: "line",
           source: "route-ghost",
-          paint: { "line-color": "#ffffff", "line-width": 8, "line-opacity": 0.22 },
+          paint: { "line-color": "#ffffff", "line-width": 6, "line-opacity": 0.16 },
           layout: { "line-cap": "round", "line-join": "round" },
         });
         map.addLayer({
           id: "route-ghost-line",
           type: "line",
           source: "route-ghost",
-          paint: { "line-color": "#94a3b8", "line-width": 4, "line-opacity": 0.45 },
+          paint: { "line-color": "#c8c8c8", "line-width": 3, "line-opacity": 0.32 },
           layout: { "line-cap": "round", "line-join": "round" },
         });
 
-        // Progressively revealed route
+        // Progressively revealed route — bright red, thick, premium travel appearance.
+        // 16px white casing beneath 10px #FF3B30 line gives strong contrast on all map styles.
         map.addSource("route-revealed", { type: "geojson", data: buildLineGeoJSON(resampled, 2) });
         map.addLayer({
           id: "route-revealed-casing",
           type: "line",
           source: "route-revealed",
-          paint: { "line-color": "#ffffff", "line-width": 14, "line-opacity": 0.9 },
+          paint: { "line-color": "#ffffff", "line-width": 16, "line-opacity": 0.92 },
           layout: { "line-cap": "round", "line-join": "round" },
         });
         map.addLayer({
           id: "route-revealed-line",
           type: "line",
           source: "route-revealed",
-          paint: { "line-color": "#e43d30", "line-width": 8, "line-opacity": 1 },
+          paint: { "line-color": "#FF3B30", "line-width": 10, "line-opacity": 1 },
           layout: { "line-cap": "round", "line-join": "round" },
         });
 
-        // Vehicle head dot
+        // Vehicle head dot — matches route red for visual coherence
         map.addSource("vehicle-head", {
           type: "geojson",
           data: {
@@ -467,7 +567,7 @@ export default function RouteMapIntro({
           id: "vehicle-head-glow",
           type: "circle",
           source: "vehicle-head",
-          paint: { "circle-radius": 20, "circle-color": "#e43d30", "circle-opacity": 0.18, "circle-blur": 1 },
+          paint: { "circle-radius": 22, "circle-color": "#FF3B30", "circle-opacity": 0.20, "circle-blur": 1 },
         });
         map.addLayer({
           id: "vehicle-head-dot",
@@ -476,12 +576,15 @@ export default function RouteMapIntro({
           paint: {
             "circle-radius": 11,
             "circle-color": "#ffffff",
-            "circle-stroke-color": "#e43d30",
+            "circle-stroke-color": "#FF3B30",
             "circle-stroke-width": 5,
           },
         });
 
-        // Place-name labels (text-size 20 → ~40px at z12 on 720px canvas)
+        // Place-name labels.
+        // Start and end use text-size 26 (large, readable on mobile) while
+        // intermediate waypoints use 17. All labels allow overlap so they never
+        // disappear behind each other during animation.
         map.addSource("place-labels", { type: "geojson", data: buildLabelsGeoJSON([]) });
         map.addLayer({
           id: "place-labels-layer",
@@ -490,7 +593,8 @@ export default function RouteMapIntro({
           layout: {
             "text-field": ["get", "name"],
             "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
-            "text-size": 20,
+            // Data-driven size: start/end names are larger than intermediate waypoints
+            "text-size": ["case", ["any", ["get", "isStart"], ["get", "isEnd"]], 26, 17],
             "text-anchor": "bottom",
             "text-offset": [0, -1.4],
             "text-max-width": 12,
@@ -498,15 +602,36 @@ export default function RouteMapIntro({
             "text-ignore-placement": true,
           },
           paint: {
-            "text-color": ["case", ["get", "isEnd"], "#c0392b", ["get", "isStart"], "#16a34a", "#111827"],
+            "text-color": ["case", ["get", "isEnd"], "#c0392b", ["get", "isStart"], "#15803d", "#111827"],
             "text-halo-color": "#ffffff",
             "text-halo-width": 3.5,
           },
         });
 
-        // 4. Recording + smooth camera loop
+        // Pre-show the START label immediately (Phase 0 / overview hold) so the
+        // viewer can read the departure location while the title card is visible.
+        const startLabelFeature = labelData.find((l) => l.isStart);
+        if (startLabelFeature) {
+          (map.getSource("place-labels") as GeoJSONSource | undefined)?.setData(
+            buildLabelsGeoJSON([startLabelFeature]),
+          );
+        }
+
+        // 4. Recording setup — compositing canvas approach
+        //
+        // MapLibre renders into a WebGL canvas. Canvas 2D API can drawImage()
+        // a WebGL canvas (with preserveDrawingBuffer: true, already set above).
+        // We create a second 2D "compositing" canvas, composite the map onto it
+        // each MapLibre render, then draw the title card overlay on top.
+        // The MediaRecorder streams from this compositing canvas so the 2D title
+        // card text appears in the final exported clip.
         const mapCanvas = map.getCanvas();
-        const stream = mapCanvas.captureStream(RECORD_FPS);
+        const compositeCanvas = document.createElement("canvas");
+        compositeCanvas.width = MAP_WIDTH;
+        compositeCanvas.height = MAP_HEIGHT;
+        const compositeCtx = compositeCanvas.getContext("2d")!;
+
+        const stream = compositeCanvas.captureStream(RECORD_FPS);
         const recorder = new MediaRecorder(stream, { mimeType });
         const chunks: BlobPart[] = [];
 
@@ -541,13 +666,29 @@ export default function RouteMapIntro({
         let routeEndLat = resampled[resampled.length - 1].lat;
         let routeEndLng = resampled[resampled.length - 1].lng;
 
+        const startLabelName = labelData.find((l) => l.isStart)?.name ?? "";
+        const endLabelName   = labelData.find((l) => l.isEnd)?.name ?? "";
+
         let startTime: number | null = null;
         let prevFrameTime: number | null = null;
         let warmupFrames = 0;
         let lastRevealedIdx = 1;
-        let shownLabels: typeof labelData = [];
-        let lastLabelsLen = 0;
+        let shownLabels: typeof labelData = startLabelFeature ? [startLabelFeature] : [];
+        let lastLabelsLen = shownLabels.length;
         let lastGeoJSONUpdateMs = 0;
+        let endLabelShown = false;
+
+        // After each MapLibre WebGL render, composite the map onto the recording
+        // canvas and draw the 2D title card overlay on top.
+        map.on("render", () => {
+          if (cancelled) return;
+          compositeCtx.clearRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
+          compositeCtx.drawImage(mapCanvas, 0, 0);
+          if (startTime !== null) {
+            const elapsedSec = (performance.now() - startTime) / 1000;
+            drawTitleCard(compositeCtx, elapsedSec, startLabelName, endLabelName, MAP_WIDTH, MAP_HEIGHT);
+          }
+        });
 
         const renderFrame = (now: DOMHighResTimeStamp) => {
           if (cancelled || !map) return;
@@ -636,9 +777,10 @@ export default function RouteMapIntro({
               });
             }
 
-            // Reveal place-name labels as route progress passes their location
+            // Reveal intermediate place-name labels as the route draw head passes them.
+            // Start label is already shown from Phase 0; end label is added in Phase 3.
             const newlyVisible = labelData.filter(
-              (l) => l.progress <= phaseT && !shownLabels.find((s) => s.name === l.name),
+              (l) => !l.isStart && !l.isEnd && l.progress <= phaseT && !shownLabels.find((s) => s.name === l.name),
             );
             if (newlyVisible.length > 0 || shownLabels.length !== lastLabelsLen) {
               shownLabels = [...shownLabels, ...newlyVisible];
@@ -659,7 +801,20 @@ export default function RouteMapIntro({
 
           // ── Phase 3 (T_DRAW – T_HOLD): Completion hold ───────────────────
           // Camera holds at route end. All labels visible. Pitch flattens.
+          // End label (destination) is added here — after the full route is drawn
+          // the viewer can see exactly where the journey ends on the map.
           else if (elapsed < T_HOLD) {
+            if (!endLabelShown) {
+              endLabelShown = true;
+              const endLabel = labelData.find((l) => l.isEnd);
+              if (endLabel && !shownLabels.find((s) => s.name === endLabel.name)) {
+                shownLabels = [...shownLabels, endLabel];
+                lastLabelsLen = shownLabels.length;
+                (map.getSource("place-labels") as GeoJSONSource | undefined)?.setData(
+                  buildLabelsGeoJSON(shownLabels),
+                );
+              }
+            }
             const t = easeInOut((elapsed - T_DRAW) / (T_HOLD - T_DRAW));
             targetLat   = routeEndLat;
             targetLng   = routeEndLng;
