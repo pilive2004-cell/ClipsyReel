@@ -32,7 +32,7 @@ interface RouteMapIntroProps {
 }
 
 /** Total duration of the generated intro clip in seconds. */
-const CLIP_DURATION_SECONDS = 24;
+const CLIP_DURATION_SECONDS = 26;
 const MAP_WIDTH = 720;
 const MAP_HEIGHT = 1280;
 const RECORD_FPS = 24;
@@ -42,8 +42,8 @@ const RECORD_FPS = 24;
  *
  *   Phase 0 (0 → T_OVERVIEW)    Country/region context. Full ghost route shown.
  *                                Camera holds at capped overview zoom (≤ z8 so
- *                                it's never continent-scale).
- *   Phase 1 (T_OVERVIEW → T_ZOOMIN)  Smooth zoom-in to the start point at
+ *                                it's never continent-scale). Title card visible.
+ *   Phase 1 (T_OVERVIEW → T_ZOOMIN)  Smooth zoom-in to the route start point at
  *                                DETAIL_ZOOM (z12) — villages and roads readable.
  *   Phase 2 (T_ZOOMIN → T_DRAW)  Route draws itself. Camera follows the drawing
  *                                head at DETAIL_ZOOM. Labels pop in progressively.
@@ -51,10 +51,10 @@ const RECORD_FPS = 24;
  *                                pitch flattens.
  *   Phase 4 (T_HOLD → end)       Smooth zoom-out back to full-route overview.
  */
-const T_OVERVIEW  = 3;   // s — end of regional hold
-const T_ZOOMIN    = 8;   // s — end of zoom-in to start
-const T_DRAW      = 19;  // s — end of route-draw phase
-const T_HOLD      = 21;  // s — end of completion hold
+const T_OVERVIEW  = 5;   // s — end of regional hold (extended for title readability)
+const T_ZOOMIN    = 10;  // s — end of zoom-in to start
+const T_DRAW      = 21;  // s — end of route-draw phase
+const T_HOLD      = 23;  // s — end of completion hold
 // Phase 4: T_HOLD → CLIP_DURATION_SECONDS
 
 /**
@@ -349,13 +349,14 @@ function drawTitleCard(
   h: number,
 ) {
   // Alpha envelope — smooth fade-in/out at phase transitions
+  // Title is fully visible for ~3 seconds before the zoom-in begins.
   let alpha = 0;
-  if (elapsed < 1.2) {
-    alpha = easeInOut(elapsed / 1.2);                                   // fade in
-  } else if (elapsed < T_OVERVIEW - 0.7) {
-    alpha = 1;                                                           // hold
-  } else if (elapsed < T_OVERVIEW + 0.6) {
-    alpha = easeInOut(Math.max(0, (T_OVERVIEW + 0.6 - elapsed) / 1.3)); // fade out
+  if (elapsed < 1.4) {
+    alpha = easeInOut(elapsed / 1.4);                                          // fade in 0→1
+  } else if (elapsed < T_OVERVIEW - 1.0) {
+    alpha = 1;                                                                  // hold (1.4s → 4.0s = 2.6s full visibility)
+  } else if (elapsed < T_OVERVIEW + 0.8) {
+    alpha = easeInOut(Math.max(0, (T_OVERVIEW + 0.8 - elapsed) / 1.8));        // fade out
   } else if (elapsed > T_HOLD + 1.0 && elapsed < CLIP_DURATION_SECONDS - 0.8) {
     // Phase-4 reprise: fade in → hold → fade out
     const repriseLen = CLIP_DURATION_SECONDS - 0.8 - (T_HOLD + 1.0);
@@ -516,6 +517,14 @@ export default function RouteMapIntro({
       container.style.cssText = `width:${MAP_WIDTH}px;height:${MAP_HEIGHT}px;position:absolute;top:0;left:0;`;
       host.appendChild(container);
 
+      // Compute initial map center from route bbox (used for tile preloading only;
+      // the actual framing is corrected in the load handler via cameraForBounds).
+      const bboxArr = bounds as [[number, number], [number, number]];
+      const initCenter: [number, number] = [
+        (bboxArr[0][0] + bboxArr[1][0]) / 2,
+        (bboxArr[0][1] + bboxArr[1][1]) / 2,
+      ];
+
       map = new maplibregl.Map({
         container,
         style: {
@@ -537,33 +546,10 @@ export default function RouteMapIntro({
           },
           layers: [{ id: "base-tiles", type: "raster", source: "carto-voyager" }],
         },
-        bounds,
-        /**
-         * SMART AUTO-FRAMING: asymmetric fitBounds padding.
-         *
-         * Problem: the title card gradient covers the bottom 38% of the frame
-         * (~486px at 1280px). A symmetric 50px padding frames the route as if
-         * the full canvas is usable, which shifts the route behind the overlay.
-         *
-         * Fix: set bottom padding = title-card height + breathing room so
-         * MapLibre positions the route bounding box entirely within the
-         * visible upper portion of the frame. Left/right stay narrow to
-         * maximise the horizontal area the route occupies.
-         *
-         * The captured overviewCenter / overviewZoom from map.getCenter() /
-         * map.getZoom() after this fitBounds will already encode the correct
-         * offset, so Phase 4 (zoom-out) returns to the same well-framed view.
-         */
-        fitBoundsOptions: {
-          padding: {
-            top: 55,
-            bottom: Math.round(MAP_HEIGHT * 0.42),   // clear the title card
-            left: 45,
-            right: 45,
-          },
-          maxZoom: OVERVIEW_MAX_ZOOM,
-          animate: false,
-        },
+        // Initialise at route center for tile prefetching. The load handler
+        // immediately calls cameraForBounds + jumpTo to correct the framing.
+        center: initCenter,
+        zoom: 7,
         // preserveDrawingBuffer: required for canvas.captureStream() under COEP.
         canvasContextAttributes: { preserveDrawingBuffer: true, antialias: true },
         interactive: false,
@@ -710,10 +696,56 @@ export default function RouteMapIntro({
           onClipReady({ file, url, durationSeconds });
         };
 
-        // Snapshot overview camera position after fitBounds
-        const overviewCenter = map.getCenter();
-        // fitBounds zoom is already ≤ OVERVIEW_MAX_ZOOM (z8)
-        const overviewZoom = map.getZoom();
+        // ── SMART AUTO-FRAMING ────────────────────────────────────────────
+        //
+        // Goal: route visually centered in the UPPER safe zone (above the
+        // title card gradient) while using `jumpTo` WITHOUT persistent padding.
+        //
+        // Why NOT `fitBounds` + `map.getCenter()`:
+        //   MapLibre's `fitBounds` with asymmetric padding shifts the camera
+        //   such that the route bbox fits inside the padded viewport. However,
+        //   `map.getCenter()` with persistent padding returns the EFFECTIVE
+        //   center (the route bbox center), not the raw canvas-pixel center.
+        //   Using this center in a subsequent `jumpTo` without padding puts the
+        //   route at canvas center y=640 — the lower half — which is wrong.
+        //
+        // Correct approach: `map.cameraForBounds()` returns the PHYSICAL camera
+        //   center (the lat/lng that renders at canvas pixel MAP_WIDTH/2,
+        //   MAP_HEIGHT/2) that would make the bounds fit inside the padded
+        //   viewport. This center is offset SOUTH of the route bbox center, so
+        //   when passed to `jumpTo` (no padding), the route appears in the upper
+        //   safe zone — exactly above the title card.
+        //
+        // TITLE_CARD_H = 38% of canvas height = 486px at 1280px.
+        // Safe-zone padding: top 60px, bottom TITLE_CARD_H+30 (buffer), sides 52px.
+        const TITLE_CARD_H = Math.round(MAP_HEIGHT * 0.38);
+        const overviewCam = map.cameraForBounds(bounds, {
+          padding: {
+            top: 60,
+            bottom: TITLE_CARD_H + 30,
+            left: 52,
+            right: 52,
+          },
+          maxZoom: OVERVIEW_MAX_ZOOM,
+        });
+
+        // cameraForBounds can return undefined if bounds are degenerate.
+        // Fall back to route bbox midpoint at z6 if so.
+        // Normalise the LngLatLike center to a plain {lat, lng} object so we can
+        // safely access .lat / .lng throughout the render loop.
+        const bboxFallbackCenter: [number, number] = [
+          (bboxArr[0][0] + bboxArr[1][0]) / 2,
+          (bboxArr[0][1] + bboxArr[1][1]) / 2,
+        ];
+        const rawCenter = overviewCam?.center;
+        const overviewCenter: { lat: number; lng: number } = rawCenter
+          ? maplibregl.LngLat.convert(rawCenter as Parameters<typeof maplibregl.LngLat.convert>[0])
+          : { lat: bboxFallbackCenter[1], lng: bboxFallbackCenter[0] };
+        const overviewZoom = Math.min(overviewCam?.zoom ?? 6, OVERVIEW_MAX_ZOOM);
+
+        // Immediately position the map at the correctly-framed overview.
+        // No padding argument — the offset is already baked into overviewCenter.
+        map.jumpTo({ center: overviewCenter, zoom: overviewZoom, pitch: 0, bearing: 0 });
 
         // Smoothed camera state — starts exactly at the overview position
         let cam: CamState = {
