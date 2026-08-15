@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { UploadCloud, FileVideo, CheckCircle2, X, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getVideoDuration } from "@/lib/video-engine";
+import { readVideoMetadata } from "@/lib/video-metadata";
 import { UploadedVideo } from "@/types";
 
 interface VideoUploaderProps {
@@ -70,6 +71,7 @@ export default function VideoUploader({ videos, onChange, maxVideos = DEFAULT_MA
     (async () => {
       const previewUrl = URL.createObjectURL(file);
       const durationSeconds = await getVideoDuration(file);
+      const metadata = await readVideoMetadata(file);
       if (cancelled) return;
       setIsUploading(false);
       setPendingFile(null);
@@ -81,6 +83,7 @@ export default function VideoUploader({ videos, onChange, maxVideos = DEFAULT_MA
           previewUrl,
           file,
           durationSeconds,
+          metadata,
         },
       ]);
     })();
@@ -105,6 +108,11 @@ export default function VideoUploader({ videos, onChange, maxVideos = DEFAULT_MA
               <p className="truncate text-sm font-medium text-white/90">{v.name}</p>
               <p className="text-xs text-white/50">
                 {v.sizeMb} MB · clip {i + 1} · ready to craft
+              </p>
+              <p className="text-[11px] text-white/35">
+                {v.metadata.gps
+                  ? `GPS ${v.metadata.gps.lat.toFixed(3)}, ${v.metadata.gps.lng.toFixed(3)}`
+                  : v.metadata.technicalReason ?? "Location unknown"}
               </p>
             </div>
             <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-400" />

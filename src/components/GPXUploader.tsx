@@ -2,11 +2,11 @@
 
 import { useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { Lock, Map, X } from "lucide-react";
+import { AlertTriangle, Lock, Map, X } from "lucide-react";
 import { usePlan } from "@/lib/plan-context";
 import { DEMO_GPX } from "@/data/demo-gpx";
-import { generateMockVideoMetadata, matchVideosToRoute } from "@/lib/video-location-matcher";
-import { GpxRouteStats, GpxTrackPoint, UploadedVideo, VideoRouteMatch } from "@/types";
+import { matchVideosToRoute } from "@/lib/video-location-matcher";
+import { GpxRouteStats, GpxTrackPoint, UploadedVideo } from "@/types";
 import RouteStatsCard from "./gpx/RouteStatsCard";
 import VideoLocationMatcher from "./gpx/VideoLocationMatcher";
 
@@ -28,10 +28,9 @@ interface GPXUploaderProps {
  * `leaflet-gpx`, and render it on an interactive OpenStreetMap. Free users
  * see a blurred demo map with an upgrade prompt instead.
  *
- * FUTURE BACKEND INTEGRATION: video-to-route matching currently uses mocked
- * per-video metadata (see `src/lib/video-location-matcher.ts`) — swap in
- * real ExifTool/`exifr`-extracted GPS + capture timestamps once a backend
- * exists.
+ * Video markers are only placed when a video file contains genuine embedded
+ * GPS metadata close enough to the GPX route. Videos without GPS (or with GPS
+ * far away from the route) stay off the map and are labeled honestly.
  */
 export default function GPXUploader({
   onLockedClick,
@@ -66,10 +65,12 @@ export default function GPXUploader({
     if (inputRef.current) inputRef.current.value = "";
   };
 
-  const videoMatches: VideoRouteMatch[] = useMemo(() => {
-    if (!points || points.length === 0 || videos.length === 0) return [];
-    const metadata = generateMockVideoMetadata(videos, points);
-    return matchVideosToRoute(metadata, points);
+  const routeMatch = useMemo(() => {
+    if (!points || points.length === 0 || videos.length === 0) return { matches: [], warning: null };
+    return matchVideosToRoute(
+      videos.map((video) => video.metadata),
+      points
+    );
   }, [points, videos]);
 
   if (isFree) {
@@ -112,7 +113,7 @@ export default function GPXUploader({
 
         <GPXMap
           gpxText={gpxText}
-          videoMatches={videoMatches}
+          videoMatches={routeMatch.matches}
           onReady={(pts, st) => {
             setPoints(pts);
             setStats(st);
@@ -126,9 +127,16 @@ export default function GPXUploader({
           </div>
         )}
 
-        {videoMatches.length > 0 && (
+        {routeMatch.warning && (
+          <div className="mt-3 flex items-start gap-2 rounded-xl border border-amber-400/25 bg-amber-400/[0.08] px-3 py-2 text-[11px] text-amber-200">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <p>{routeMatch.warning}</p>
+          </div>
+        )}
+
+        {routeMatch.matches.length > 0 && (
           <div className="mt-3">
-            <VideoLocationMatcher matches={videoMatches} />
+            <VideoLocationMatcher matches={routeMatch.matches} />
           </div>
         )}
       </div>

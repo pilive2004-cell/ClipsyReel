@@ -12,13 +12,12 @@ import AIAnalysisPanel from "@/components/AIAnalysisPanel";
 import RenderPanel from "@/components/RenderPanel";
 import ReelPreview from "@/components/ReelPreview";
 import HookCaptionPanel from "@/components/HookCaptionPanel";
-import GPXUploader from "@/components/GPXUploader";
+import RouteSourceSelector from "@/components/RouteSourceSelector";
 import PricingModal from "@/components/PricingModal";
 import UpgradePrompt from "@/components/UpgradePrompt";
 import ExportPanel from "@/components/ExportPanel";
 import CreationExtrasPanel from "@/components/CreationExtrasPanel";
-import { RouteIntroClip } from "@/components/gpx/Route3DIntro";
-import Route3DIntro from "@/components/gpx/Route3DIntro";
+import RouteMapIntro, { RouteIntroClip } from "@/components/gpx/RouteMapIntro";
 
 import { usePlan } from "@/lib/plan-context";
 import { generateGearSummaryClip, GearSummaryClip } from "@/lib/gear-summary-clip";
@@ -37,7 +36,7 @@ const STEP_LABELS: Record<AppStep, string> = {
 };
 
 export default function Home() {
-  const { plan, isFree, reelsUsedThisWeek, weeklyFreeLimit, consumeReelCredit } = usePlan();
+  const { isFree, reelsUsedThisWeek, weeklyFreeLimit, consumeReelCredit } = usePlan();
 
   const [step, setStep] = useState<AppStep>("upload");
   const [videos, setVideos] = useState<UploadedVideo[]>([]);
@@ -56,6 +55,7 @@ export default function Home() {
 
   const [montage, setMontage] = useState<MontageResult | null>(null);
   const [renderProgress, setRenderProgress] = useState<number | null>(null);
+  const [renderPhase, setRenderPhase] = useState<string>("");
   const [renderError, setRenderError] = useState<string | null>(null);
 
   const [pricingOpen, setPricingOpen] = useState(false);
@@ -150,7 +150,7 @@ export default function Home() {
         ? buildAnalysisResult(combinedName, totalDuration, style, realBestMoments)
         : generateMockAnalysisMulti(videos, style);
     setAnalysis(result);
-    setSelectedHookId(result.hooks[0].id);
+    setSelectedHookId("");
     setStep("style");
   };
 
@@ -160,6 +160,12 @@ export default function Home() {
   useEffect(() => {
     if (step !== "render" || videos.length === 0 || !analysis || !style) return;
     if (hasRouteIntro && routeIntroStatus === "rendering" && routeIntroClip === null) {
+      return;
+    }
+    if (hasRouteIntro && (!routeIntroClip || routeIntroStatus === "error")) {
+      queueMicrotask(() =>
+        setRenderError("The map intro could not be rendered, so the reel export has been stopped instead of producing a reel without the map.")
+      );
       return;
     }
     if (equipmentSummary.length > 0 && gearSummaryStatus === "rendering" && gearSummaryClip === null) {
@@ -178,6 +184,9 @@ export default function Home() {
           style,
           mode: "reel",
           bestMoments: analysis.bestMoments,
+          // The final reel must start with the generated route-map intro when a
+          // valid GPX track exists. We stop export earlier if this clip could
+          // not be rendered, rather than silently exporting a reel without it.
           introClip: routeIntroClip ?? undefined,
           outroClip: gearSummaryClip ?? undefined,
           quality: qualityForPlan(),
@@ -187,6 +196,10 @@ export default function Home() {
           onProgress: (ratio) => {
             if (cancelled) return;
             setRenderProgress(ratio);
+          },
+          onPhaseChange: (label) => {
+            if (cancelled) return;
+            setRenderPhase(label);
           },
         });
         if (cancelled) return;
@@ -204,7 +217,7 @@ export default function Home() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, videos.length, analysis, style, routeIntroClip, gearSummaryClip, isFree, plan, hasRouteIntro, routeIntroStatus, equipmentSummary.length, gearSummaryStatus, selectedOverlayTextKey]);
+  }, [step, videos.length, analysis, style, routeIntroClip, hasRouteIntro, routeIntroStatus, gearSummaryClip, isFree, equipmentSummary.length, gearSummaryStatus, selectedOverlayTextKey]);
 
   const retryRender = () => {
     setStep("analyze");
@@ -235,14 +248,17 @@ export default function Home() {
     setStep("upload");
   };
 
-  const selectedHookText = analysis?.hooks.find((h) => h.id === selectedHookId)?.text ?? analysis?.hooks[0]?.text ?? "";
+  const selectedHookText = analysis?.hooks.find((h) => h.id === selectedHookId)?.text ?? "";
   const previewUrl = montage?.url ?? videos[0]?.previewUrl ?? "";
   const combinedName = videos.length > 1 ? `${videos.length}-clips-montage` : videos[0]?.name ?? "reel";
+  const requiresMapIntro = hasRouteIntro;
   const renderPhaseLabel =
     hasRouteIntro && routeIntroStatus === "rendering" && routeIntroClip === null
-      ? "Preparing 3D terrain flyover…"
+      ? "Preparing animated route map…"
       : equipmentSummary.length > 0 && gearSummaryStatus === "rendering" && gearSummaryClip === null
         ? "Preparing equipment summary card…"
+      : renderPhase
+        ? renderPhase
       : renderProgress !== null
         ? "Cutting, zooming & cross-fading your clips…"
         : "Loading editing engine…";
@@ -258,23 +274,22 @@ export default function Home() {
             <VideoUploader videos={videos} onChange={setVideos} maxVideos={3} />
           </div>
 
-          {/* GPX route map lives right under the video import, per Pro-tier UX request. */}
+          {/* Route source: GPX import OR location-based route planner. */}
           <div>
-            <h2 className="mb-2 text-sm font-semibold text-white/85">Importation GPX (pro)</h2>
-            <GPXUploader
+            <h2 className="mb-2 text-sm font-semibold text-white/85">Route (optional)</h2>
+            <p className="mb-2 text-xs text-white/45">Import a GPX file or plan a route from city names to add a cinematic map intro to your reel.</p>
+            <RouteSourceSelector
               videos={videos}
               onRouteDataChange={({ points, stats }) => {
                 setRouteIntroPoints(points);
                 setRouteIntroStats(stats);
                 const available = !!points && points.length > 1;
                 setHasRouteIntro(available);
-                if (!available) {
-                  setRouteIntroClip(null);
-                  setRouteIntroStatus("idle");
-                }
+                setRouteIntroClip(null);
+                setRouteIntroStatus(available ? "rendering" : "idle");
               }}
               onLockedClick={() =>
-                showUpgrade("GPX route maps are a Pro feature", "Upload your ride/hike GPX file and plot it on a real interactive map with Creator Pro.")
+                showUpgrade("GPX route maps are a Pro feature", "Upload your ride/hike GPX file or plan a route from city names with Creator Pro.")
               }
             />
           </div>
@@ -404,9 +419,11 @@ export default function Home() {
                 <button onClick={retryRender} className="flex-1 rounded-xl bg-white/10 py-2 font-semibold text-white/85 hover:bg-white/15">
                   Retry
                 </button>
-                <button onClick={skipRenderFallback} className="flex-1 rounded-xl bg-white/5 py-2 font-semibold text-white/60 hover:bg-white/10">
-                  Continue with raw clip
-                </button>
+                {!requiresMapIntro && (
+                  <button onClick={skipRenderFallback} className="flex-1 rounded-xl bg-white/5 py-2 font-semibold text-white/60 hover:bg-white/10">
+                    Continue with raw clip
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -451,7 +468,7 @@ export default function Home() {
 
       <PricingModal open={pricingOpen} onClose={() => setPricingOpen(false)} />
       {routeIntroPoints && routeIntroPoints.length > 1 && (
-        <Route3DIntro
+        <RouteMapIntro
           points={routeIntroPoints}
           routeStats={routeIntroStats}
           onClipReady={setRouteIntroClip}

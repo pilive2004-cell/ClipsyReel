@@ -8,7 +8,7 @@ import { ReelStyle } from "@/types";
  * - how long each detected best-moment clip is kept
  * - which xfade transition type ffmpeg uses between clips
  * - how strong / in which direction the Ken Burns zoom effect moves
- * - a subtle speed ramp (slow-mo for cinematic/luxury, snappy for viral/sport)
+ * - clip pacing / zoom energy
  *
  * FUTURE: these could become user-tunable ("editing intensity" slider) or be
  * chosen automatically by a real ML model based on the footage content.
@@ -20,7 +20,7 @@ export interface StyleRecipe {
   zoom: "in" | "out" | "alternate";
   /** How strong the zoom is (final zoom factor reached). */
   zoomIntensity: number;
-  /** Playback speed multiplier (1 = normal, <1 = slow-mo, >1 = snappier). */
+  /** Playback speed multiplier. Keep this at 1 for the reel so the opening never starts in slow motion. */
   speed: number;
   /** Max number of best-moment clips used for the short Reel cut. */
   reelClipCount: number;
@@ -28,45 +28,45 @@ export interface StyleRecipe {
 
 export const STYLE_RECIPES: Record<ReelStyle, StyleRecipe> = {
   viral: {
-    clipDuration: 6.8,
+    clipDuration: 4.6,
     zoom: "alternate",
     zoomIntensity: 1.1,
     speed: 1.0,
-    reelClipCount: 4,
+    reelClipCount: 5,
   },
   travel: {
-    clipDuration: 7.0,
+    clipDuration: 5.2,
     zoom: "in",
     zoomIntensity: 1.08,
     speed: 1.0,
-    reelClipCount: 4,
+    reelClipCount: 5,
   },
   adventure: {
-    clipDuration: 6.8,
+    clipDuration: 4.9,
     zoom: "alternate",
     zoomIntensity: 1.1,
     speed: 1.0,
-    reelClipCount: 4,
+    reelClipCount: 5,
   },
   sport: {
-    clipDuration: 5.8,
+    clipDuration: 4.0,
     zoom: "in",
     zoomIntensity: 1.12,
     speed: 1.0,
-    reelClipCount: 4,
+    reelClipCount: 5,
   },
   cinematic: {
-    clipDuration: 7.4,
+    clipDuration: 5.4,
     zoom: "out",
     zoomIntensity: 1.08,
-    speed: 0.98,
-    reelClipCount: 4,
+    speed: 1.0,
+    reelClipCount: 5,
   },
   luxury: {
-    clipDuration: 7.0,
+    clipDuration: 5.0,
     zoom: "in",
     zoomIntensity: 1.08,
-    speed: 0.98,
-    reelClipCount: 4,
+    speed: 1.0,
+    reelClipCount: 5,
   },
 };

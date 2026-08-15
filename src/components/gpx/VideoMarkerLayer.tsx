@@ -4,21 +4,21 @@ import { VideoRouteMatch } from "@/types";
 
 interface VideoMarkerLayerProps {
   matches: VideoRouteMatch[];
-  iconFor: (status: "gps" | "timestamp") => L.DivIcon;
+  iconFor: (status: "gps") => L.DivIcon;
 }
 
-/** Renders one map marker per uploaded video that was successfully matched to a route point (GPS or timestamp-based). Videos with "unknown" location render no marker. */
+/** Renders one marker per video that passed the real GPS-vs-route validation. */
 export default function VideoMarkerLayer({ matches, iconFor }: VideoMarkerLayerProps) {
   return (
     <>
       {matches
-        .filter((m): m is VideoRouteMatch & { point: NonNullable<VideoRouteMatch["point"]>; status: "gps" | "timestamp" } => Boolean(m.point) && m.status !== "unknown")
+        .filter((m): m is VideoRouteMatch & { point: NonNullable<VideoRouteMatch["point"]>; status: "gps" } => Boolean(m.point) && m.status === "gps")
         .map((m) => (
           <Marker key={m.videoId} position={[m.point.lat, m.point.lng]} icon={iconFor(m.status)}>
             <Popup>
               <span className="font-medium">{m.name}</span>
               <br />
-              {m.status === "gps" ? "Located via GPS metadata" : "Matched via capture timestamp"}
+              {m.reason}
             </Popup>
           </Marker>
         ))}

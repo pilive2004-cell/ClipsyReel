@@ -104,22 +104,49 @@ export interface GpxRouteStats {
   highestPointM: number | null;
 }
 
+/** GPS coordinates embedded in the video container metadata, when present. */
+export interface VideoGpsMetadata {
+  lat: number;
+  lng: number;
+}
+
+/** Width/height decoded from the video stream metadata. */
+export interface VideoResolution {
+  width: number;
+  height: number;
+}
+
 /**
- * Mock per-video geolocation metadata standing in for real file metadata.
- * FUTURE BACKEND INTEGRATION: extract real values server-side with ExifTool
- * (`exiftool -json -GPSCoordinates -CreateDate video.mp4`) or a JS library
- * like `exifr` for simple QuickTime GPS atoms.
+ * Real metadata extracted from the uploaded video file.
+ *
+ * IMPORTANT:
+ * - We only auto-place a video on the GPX route when genuine embedded GPS is
+ *   present *and* it falls close enough to the route/bounds.
+ * - Creation date / duration / resolution are useful diagnostics, but are not
+ *   trustworthy enough on their own to infer a route position.
+ * - When extraction fails or GPS is absent, the UI must surface that honestly
+ *   instead of faking a route placement.
  */
 export interface VideoGeoMetadata {
   videoId: string;
   name: string;
-  /** Mock GPS coordinates "extracted" from the video file, if any. */
-  gps: { lat: number; lng: number } | null;
-  /** Mock capture timestamp "extracted" from the video file, if any. */
+  /** Real GPS coordinates read from QuickTime/MP4 metadata atoms, when present. */
+  gps: VideoGpsMetadata | null;
+  /** Real embedded creation date, when present. */
   capturedAt: Date | null;
+  /** Camera model / device model from metadata, when present. */
+  cameraModel: string | null;
+  /** Stream duration decoded by the browser. */
+  durationSeconds: number | null;
+  /** Stream resolution decoded by the browser. */
+  resolution: VideoResolution | null;
+  /** Human-readable technical reason when GPS/metadata could not be read. */
+  technicalReason: string | null;
+  /** Where the metadata came from, for debugging and UI honesty. */
+  metadataSource: "quicktime" | "html-video" | "none";
 }
 
-export type VideoMatchStatus = "gps" | "timestamp" | "unknown";
+export type VideoMatchStatus = "gps" | "mismatch" | "unknown";
 
 /** Result of matching one uploaded video to a point on the GPX route (see `src/lib/video-location-matcher.ts`). */
 export interface VideoRouteMatch {
@@ -127,6 +154,8 @@ export interface VideoRouteMatch {
   name: string;
   status: VideoMatchStatus;
   point: GpxTrackPoint | null;
+  reason: string;
+  metadata: VideoGeoMetadata;
 }
 
 export type AppStep = "upload" | "style" | "analyze" | "render" | "preview";
@@ -143,6 +172,7 @@ export interface UploadedVideo {
   previewUrl: string;
   file: File;
   durationSeconds: number;
+  metadata: VideoGeoMetadata;
 }
 
 /** Result of a real, in-browser ffmpeg.wasm montage render (see `src/lib/video-engine.ts`). */

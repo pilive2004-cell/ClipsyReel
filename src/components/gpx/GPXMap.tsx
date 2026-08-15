@@ -23,7 +23,7 @@ function useMapIcons() {
     invisible: L.DivIcon;
     start: L.DivIcon;
     end: L.DivIcon;
-    video: (status: "gps" | "timestamp") => L.DivIcon;
+    video: (status: "gps") => L.DivIcon;
   } | null>(null);
 
   useEffect(() => {
@@ -52,7 +52,7 @@ function useMapIcons() {
   return icons;
 }
 
-/** Adds the real parsed GPX polyline to the map (via `leaflet-gpx`), reports back extracted points/stats, and flies the camera to fit the route once loaded. */
+/** Adds the real parsed GPX polyline to the map (via `leaflet-gpx`), reports back extracted points/stats, and fits a calmer TravelBoast-style overview once loaded. */
 function GpxRouteLayer({
   gpxText,
   invisibleIcon,
@@ -82,9 +82,9 @@ function GpxRouteLayer({
         wptIcons: { "": invisibleIcon as unknown as L.Icon },
       },
       polyline_options: {
-        color: "#38bdf8",
-        weight: 4,
-        opacity: 0.95,
+        color: "#e43d30",
+        weight: 6,
+        opacity: 0.92,
         lineCap: "round",
         lineJoin: "round",
         className: "gpx-route-line",
@@ -97,7 +97,7 @@ function GpxRouteLayer({
       const points = extractTrackPoints(layer);
       const stats = computeRouteStatsFromPoints(points);
       const bounds = layer.getBounds();
-      map.flyToBounds(bounds, { padding: [36, 36], duration: 1.2 });
+      map.flyToBounds(bounds, { padding: [48, 48], duration: 1.1, maxZoom: 11 });
       onLoaded(points, stats, bounds);
     });
     layer.addTo(map);
@@ -113,7 +113,7 @@ function GpxRouteLayer({
 }
 
 /**
- * Real, interactive Leaflet + OpenStreetMap route map for Pro users.
+ * Real, interactive Leaflet route map for Pro users.
  * Renders the parsed GPX track, start/end markers, and one marker per
  * uploaded video that could be matched to a route point.
  */
@@ -141,9 +141,10 @@ export default function GPXMap({ gpxText, videoMatches, onReady, heightClassName
           style={{ background: "#0a0a10" }}
         >
           <TileLayer
-            className="gpx-map-tiles"
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+            url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png"
+            subdomains={["a", "b", "c", "d"]}
+            maxZoom={19}
           />
           <GpxRouteLayer gpxText={gpxText} invisibleIcon={icons.invisible} onLoaded={handleLoaded} />
 
