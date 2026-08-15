@@ -189,8 +189,26 @@ function resampleRoute(points: GpxTrackPoint[], n: number): GpxTrackPoint[] {
   return result;
 }
 
-/** Compute the bounding box of the route and return a LngLatBoundsLike value. */
-function routeBounds(points: GpxTrackPoint[], padDeg = 0): [[number, number], [number, number]] {
+/**
+ * Compute the ideal overview camera (center + zoom) so the full GPX route is
+ * centred inside the canvas with `paddingPx` margin on every side.
+ *
+ * Uses pure Mercator mathematics so the result is available BEFORE the Map
+ * is constructed and does not depend on MapLibre's fitBounds / getCenter
+ * timing (which is sensitive to async rendering pipeline state).
+ *
+ * Key formula (MapLibre internal world size = 512 at zoom 0):
+ *   pixels_at_zoom_z = dimension_in_mercator_units * 512 * 2^z
+ *
+ * We solve for z independently for width and height and take the minimum.
+ */
+function computeOverviewCamera(
+  points: GpxTrackPoint[],
+  canvasW: number,
+  canvasH: number,
+  paddingPx: number,
+  maxZoom: number,
+): { centerLng: number; centerLat: number; zoom: number } {
   let minLng = Infinity, maxLng = -Infinity;
   let minLat = Infinity, maxLat = -Infinity;
   for (const p of points) {
@@ -199,10 +217,44 @@ function routeBounds(points: GpxTrackPoint[], padDeg = 0): [[number, number], [n
     if (p.lat < minLat) minLat = p.lat;
     if (p.lat > maxLat) maxLat = p.lat;
   }
-  return [
-    [minLng - padDeg, minLat - padDeg],
-    [maxLng + padDeg, maxLat + padDeg],
-  ];
+
+  // Web Mercator Y (top-down, 0 = north, 1 = south for the visible world).
+  const mercY = (lat: number) =>
+    0.5 - Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360)) / (2 * Math.PI);
+
+  // Inverse: Mercator Y → latitude degrees.
+  const mercYToLat = (y: number) =>
+    (2 * Math.atan(Math.exp((0.5 - y) * 2 * Math.PI)) - Math.PI / 2) * (180 / Math.PI);
+
+  const usableW = canvasW - 2 * paddingPx;
+  const usableH = canvasH - 2 * paddingPx;
+
+  const dLng = maxLng - minLng;
+  // northernmost lat → smallest Y (top), southernmost → largest Y (bottom)
+  const topMercY    = mercY(maxLat);
+  const bottomMercY = mercY(minLat);
+  const dMercY      = bottomMercY - topMercY;   // always positive
+
+  // Guard degenerate (single-point) routes
+  if (dLng < 1e-8 || dMercY < 1e-8) {
+    return {
+      centerLng: (minLng + maxLng) / 2,
+      centerLat: (minLat + maxLat) / 2,
+      zoom: Math.min(maxZoom, 14),
+    };
+  }
+
+  // MapLibre's internal world coordinate system is always 512 pixels at zoom 0.
+  const WORLD = 512;
+  const zw = Math.log2((usableW / WORLD) * 360 / dLng);
+  const zh = Math.log2((usableH / WORLD) / dMercY);
+  const zoom = Math.min(zw, zh, maxZoom);
+
+  const centerLng   = (minLng + maxLng) / 2;
+  const centerMercY = (topMercY + bottomMercY) / 2;   // Mercator midpoint (not lat midpoint)
+  const centerLat   = mercYToLat(centerMercY);
+
+  return { centerLng, centerLat, zoom };
 }
 
 /** Pick N evenly-spaced waypoints along the route (including start & end). */
@@ -498,15 +550,12 @@ export default function RouteMapIntro({
     const labelCount = Math.min(6, Math.max(2, Math.ceil(points.length / 40)));
     const waypoints = pickWaypoints(points, labelCount);
 
-    // Geographic bbox — used by the Map constructor for initial tile loading
-    // and by fitBounds in the load handler for correct framing.
-    const bounds = routeBounds(points, 0.06);
-    // Rough geographic midpoint for the Map constructor's initial camera.
-    // The load handler immediately calls fitBounds to correct the framing.
-    const roughCenter: [number, number] = [
-      (bounds[0][0] + bounds[1][0]) / 2,
-      (bounds[0][1] + bounds[1][1]) / 2,
-    ];
+    // Pre-compute the overview camera using pure Mercator math.
+    // Available before the Map is constructed — used in the Map constructor
+    // for initial tile loading AND re-applied in the load handler via jumpTo.
+    // 80 px symmetric padding gives comfortable breathing room on all sides.
+    const { centerLng: ovLng, centerLat: ovLat, zoom: ovZoom } =
+      computeOverviewCamera(points, MAP_WIDTH, MAP_HEIGHT, 80, OVERVIEW_MAX_ZOOM);
 
     void (async () => {
       if (cancelled) return;
@@ -549,11 +598,10 @@ export default function RouteMapIntro({
           },
           layers: [{ id: "base-tiles", type: "raster", source: "carto-voyager" }],
         },
-        // Start tile loading at a rough geographic center — no fitBounds,
-        // no persistent padding. The load handler calls fitBounds with
-        // symmetric padding to precisely frame the route.
-        center: roughCenter,
-        zoom: 7,
+        // Start tile loading at the exact overview position computed above.
+        // The load handler re-applies these via jumpTo after adding layers.
+        center: [ovLng, ovLat],
+        zoom: ovZoom,
         // preserveDrawingBuffer: required for canvas.captureStream() under COEP.
         canvasContextAttributes: { preserveDrawingBuffer: true, antialias: true },
         interactive: false,
@@ -700,32 +748,18 @@ export default function RouteMapIntro({
           onClipReady({ file, url, durationSeconds });
         };
 
-        // ── ROUTE CENTERING via fitBounds ────────────────────────────────
+        // ── ROUTE CENTERING ─────────────────────────────────────────────
         //
-        // Strategy: use MapLibre's own `fitBounds` with SYMMETRIC padding
-        // (same value on all four sides). With symmetric padding:
-        //   • The effective-viewport centre = physical canvas centre.
-        //   • map.getCenter() returns the lat/lng at the physical canvas centre.
-        //   • All subsequent jumpTo calls that omit `padding` keep this
-        //     persistent symmetric state, so they always place the specified
-        //     centre at the physical canvas centre.
-        //
-        // Why NOT asymmetric padding: asymmetric padding shifts the effective
-        // viewport, making getCenter() return the offset centre → route appears
-        // in the wrong half of the canvas on the next jumpTo.
-        //
-        // maxZoom:13 ensures short routes (10 km) get a proper overview zoom
-        // (~z10-12) instead of being a tiny dot at the old cap of z8.
-        map.fitBounds(bounds, {
-          padding: 60,   // symmetric shorthand: top=bottom=left=right=60 px
-          maxZoom: OVERVIEW_MAX_ZOOM,
-          animate: false,
-        });
+        // Apply the pre-computed Mercator overview camera.
+        // jumpTo is always synchronous; no animation pipeline, no timing
+        // ambiguity, no persistent-padding side effects.
+        // After this call map.getCenter() / map.getZoom() match exactly.
+        map.jumpTo({ center: [ovLng, ovLat], zoom: ovZoom, bearing: 0, pitch: 0 });
 
-        // With symmetric padding, getCenter() = lat/lng at physical canvas
-        // centre = route-bbox projected to pixel (MAP_WIDTH/2, MAP_HEIGHT/2). ✓
-        const overviewCenter = map.getCenter();
-        const overviewZoom   = map.getZoom();
+        // Expose as {lat, lng} objects so the render-loop closure can use them
+        // with the same `.lat` / `.lng` accessors as a MapLibre LngLat.
+        const overviewCenter = { lat: ovLat, lng: ovLng };
+        const overviewZoom   = ovZoom;
 
         // Smoothed camera state — starts exactly at the overview position
         let cam: CamState = {
