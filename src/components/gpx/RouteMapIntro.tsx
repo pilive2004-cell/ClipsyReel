@@ -305,12 +305,41 @@ function pickMimeType(): string {
  *                                 establishes geographic context.
  *   Phase 4 (T_HOLD+1 – end):   brief reprise as the camera zooms out.
  *
- * Layout (bottom 42% of frame, 9:16):
+ * Layout (bottom 38% of frame, 9:16):
  *   • ROUTE •         ← micro-label in route red
  *   START CITY        ← departure, medium weight
  *   ──────            ← red separator line
  *   END CITY          ← destination, large bold — the hero text
+ *
+ * SAFE AREA: all text is constrained to [SAFE_X, w - SAFE_X] horizontally.
+ * Long city names automatically have their font size reduced until they fit.
  */
+
+/** Horizontal inset (px) that no text element may cross. */
+const TITLE_SAFE_X = 52;
+
+/**
+ * Returns the largest font size at which `text` fits within `maxW` pixels,
+ * starting at `idealSize` and stepping down to `minSize`.
+ */
+function fitFontSize(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  weight: string,
+  idealSize: number,
+  minSize: number,
+  maxW: number,
+  fontStack: string,
+): number {
+  let size = idealSize;
+  ctx.font = `${weight} ${size}px ${fontStack}`;
+  while (ctx.measureText(text).width > maxW && size > minSize) {
+    size -= 2;
+    ctx.font = `${weight} ${size}px ${fontStack}`;
+  }
+  return size;
+}
+
 function drawTitleCard(
   ctx: CanvasRenderingContext2D,
   elapsed: number,
@@ -338,11 +367,16 @@ function drawTitleCard(
   ctx.save();
   ctx.globalAlpha = alpha;
 
-  // Dark gradient fills the bottom 42% of the frame
-  const gradH = Math.round(h * 0.42);
+  // Maximum text width — both left and right edges are protected by TITLE_SAFE_X
+  const maxTextW = w - TITLE_SAFE_X * 2;
+  const fontStack = `-apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif`;
+
+  // Dark gradient fills the bottom 38% of the frame — keeps the title card
+  // in the safe zone below the route framing area.
+  const gradH = Math.round(h * 0.38);
   const grad = ctx.createLinearGradient(0, h - gradH, 0, h);
   grad.addColorStop(0, "rgba(0,0,0,0)");
-  grad.addColorStop(0.35, "rgba(0,0,0,0.78)");
+  grad.addColorStop(0.3, "rgba(0,0,0,0.76)");
   grad.addColorStop(1, "rgba(0,0,0,0.90)");
   ctx.fillStyle = grad;
   ctx.fillRect(0, h - gradH, w, gradH);
@@ -350,19 +384,20 @@ function drawTitleCard(
   const cx = w / 2;
   ctx.textAlign = "center";
 
-  // ── Destination (large, 800-weight) ───────────────────────────────────────
-  const destSize = Math.round(w * 0.082);
-  const destY = h - Math.round(h * 0.10);
-  ctx.font = `800 ${destSize}px -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif`;
+  // ── Destination (large, 800-weight) — font size auto-reduced to fit safe area
+  const destIdeal = Math.round(w * 0.078);
+  const destSize = fitFontSize(ctx, endName.toUpperCase(), "800", destIdeal, 28, maxTextW, fontStack);
+  const destY = h - Math.round(h * 0.072);
+  ctx.font = `800 ${destSize}px ${fontStack}`;
   ctx.textBaseline = "alphabetic";
   ctx.shadowColor = "rgba(0,0,0,0.95)";
   ctx.shadowBlur = 20;
   ctx.fillStyle = "#FFFFFF";
   ctx.fillText(endName.toUpperCase(), cx, destY);
 
-  // ── Red separator line ─────────────────────────────────────────────────────
+  // ── Red separator line
   const sepY = destY - destSize - 12;
-  const sepHalfW = Math.round(w * 0.12);
+  const sepHalfW = Math.round(w * 0.11);
   ctx.shadowBlur = 0;
   ctx.strokeStyle = "#FF3B30";
   ctx.lineWidth = 3;
@@ -372,23 +407,24 @@ function drawTitleCard(
   ctx.lineTo(cx + sepHalfW, sepY);
   ctx.stroke();
 
-  // ── Departure (medium, lighter) ────────────────────────────────────────────
-  const startSize = Math.round(w * 0.048);
+  // ── Departure (medium, lighter) — also auto-sized
+  const startIdeal = Math.round(w * 0.044);
+  const startSize = fitFontSize(ctx, startName.toUpperCase(), "300", startIdeal, 20, maxTextW, fontStack);
   const startY = sepY - 14;
-  ctx.font = `300 ${startSize}px -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif`;
+  ctx.font = `300 ${startSize}px ${fontStack}`;
   ctx.textBaseline = "alphabetic";
   ctx.fillStyle = "rgba(255,255,255,0.65)";
   ctx.shadowColor = "rgba(0,0,0,0.8)";
   ctx.shadowBlur = 12;
   ctx.fillText(startName.toUpperCase(), cx, startY);
 
-  // ── "• ROUTE •" micro-label ────────────────────────────────────────────────
-  const microSize = Math.round(w * 0.026);
-  ctx.font = `600 ${microSize}px -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif`;
+  // ── "• ROUTE •" micro-label
+  const microSize = Math.round(w * 0.025);
+  ctx.font = `600 ${microSize}px ${fontStack}`;
   ctx.fillStyle = "rgba(255,59,48,0.85)";
   ctx.shadowBlur = 0;
   ctx.textBaseline = "alphabetic";
-  ctx.fillText("• ROUTE •", cx, startY - startSize - 16);
+  ctx.fillText("• ROUTE •", cx, startY - startSize - 14);
 
   ctx.restore();
 }
@@ -502,9 +538,32 @@ export default function RouteMapIntro({
           layers: [{ id: "base-tiles", type: "raster", source: "carto-voyager" }],
         },
         bounds,
-        // OVERVIEW_MAX_ZOOM caps fitBounds so we never start at continent scale.
-        // Padding 50px (not 70) keeps the route as the visual focus with minimal empty space.
-        fitBoundsOptions: { padding: 50, maxZoom: OVERVIEW_MAX_ZOOM, animate: false },
+        /**
+         * SMART AUTO-FRAMING: asymmetric fitBounds padding.
+         *
+         * Problem: the title card gradient covers the bottom 38% of the frame
+         * (~486px at 1280px). A symmetric 50px padding frames the route as if
+         * the full canvas is usable, which shifts the route behind the overlay.
+         *
+         * Fix: set bottom padding = title-card height + breathing room so
+         * MapLibre positions the route bounding box entirely within the
+         * visible upper portion of the frame. Left/right stay narrow to
+         * maximise the horizontal area the route occupies.
+         *
+         * The captured overviewCenter / overviewZoom from map.getCenter() /
+         * map.getZoom() after this fitBounds will already encode the correct
+         * offset, so Phase 4 (zoom-out) returns to the same well-framed view.
+         */
+        fitBoundsOptions: {
+          padding: {
+            top: 55,
+            bottom: Math.round(MAP_HEIGHT * 0.42),   // clear the title card
+            left: 45,
+            right: 45,
+          },
+          maxZoom: OVERVIEW_MAX_ZOOM,
+          animate: false,
+        },
         // preserveDrawingBuffer: required for canvas.captureStream() under COEP.
         canvasContextAttributes: { preserveDrawingBuffer: true, antialias: true },
         interactive: false,
@@ -517,7 +576,9 @@ export default function RouteMapIntro({
         if (cancelled || !map) return;
 
         // Full-route ghost underlay (visible from the very first frame).
-        // Intentionally dim so the bright revealed line reads as the hero.
+        // Opacity 0.55 / width 5px — visible enough during the Phase 0 overview
+        // that the viewer can trace the full route, but subdued enough that the
+        // progressively-revealed red line still pops as the hero element.
         map.addSource("route-ghost", {
           type: "geojson",
           data: buildLineGeoJSON(resampled, resampled.length),
@@ -526,14 +587,14 @@ export default function RouteMapIntro({
           id: "route-ghost-casing",
           type: "line",
           source: "route-ghost",
-          paint: { "line-color": "#ffffff", "line-width": 6, "line-opacity": 0.16 },
+          paint: { "line-color": "#ffffff", "line-width": 9, "line-opacity": 0.30 },
           layout: { "line-cap": "round", "line-join": "round" },
         });
         map.addLayer({
           id: "route-ghost-line",
           type: "line",
           source: "route-ghost",
-          paint: { "line-color": "#c8c8c8", "line-width": 3, "line-opacity": 0.32 },
+          paint: { "line-color": "#FF3B30", "line-width": 5, "line-opacity": 0.55 },
           layout: { "line-cap": "round", "line-join": "round" },
         });
 
