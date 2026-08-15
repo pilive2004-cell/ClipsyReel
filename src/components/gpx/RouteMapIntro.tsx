@@ -603,7 +603,11 @@ export default function RouteMapIntro({
         center: [ovLng, ovLat],
         zoom: ovZoom,
         // preserveDrawingBuffer: required for canvas.captureStream() under COEP.
+        // pixelRatio: 1 forces the WebGL canvas to be exactly MAP_WIDTH×MAP_HEIGHT
+        // regardless of devicePixelRatio, making the drawImage compositing trivial
+        // (no scaling needed) and eliminating any DPR-related cropping.
         canvasContextAttributes: { preserveDrawingBuffer: true, antialias: true },
+        pixelRatio: 1,
         interactive: false,
         attributionControl: false,
         fadeDuration: 0,
@@ -790,7 +794,15 @@ export default function RouteMapIntro({
         map.on("render", () => {
           if (cancelled) return;
           compositeCtx.clearRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
-          compositeCtx.drawImage(mapCanvas, 0, 0);
+          // Scale the MapLibre WebGL canvas into the compositeCanvas.
+          // CRITICAL: always provide explicit destination dimensions so that
+          // the draw is correct regardless of devicePixelRatio. On Retina
+          // displays MapLibre renders to a canvas that is DPR × the CSS size
+          // (e.g. 1440×2560 at DPR=2). Without the destination size arg,
+          // drawImage copies at 1:1 pixel and only the top-left DPR-fraction
+          // of the map is captured — making the route appear in the bottom-right
+          // corner even though MapLibre placed it perfectly at centre.
+          compositeCtx.drawImage(mapCanvas, 0, 0, MAP_WIDTH, MAP_HEIGHT);
           if (startTime !== null) {
             const elapsedSec = (performance.now() - startTime) / 1000;
             drawTitleCard(compositeCtx, elapsedSec, startLabelName, endLabelName, MAP_WIDTH, MAP_HEIGHT);
