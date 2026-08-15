@@ -372,13 +372,13 @@ function drawTitleCard(
   const maxTextW = w - TITLE_SAFE_X * 2;
   const fontStack = `-apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif`;
 
-  // Dark gradient fills the bottom 38% of the frame — keeps the title card
-  // in the safe zone below the route framing area.
-  const gradH = Math.round(h * 0.38);
+  // Dark gradient fills the bottom 28% of the frame as a semi-transparent
+  // overlay. The route line is visible through it (gradient starts at 0 alpha).
+  const gradH = Math.round(h * 0.28);
   const grad = ctx.createLinearGradient(0, h - gradH, 0, h);
   grad.addColorStop(0, "rgba(0,0,0,0)");
-  grad.addColorStop(0.3, "rgba(0,0,0,0.76)");
-  grad.addColorStop(1, "rgba(0,0,0,0.90)");
+  grad.addColorStop(0.35, "rgba(0,0,0,0.72)");
+  grad.addColorStop(1, "rgba(0,0,0,0.92)");
   ctx.fillStyle = grad;
   ctx.fillRect(0, h - gradH, w, gradH);
 
@@ -696,36 +696,21 @@ export default function RouteMapIntro({
           onClipReady({ file, url, durationSeconds });
         };
 
-        // ── SMART AUTO-FRAMING ────────────────────────────────────────────
+        // ── SMART AUTO-FRAMING (symmetric centering) ─────────────────────
         //
-        // Goal: route visually centered in the UPPER safe zone (above the
-        // title card gradient) while using `jumpTo` WITHOUT persistent padding.
+        // Goal: route perfectly centered in the full 720×1280 canvas.
         //
-        // Why NOT `fitBounds` + `map.getCenter()`:
-        //   MapLibre's `fitBounds` with asymmetric padding shifts the camera
-        //   such that the route bbox fits inside the padded viewport. However,
-        //   `map.getCenter()` with persistent padding returns the EFFECTIVE
-        //   center (the route bbox center), not the raw canvas-pixel center.
-        //   Using this center in a subsequent `jumpTo` without padding puts the
-        //   route at canvas center y=640 — the lower half — which is wrong.
+        // The title card gradient (bottom 28% of frame) is drawn as a
+        // semi-transparent overlay ON TOP of the map — the route line is still
+        // visible through it. This means the camera framing must center the
+        // route in the FULL canvas, not just the area above the gradient.
         //
-        // Correct approach: `map.cameraForBounds()` returns the PHYSICAL camera
-        //   center (the lat/lng that renders at canvas pixel MAP_WIDTH/2,
-        //   MAP_HEIGHT/2) that would make the bounds fit inside the padded
-        //   viewport. This center is offset SOUTH of the route bbox center, so
-        //   when passed to `jumpTo` (no padding), the route appears in the upper
-        //   safe zone — exactly above the title card.
-        //
-        // TITLE_CARD_H = 38% of canvas height = 486px at 1280px.
-        // Safe-zone padding: top 60px, bottom TITLE_CARD_H+30 (buffer), sides 52px.
-        const TITLE_CARD_H = Math.round(MAP_HEIGHT * 0.38);
+        // Using asymmetric bottom padding (old approach) shifted the route into
+        // the top 60% of the canvas, making it look off-center. Symmetric
+        // padding makes `cameraForBounds` return the physical canvas-center
+        // lat/lng, which is what `jumpTo` (no padding) places at pixel (360,640).
         const overviewCam = map.cameraForBounds(bounds, {
-          padding: {
-            top: 60,
-            bottom: TITLE_CARD_H + 30,
-            left: 52,
-            right: 52,
-          },
+          padding: { top: 64, bottom: 64, left: 56, right: 56 },
           maxZoom: OVERVIEW_MAX_ZOOM,
         });
 
