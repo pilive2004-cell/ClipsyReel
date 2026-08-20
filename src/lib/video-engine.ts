@@ -440,6 +440,8 @@ export interface BuildMontageParams {
   files: File[];
   /** Real duration (seconds) of each file in `files`, same order. */
   videoDurations: number[];
+  /** Per-source audio toggles in the same order as `files` (defaults to all true when omitted). */
+  videoAudioEnabled?: boolean[];
   /** Optional intro clip prepended before the best-moment montage (e.g. a 3D route flyover). */
   introClip?: { file: File; durationSeconds: number };
   /** Optional end card appended after the montage (e.g. gear summary). */
@@ -507,7 +509,8 @@ export async function buildMontage(params: BuildMontageParams): Promise<BuildMon
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const audioRelated = /audio|stream specifier|stream map|acrossfade|amix|anullsrc|aac/i.test(message);
-      if (!params.keepOriginalAudio || !audioRelated) {
+      const audioRequested = params.videoAudioEnabled ? params.videoAudioEnabled.some(Boolean) : (params.keepOriginalAudio ?? true);
+      if (!audioRequested || !audioRelated) {
         throw err;
       }
 
@@ -534,6 +537,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
   const {
     files,
     videoDurations,
+    videoAudioEnabled,
     introClip,
     outroClip,
     style,
@@ -559,6 +563,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
   const finalPreset = renderSpeedProfile === "fast" ? "superfast" : "veryfast";
   const finalCrf = renderSpeedProfile === "fast" ? "25" : "23";
   const audioSampleRate = 48000;
+  const sourceAudioEnabled = videoAudioEnabled ?? files.map(() => true);
   const watermarkMargin = Math.round(w * 0.035);
   const cleanedOverlayTexts = overlayTexts.map((text) => text.trim()).filter(Boolean).slice(0, 3);
 
@@ -583,7 +588,8 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
   const ffmpeg = await loadFFmpeg();
   mark("ffmpeg-ready");
 
-  onPhaseChange?.(keepOriginalAudio ? "Loading video files with audio…" : "Loading video files…");
+  const hasAnyAudioEnabled = sourceAudioEnabled.some(Boolean);
+  onPhaseChange?.(hasAnyAudioEnabled ? "Loading video files with audio…" : "Loading video files…");
   onProgress?.(0.01);
 
   const stamp = Date.now();
@@ -695,15 +701,15 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       filterParts: string[],
       clipDurations: number[],
       transitionDurations: number[],
-      clipCount: number,
+      audioFlags: boolean[],
     ) => {
-      if (!keepOriginalAudio || clipCount === 0) return null;
+      if (audioFlags.length === 0 || !audioFlags.some(Boolean)) return null;
 
       const labels: string[] = [];
-      for (let i = 0; i < clipCount; i++) {
+      for (let i = 0; i < audioFlags.length; i++) {
         const label = `a${i}`;
         const duration = clipDurations[i] ?? 0;
-        const silent = (i === 0 && !!introName) || (i === clipCount - 1 && !!outroName);
+        const silent = !audioFlags[i];
         if (silent) {
           filterParts.push(`anullsrc=r=${audioSampleRate}:cl=stereo:d=${duration.toFixed(3)}[${label}]`);
         } else {
@@ -777,6 +783,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       const clipName = `seg_${stamp}_${i}.mp4`;
       // Pass fastMode to skip zoompan (the main per-frame bottleneck)
       const filter = buildSegmentFilter(seg, i, recipe, w, h, RENDER_FPS, fastMode);
+      const segmentAudioEnabled = sourceAudioEnabled[seg.sourceIndex] ?? true;
 
       await ffmpeg.exec([
         // NOTE: -ss and -t must both come *before* -i. When -t is placed
@@ -795,7 +802,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         "-vf", filter,
         "-r", String(RENDER_FPS),
         "-c:v", "libx264",
-        ...(keepOriginalAudio ? ["-c:a", "aac", "-b:a", "128k"] : ["-an"]),
+        ...(segmentAudioEnabled ? ["-c:a", "aac", "-b:a", "128k"] : ["-an"]),
         "-preset", "ultrafast",
         "-crf", "27",
         "-pix_fmt", "yuv420p",
@@ -840,7 +847,31 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     // --- Single clip, no watermark: no re-encode needed, it *is* the final montage ---
     if (finalClipNames.length === 1 && !watermark) {
       if (overlayTextNames.length === 0) {
-        return finaliseOutput(finalClipNames[0], finalDurations[0], 1);
+        if (sourceAudioEnabled[0] ?? true) {
+          return finaliseOutput(finalClipNames[0], finalDurations[0], 1);
+        }
+        const outputName = `out_${stamp}.mp4`;
+        await ffmpeg.exec([
+          "-i",
+          finalClipNames[0],
+          "-vf",
+          `fps=${RENDER_FPS},setpts=PTS-STARTPTS,format=yuv420p`,
+          "-r",
+          String(RENDER_FPS),
+          "-c:v",
+          "libx264",
+          "-an",
+          "-preset",
+          finalPreset,
+          "-crf",
+          finalCrf,
+          "-pix_fmt",
+          "yuv420p",
+          outputName,
+        ]);
+        tempFiles.push(outputName);
+        completedUnits++;
+        return finaliseOutput(outputName, finalDurations[0], 1);
       }
 
       const outputName = `out_${stamp}.mp4`;
@@ -862,7 +893,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         String(RENDER_FPS),
         "-c:v",
         "libx264",
-        ...(keepOriginalAudio ? ["-map", "0:a?", "-c:a", "aac", "-b:a", "128k"] : ["-an"]),
+        ...(sourceAudioEnabled[0] ?? true ? ["-map", "0:a?", "-c:a", "aac", "-b:a", "128k"] : ["-an"]),
         "-preset",
         finalPreset,
         "-crf",
@@ -892,7 +923,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         `[${finalLabel}]`,
         "-r", String(RENDER_FPS),
         "-c:v", "libx264",
-        ...(keepOriginalAudio ? ["-map", "0:a?", "-c:a", "aac", "-b:a", "128k"] : ["-an"]),
+        ...(sourceAudioEnabled[0] ?? true ? ["-map", "0:a?", "-c:a", "aac", "-b:a", "128k"] : ["-an"]),
         "-preset", finalPreset,
         "-crf", finalCrf,
         "-pix_fmt", "yuv420p",
@@ -945,13 +976,18 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       "multi"
     );
     execArgs.push(...overlayTextNames.slice(0, overlaysUsed).flatMap((name) => ["-i", name]));
-    const audioFinalLabel = appendAudioChain(filterParts, finalDurations, transitionDurations, finalClipNames.length);
+    const finalAudioFlags = [
+      ...(introName ? [false] : []),
+      ...segmentClipNames.map((_, index) => sourceAudioEnabled[segments[index].sourceIndex] ?? true),
+      ...(outroName ? [false] : []),
+    ];
+    const audioFinalLabel = appendAudioChain(filterParts, finalDurations, transitionDurations, finalAudioFlags);
 
     const outputName = `out_${stamp}.mp4`;
     execArgs.push(
       "-filter_complex", filterParts.join(";"),
       "-map", `[${finalLabel}]`,
-      ...(keepOriginalAudio && audioFinalLabel ? ["-map", `[${audioFinalLabel}]`, "-c:a", "aac", "-b:a", "128k"] : ["-an"]),
+      ...(audioFinalLabel ? ["-map", `[${audioFinalLabel}]`, "-c:a", "aac", "-b:a", "128k"] : ["-an"]),
       "-r", String(RENDER_FPS),
       "-c:v", "libx264",
       "-preset", finalPreset,

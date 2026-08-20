@@ -174,6 +174,7 @@ export interface UploadedVideo {
   file: File;
   durationSeconds: number;
   metadata: VideoGeoMetadata;
+  keepAudio: boolean;
 }
 
 /** Result of a real, in-browser ffmpeg.wasm montage render (see `src/lib/video-engine.ts`). */

@@ -45,7 +45,6 @@ export default function Home() {
   const [selectedHookId, setSelectedHookId] = useState<string>("");
   const [gearSelections, setGearSelections] = useState(DEFAULT_GEAR_SELECTIONS);
   const [overlayTexts, setOverlayTexts] = useState<[string, string, string]>(["", "", ""]);
-  const [keepOriginalAudio, setKeepOriginalAudio] = useState(false);
   const [routeIntroClip, setRouteIntroClip] = useState<RouteIntroClip | null>(null);
   const [hasRouteIntro, setHasRouteIntro] = useState(false);
   const [routeIntroStatus, setRouteIntroStatus] = useState<"idle" | "rendering" | "ready" | "error">("idle");
@@ -193,7 +192,7 @@ export default function Home() {
           quality: qualityForPlan(),
           renderSpeedProfile: "fast",
           watermark: isFree,
-          keepOriginalAudio,
+          videoAudioEnabled: videos.map((v) => v.keepAudio),
           overlayTexts: selectedOverlayTexts,
           onProgress: (ratio) => {
             if (cancelled) return;
@@ -219,7 +218,7 @@ export default function Home() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, videos.length, analysis, style, routeIntroClip, hasRouteIntro, routeIntroStatus, gearSummaryClip, isFree, equipmentSummary.length, gearSummaryStatus, selectedOverlayTextKey]);
+  }, [step, videos, analysis, style, routeIntroClip, hasRouteIntro, routeIntroStatus, gearSummaryClip, isFree, equipmentSummary.length, gearSummaryStatus, selectedOverlayTextKey]);
 
   const retryRender = () => {
     setStep("analyze");
@@ -240,7 +239,6 @@ export default function Home() {
     setSelectedHookId("");
     setGearSelections(DEFAULT_GEAR_SELECTIONS);
     setOverlayTexts(["", "", ""]);
-    setKeepOriginalAudio(false);
     setRouteIntroClip(null);
     setHasRouteIntro(false);
     setRouteIntroStatus("idle");
@@ -278,8 +276,6 @@ export default function Home() {
               videos={videos}
               onChange={setVideos}
               maxVideos={3}
-              keepOriginalAudio={keepOriginalAudio}
-              onKeepOriginalAudioChange={setKeepOriginalAudio}
             />
           </div>
 
