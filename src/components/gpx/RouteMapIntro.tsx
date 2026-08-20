@@ -92,6 +92,24 @@ const K_POS  = 5.5;   // lat/lng convergence speed
 const K_ZOOM = 3.5;   // zoom convergence speed (slower = no zoom jitter)
 const K_PITCH = 4.0;  // pitch convergence speed
 
+/**
+ * Dynamic place-name zoom — Phase 2 only.
+ *
+ * When the drawing head approaches a labelled waypoint within
+ * LABEL_ZOOM_TRIGGER_KM, the camera smoothly zooms in to
+ * LABEL_ZOOM_IN_LEVEL so the name becomes fully readable, then
+ * eases back to DETAIL_ZOOM once the head has moved away.
+ *
+ * Hysteresis (zoom-out threshold = 1.5× zoom-in threshold) prevents
+ * oscillation when the head lingers near the trigger boundary.
+ * expSmooth(K_ZOOM) provides the cinematic transition — no additional
+ * timer logic is needed.
+ *
+ * Adjust these two constants to tune the feel:
+ */
+const LABEL_ZOOM_IN_LEVEL   = 14;    // target zoom when near a place (streets readable)
+const LABEL_ZOOM_TRIGGER_KM = 1.0;   // km — approach distance that triggers zoom-in
+
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
 function clamp(v: number, lo: number, hi: number) {
@@ -788,6 +806,8 @@ export default function RouteMapIntro({
         let lastLabelsLen = shownLabels.length;
         let lastGeoJSONUpdateMs = 0;
         let endLabelShown = false;
+        // Dynamic zoom-in state — true while the head is close to a place name
+        let labelZoomActive = false;
 
         // After each MapLibre WebGL render, composite the map onto the recording
         // canvas and draw the 2D title card overlay on top.
@@ -873,8 +893,9 @@ export default function RouteMapIntro({
 
           // ── Phase 2 (T_ZOOMIN – T_DRAW): Route discovery ─────────────────
           // Revealed line advances through resampled points at constant speed.
-          // Camera follows the drawing head. Zoom LOCKED at DETAIL_ZOOM —
-          // no zoom oscillation during route draw.
+          // Camera follows the drawing head. Zoom is normally DETAIL_ZOOM but
+          // zooms in to LABEL_ZOOM_IN_LEVEL when the head approaches a labelled
+          // waypoint, then smoothly returns when the head moves away.
           else if (elapsed < T_DRAW) {
             const phaseT = easeInOut((elapsed - T_ZOOMIN) / (T_DRAW - T_ZOOMIN));
             const headIdx = Math.min(
@@ -911,8 +932,28 @@ export default function RouteMapIntro({
 
             targetLat   = head.lat;
             targetLng   = head.lng;
-            targetZoom  = DETAIL_ZOOM;  // locked — prevents zoom jitter
             targetPitch = 18;
+
+            // ── Dynamic zoom near place-name labels ───────────────────
+            // Find the nearest non-start / non-end label.
+            // Intermediate labels are geocoded waypoints that appear as
+            // the route draws; zooming in makes their names readable.
+            let nearestLabelKm = Infinity;
+            for (const label of labelData) {
+              if (label.isStart || label.isEnd) continue;
+              const km = haversineM(head, label) / 1_000;
+              if (km < nearestLabelKm) nearestLabelKm = km;
+            }
+
+            // Hysteresis: enter zoom-in at 1× threshold, exit at 1.5×.
+            // This prevents oscillation when the head lingers at the boundary.
+            if (!labelZoomActive && nearestLabelKm < LABEL_ZOOM_TRIGGER_KM) {
+              labelZoomActive = true;
+            } else if (labelZoomActive && nearestLabelKm > LABEL_ZOOM_TRIGGER_KM * 1.5) {
+              labelZoomActive = false;
+            }
+
+            targetZoom = labelZoomActive ? LABEL_ZOOM_IN_LEVEL : DETAIL_ZOOM;
 
             routeEndLat = head.lat;
             routeEndLng = head.lng;
