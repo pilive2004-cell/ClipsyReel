@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { UploadCloud, FileVideo, CheckCircle2, X, Plus } from "lucide-react";
+import { UploadCloud, FileVideo, CheckCircle2, X, Plus, Volume2, VolumeX, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getVideoDuration } from "@/lib/video-engine";
 import { readVideoMetadata } from "@/lib/video-metadata";
@@ -12,6 +12,8 @@ interface VideoUploaderProps {
   videos: UploadedVideo[];
   onChange: (videos: UploadedVideo[]) => void;
   maxVideos?: number;
+  keepOriginalAudio: boolean;
+  onKeepOriginalAudioChange: (value: boolean) => void;
 }
 
 const DEFAULT_MAX = 3;
@@ -24,7 +26,13 @@ const DEFAULT_MAX = 3;
  * streaming to S3/Supabase Storage), and the returned asset URL/id should be
  * what gets passed to the real analysis job instead of the raw File object.
  */
-export default function VideoUploader({ videos, onChange, maxVideos = DEFAULT_MAX }: VideoUploaderProps) {
+export default function VideoUploader({
+  videos,
+  onChange,
+  maxVideos = DEFAULT_MAX,
+  keepOriginalAudio,
+  onKeepOriginalAudioChange,
+}: VideoUploaderProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -126,6 +134,49 @@ export default function VideoUploader({ videos, onChange, maxVideos = DEFAULT_MA
           </div>
         </div>
       ))}
+
+      <button
+        type="button"
+        role="switch"
+        aria-checked={keepOriginalAudio}
+        onClick={() => onKeepOriginalAudioChange(!keepOriginalAudio)}
+        className={cn(
+          "group flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition",
+          keepOriginalAudio
+            ? "border-emerald-400/35 bg-emerald-400/10 shadow-[0_0_0_1px_rgba(52,211,153,0.10)]"
+            : "border-white/10 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.05]"
+        )}
+      >
+        <div
+          className={cn(
+            "flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl transition",
+            keepOriginalAudio ? "brand-gradient shadow-lg shadow-emerald-500/20" : "bg-white/5"
+          )}
+        >
+          {keepOriginalAudio ? (
+            <Volume2 className="h-5 w-5 text-white" />
+          ) : (
+            <VolumeX className="h-5 w-5 text-white/60" />
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-semibold text-white/90">Keep original audio</p>
+            <span className={cn(
+              "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em]",
+              keepOriginalAudio ? "bg-emerald-400/15 text-emerald-300" : "bg-white/5 text-white/40"
+            )}>
+              {keepOriginalAudio ? "ON" : "OFF"}
+            </span>
+          </div>
+          <p className="mt-0.5 text-xs leading-relaxed text-white/45">
+            {keepOriginalAudio
+              ? "Your exported reel will keep the sound from the uploaded clips."
+              : "The exported reel will be silent and ready for a new soundtrack."}
+          </p>
+        </div>
+        <Sparkles className={cn("h-4.5 w-4.5 shrink-0 transition", keepOriginalAudio ? "text-emerald-300" : "text-white/25")} />
+      </button>
 
       {canAddMore && (
         <div>
