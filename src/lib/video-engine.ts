@@ -453,6 +453,8 @@ export interface BuildMontageParams {
   quality?: RenderQuality;
   /** Burns a small "ClipsyReel" badge into the bottom-right corner of the exported MP4 (Free plan). */
   watermark?: boolean;
+  /** Keeps the original clip audio in the exported montage instead of muting everything. */
+  keepOriginalAudio?: boolean;
   /** Controls encoder speed at fixed 1080p: "fast" skips Ken Burns zoom (3–5× speedup) at the cost of static framing. */
   renderSpeedProfile?: RenderSpeedProfile;
   /** Up to three custom overlay texts burned into the final exported MP4. */
@@ -529,6 +531,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     maxStorySeconds = 60,
     quality = "720p",
     watermark = false,
+    keepOriginalAudio = false,
     renderSpeedProfile = "standard",
     overlayTexts = [],
     onProgress,
@@ -544,6 +547,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
   const { w, h } = QUALITY_DIMENSIONS[quality];
   const finalPreset = renderSpeedProfile === "fast" ? "superfast" : "veryfast";
   const finalCrf = renderSpeedProfile === "fast" ? "25" : "23";
+  const audioSampleRate = 48000;
   const watermarkMargin = Math.round(w * 0.035);
   const cleanedOverlayTexts = overlayTexts.map((text) => text.trim()).filter(Boolean).slice(0, 3);
 
@@ -568,7 +572,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
   const ffmpeg = await loadFFmpeg();
   mark("ffmpeg-ready");
 
-  onPhaseChange?.("Loading video files…");
+  onPhaseChange?.(keepOriginalAudio ? "Loading video files with audio…" : "Loading video files…");
   onProgress?.(0.01);
 
   const stamp = Date.now();
@@ -676,6 +680,40 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       return { finalLabel: currentLabel, overlaysUsed: overlays.length };
     };
 
+    const appendAudioChain = (
+      filterParts: string[],
+      clipDurations: number[],
+      transitionDurations: number[],
+      clipCount: number,
+    ) => {
+      if (!keepOriginalAudio || clipCount === 0) return null;
+
+      const labels: string[] = [];
+      for (let i = 0; i < clipCount; i++) {
+        const label = `a${i}`;
+        const duration = clipDurations[i] ?? 0;
+        const silent = (i === 0 && !!introName) || (i === clipCount - 1 && !!outroName);
+        if (silent) {
+          filterParts.push(`anullsrc=r=${audioSampleRate}:cl=stereo:d=${duration.toFixed(3)}[${label}]`);
+        } else {
+          filterParts.push(`[${i}:a]aresample=${audioSampleRate},asetpts=PTS-STARTPTS[${label}]`);
+        }
+        labels.push(label);
+      }
+
+      let currentLabel = labels[0];
+      for (let i = 1; i < labels.length; i++) {
+        const outLabel = i === labels.length - 1 ? "apre" : `ax${i}`;
+        const fadeDuration = transitionDurations[i - 1] ?? 0.25;
+        filterParts.push(
+          `[${currentLabel}][${labels[i]}]acrossfade=d=${fadeDuration.toFixed(3)}:c1=tri:c2=tri[${outLabel}]`
+        );
+        currentLabel = outLabel;
+      }
+
+      return currentLabel;
+    };
+
     let introName: string | null = null;
     if (introSourceName) {
       onPhaseChange?.("Transcoding map intro…");
@@ -685,7 +723,6 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         "-fflags", "+genpts",
         "-i", introSourceName,
         "-vf", `fps=${RENDER_FPS},scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setpts=PTS-STARTPTS,format=yuv420p`,
-        "-an",
         "-r", String(RENDER_FPS),
         "-c:v", "libx264",
         "-preset", finalPreset,
@@ -708,7 +745,6 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         "-fflags", "+genpts",
         "-i", outroSourceName,
         "-vf", `fps=${RENDER_FPS},scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setpts=PTS-STARTPTS,format=yuv420p`,
-        "-an",
         "-r", String(RENDER_FPS),
         "-c:v", "libx264",
         "-preset", finalPreset,
@@ -746,9 +782,9 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         "-t", seg.length.toFixed(3),
         "-i", inputNames[seg.sourceIndex],
         "-vf", filter,
-        "-an",
         "-r", String(RENDER_FPS),
         "-c:v", "libx264",
+        ...(keepOriginalAudio ? ["-c:a", "aac", "-b:a", "128k"] : ["-an"]),
         "-preset", "ultrafast",
         "-crf", "27",
         "-pix_fmt", "yuv420p",
@@ -811,11 +847,11 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         filterParts.join(";"),
         "-map",
         `[${finalLabel}]`,
-        "-an",
         "-r",
         String(RENDER_FPS),
         "-c:v",
         "libx264",
+        ...(keepOriginalAudio ? ["-map", "0:a?", "-c:a", "aac", "-b:a", "128k"] : ["-an"]),
         "-preset",
         finalPreset,
         "-crf",
@@ -843,9 +879,9 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         filterParts.join(";"),
         "-map",
         `[${finalLabel}]`,
-        "-an",
         "-r", String(RENDER_FPS),
         "-c:v", "libx264",
+        ...(keepOriginalAudio ? ["-map", "0:a?", "-c:a", "aac", "-b:a", "128k"] : ["-an"]),
         "-preset", finalPreset,
         "-crf", finalCrf,
         "-pix_fmt", "yuv420p",
@@ -863,11 +899,13 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     let prevLabel = "0:v";
     let acc = finalDurations[0];
     let prevTransitionName: string | null = null;
+    const transitionDurations: number[] = [];
 
     for (let i = 1; i < finalClipNames.length; i++) {
       const transitionName = pickTransitionName(transitionPool, prevTransitionName);
       const transitionDuration = Math.min(randomTransitionDuration(transitionPool), finalDurations[i - 1], finalDurations[i]);
       prevTransitionName = transitionName;
+      transitionDurations.push(transitionDuration);
 
       const offset = Math.max(0, acc - transitionDuration);
       const outLabel = i === finalClipNames.length - 1 ? "vpre" : `x${i}`;
@@ -896,12 +934,13 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       "multi"
     );
     execArgs.push(...overlayTextNames.slice(0, overlaysUsed).flatMap((name) => ["-i", name]));
+    const audioFinalLabel = appendAudioChain(filterParts, finalDurations, transitionDurations, finalClipNames.length);
 
     const outputName = `out_${stamp}.mp4`;
     execArgs.push(
       "-filter_complex", filterParts.join(";"),
       "-map", `[${finalLabel}]`,
-      "-an",
+      ...(keepOriginalAudio && audioFinalLabel ? ["-map", `[${audioFinalLabel}]`, "-c:a", "aac", "-b:a", "128k"] : ["-an"]),
       "-r", String(RENDER_FPS),
       "-c:v", "libx264",
       "-preset", finalPreset,

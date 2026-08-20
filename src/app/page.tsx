@@ -45,6 +45,7 @@ export default function Home() {
   const [selectedHookId, setSelectedHookId] = useState<string>("");
   const [gearSelections, setGearSelections] = useState(DEFAULT_GEAR_SELECTIONS);
   const [overlayTexts, setOverlayTexts] = useState<[string, string, string]>(["", "", ""]);
+  const [keepOriginalAudio, setKeepOriginalAudio] = useState(false);
   const [routeIntroClip, setRouteIntroClip] = useState<RouteIntroClip | null>(null);
   const [hasRouteIntro, setHasRouteIntro] = useState(false);
   const [routeIntroStatus, setRouteIntroStatus] = useState<"idle" | "rendering" | "ready" | "error">("idle");
@@ -192,6 +193,7 @@ export default function Home() {
           quality: qualityForPlan(),
           renderSpeedProfile: "fast",
           watermark: isFree,
+          keepOriginalAudio,
           overlayTexts: selectedOverlayTexts,
           onProgress: (ratio) => {
             if (cancelled) return;
@@ -238,6 +240,7 @@ export default function Home() {
     setSelectedHookId("");
     setGearSelections(DEFAULT_GEAR_SELECTIONS);
     setOverlayTexts(["", "", ""]);
+    setKeepOriginalAudio(false);
     setRouteIntroClip(null);
     setHasRouteIntro(false);
     setRouteIntroStatus("idle");
@@ -292,6 +295,31 @@ export default function Home() {
                 showUpgrade("GPX route maps are a Pro feature", "Upload your ride/hike GPX file or plan a route from city names with Creator Pro.")
               }
             />
+            <div className="mt-3 flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-3">
+              <div className="pr-3">
+                <p className="text-sm font-medium text-white/85">Keep original audio</p>
+                <p className="mt-0.5 text-xs leading-relaxed text-white/45">
+                  Keep the sound from your uploaded videos in the exported Reel. Turn it off if you want a silent montage.
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={keepOriginalAudio}
+                onClick={() => setKeepOriginalAudio((value) => !value)}
+                className={`relative h-8 w-14 shrink-0 rounded-full border transition ${
+                  keepOriginalAudio
+                    ? "border-emerald-400/40 bg-emerald-400/25"
+                    : "border-white/10 bg-white/[0.06]"
+                }`}
+              >
+                <span
+                  className={`absolute top-1 h-6 w-6 rounded-full bg-white shadow transition ${
+                    keepOriginalAudio ? "left-7" : "left-1"
+                  }`}
+                />
+              </button>
+            </div>
           </div>
 
           <button

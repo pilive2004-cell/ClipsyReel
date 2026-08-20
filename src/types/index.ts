@@ -163,6 +163,7 @@ export type AppStep = "upload" | "style" | "analyze" | "render" | "preview";
 export interface ExportSettings {
   quality: "720p" | "1080p" | "4K";
   watermark: boolean;
+  keepOriginalAudio?: boolean;
 }
 
 /** A single uploaded source clip (up to 3 can be combined into one montage). */
