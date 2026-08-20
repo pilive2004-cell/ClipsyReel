@@ -502,7 +502,18 @@ export async function buildMontage(params: BuildMontageParams): Promise<BuildMon
     try { await prev; } catch { /* previous render failed; safe to continue */ }
   }
   try {
-    return await _buildMontage(params);
+    try {
+      return await _buildMontage(params);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const audioRelated = /audio|stream specifier|stream map|acrossfade|amix|anullsrc|aac/i.test(message);
+      if (!params.keepOriginalAudio || !audioRelated) {
+        throw err;
+      }
+
+      console.warn("[video-engine] Original-audio export failed; retrying without audio:", message);
+      return await _buildMontage({ ...params, keepOriginalAudio: false });
+    }
   } catch (err) {
     // ErrnoError from Emscripten FS usually means the singleton is
     // corrupted (stale files, OOM, or concurrent access). Reset it so the
