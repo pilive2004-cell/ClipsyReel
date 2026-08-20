@@ -702,30 +702,75 @@ export default function RouteMapIntro({
           },
         });
 
-        // Place-name labels.
-        // Start and end use text-size 26 (large, readable on mobile) while
-        // intermediate waypoints use 17. All labels allow overlap so they never
-        // disappear behind each other during animation.
+        // Place-name labels — two-layer approach for maximum mobile readability.
+        //
+        // Layer 1 "place-labels-halo": renders only a thick white halo at the
+        // same position as the text. This creates a crisp white chip/pill that
+        // completely isolates the label from the red route and map tiles below.
+        //
+        // Layer 2 "place-labels-text": the actual colored text on top.
+        //
+        // Both layers use zoom-interpolated text-size so labels grow naturally
+        // when the camera zooms in to DETAIL_ZOOM (z12) or LABEL_ZOOM_IN_LEVEL
+        // (z14) and shrink back during the overview without becoming illegible.
+        //
+        //   z 8  (overview)   → start/end 22 px  |  intermediate 14 px
+        //   z12  (detail)     → start/end 32 px  |  intermediate 22 px
+        //   z14  (zoom-in)    → start/end 42 px  |  intermediate 30 px
+        //
+        // symbol-sort-key ensures start/end labels render above intermediate
+        // ones when their bounding boxes happen to touch.
+        const LABEL_SIZE_EXPR: maplibregl.ExpressionSpecification = [
+          "interpolate", ["linear"], ["zoom"],
+          8,  ["case", ["any", ["get", "isStart"], ["get", "isEnd"]] as maplibregl.ExpressionSpecification, 22, 14],
+          12, ["case", ["any", ["get", "isStart"], ["get", "isEnd"]] as maplibregl.ExpressionSpecification, 32, 22],
+          14, ["case", ["any", ["get", "isStart"], ["get", "isEnd"]] as maplibregl.ExpressionSpecification, 42, 30],
+        ];
+        const LABEL_LAYOUT_COMMON = {
+          "text-field": ["get", "name"] as maplibregl.ExpressionSpecification,
+          "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
+          "text-size": LABEL_SIZE_EXPR,
+          "text-anchor": "bottom" as const,
+          "text-offset": [0, -1.6] as [number, number],
+          "text-max-width": 10,
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+          "text-transform": "uppercase" as const,
+          "text-letter-spacing": 0.04,
+          // Lower value = higher z-order: start/end labels always render on top
+          "symbol-sort-key": ["case", ["any", ["get", "isStart"], ["get", "isEnd"]] as maplibregl.ExpressionSpecification, 0, 1] as maplibregl.ExpressionSpecification,
+        };
+
         map.addSource("place-labels", { type: "geojson", data: buildLabelsGeoJSON([]) });
+
+        // Halo layer — thick white chip separates label from the red route
         map.addLayer({
-          id: "place-labels-layer",
+          id: "place-labels-halo",
           type: "symbol",
           source: "place-labels",
-          layout: {
-            "text-field": ["get", "name"],
-            "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
-            // Data-driven size: start/end names are larger than intermediate waypoints
-            "text-size": ["case", ["any", ["get", "isStart"], ["get", "isEnd"]], 26, 17],
-            "text-anchor": "bottom",
-            "text-offset": [0, -1.4],
-            "text-max-width": 12,
-            "text-allow-overlap": true,
-            "text-ignore-placement": true,
-          },
+          layout: LABEL_LAYOUT_COMMON,
           paint: {
-            "text-color": ["case", ["get", "isEnd"], "#c0392b", ["get", "isStart"], "#15803d", "#111827"],
-            "text-halo-color": "#ffffff",
-            "text-halo-width": 3.5,
+            "text-color": "rgba(0,0,0,0)",
+            "text-halo-color": "rgba(255,255,255,0.97)",
+            "text-halo-width": 8,
+            "text-halo-blur": 1,
+          },
+        });
+
+        // Text layer — colored text on top of the white chip
+        map.addLayer({
+          id: "place-labels-text",
+          type: "symbol",
+          source: "place-labels",
+          layout: LABEL_LAYOUT_COMMON,
+          paint: {
+            "text-color": ["case",
+              ["get", "isEnd"]   as maplibregl.ExpressionSpecification, "#b91c1c",
+              ["get", "isStart"] as maplibregl.ExpressionSpecification, "#15803d",
+              "#111827",
+            ] as maplibregl.ExpressionSpecification,
+            "text-halo-color": "rgba(255,255,255,0.5)",
+            "text-halo-width": 2,
           },
         });
 
