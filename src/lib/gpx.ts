@@ -110,3 +110,32 @@ export function computeRouteStatsFromPoints(points: GpxTrackPoint[]): GpxRouteSt
     highestPointM: highestPointM !== null ? Math.round(highestPointM) : null,
   };
 }
+
+/** Parses GPX track points directly from GPX XML text without rendering a map. */
+export function parseGpxPointsFromText(gpxText: string): GpxTrackPoint[] {
+  const doc = new DOMParser().parseFromString(gpxText, "application/xml");
+  if (doc.querySelector("parsererror")) return [];
+
+  const points: GpxTrackPoint[] = [];
+  const trkpts = Array.from(doc.getElementsByTagName("trkpt"));
+
+  for (const trkpt of trkpts) {
+    const lat = Number(trkpt.getAttribute("lat"));
+    const lng = Number(trkpt.getAttribute("lon"));
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+
+    const eleNode = trkpt.getElementsByTagName("ele")[0];
+    const timeNode = trkpt.getElementsByTagName("time")[0];
+    const ele = eleNode ? Number(eleNode.textContent ?? "") : null;
+    const time = timeNode ? new Date(timeNode.textContent ?? "") : null;
+
+    points.push({
+      lat,
+      lng,
+      ele: Number.isFinite(ele) ? (ele as number) : null,
+      time: time instanceof Date && !Number.isNaN(time.getTime()) ? time : null,
+    });
+  }
+
+  return points;
+}

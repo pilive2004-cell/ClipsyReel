@@ -1,7 +1,6 @@
 "use client";
 
 import { useRef, useState, useCallback, useMemo } from "react";
-import dynamic from "next/dynamic";
 import {
   AlertTriangle,
   Bike,
@@ -20,18 +19,12 @@ import {
 } from "lucide-react";
 
 import { usePlan } from "@/lib/plan-context";
+import { computeRouteStatsFromPoints, parseGpxPointsFromText } from "@/lib/gpx";
 import { matchVideosToRoute } from "@/lib/video-location-matcher";
-import { DEMO_GPX } from "@/data/demo-gpx";
 import type { GpxRouteStats, GpxTrackPoint, UploadedVideo } from "@/types";
 import type { VehicleType, Waypoint } from "@/lib/route-service";
 import RouteStatsCard from "./gpx/RouteStatsCard";
 import VideoLocationMatcher from "./gpx/VideoLocationMatcher";
-
-// Leaflet touches window at import time — load client-side only.
-const GPXMap = dynamic(() => import("./gpx/GPXMap"), {
-  ssr: false,
-  loading: () => <div className="h-40 w-full animate-pulse rounded-xl bg-white/5" />,
-});
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -162,7 +155,13 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
     onRouteDataChange?.({ points: null, stats: null });
     const reader = new FileReader();
     reader.onload = () => {
-      if (typeof reader.result === "string") setGpxText(reader.result);
+      if (typeof reader.result !== "string") return;
+      setGpxText(reader.result);
+      const points = parseGpxPointsFromText(reader.result);
+      const stats = points.length > 1 ? computeRouteStatsFromPoints(points) : null;
+      setGpxPoints(points.length > 1 ? points : null);
+      setGpxStats(stats);
+      onRouteDataChange?.({ points: points.length > 1 ? points : null, stats });
     };
     reader.readAsText(file);
   };
@@ -308,8 +307,11 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
         onClick={onLockedClick}
         className="group relative block w-full overflow-hidden rounded-2xl border border-dashed border-white/10 bg-white/[0.02] text-left transition hover:border-white/20"
       >
-        <div className="pointer-events-none blur-[3px] grayscale-[0.15] opacity-70">
-          <GPXMap gpxText={DEMO_GPX} videoMatches={[]} heightClassName="h-36" />
+        <div className="pointer-events-none flex h-36 items-center justify-center bg-[radial-gradient(circle_at_top,rgba(16,185,129,0.18),transparent_60%),linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.01))] blur-[1px] grayscale-[0.1] opacity-80">
+          <div className="rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-center">
+            <p className="text-sm font-semibold text-white/85">GPX import & route planner</p>
+            <p className="mt-1 text-[11px] text-white/45">Upload a GPX file or plan a route from cities.</p>
+          </div>
         </div>
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-black/55 px-4 text-center">
           <span className="flex items-center gap-1 rounded-full bg-amber-400/15 px-2.5 py-1 text-[10px] font-semibold text-amber-300">
@@ -366,11 +368,6 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
           routeMatch={routeMatch}
           onFileChange={handleGpxFile}
           onClear={clearGpx}
-          onGpxMapReady={(pts, st) => {
-            setGpxPoints(pts);
-            setGpxStats(st);
-            onRouteDataChange?.({ points: pts, stats: st });
-          }}
           videos={videos}
         />
       )}
@@ -451,12 +448,11 @@ interface GpxModePanelProps {
   videos: UploadedVideo[];
   onFileChange: (f: File | undefined) => void;
   onClear: () => void;
-  onGpxMapReady: (pts: GpxTrackPoint[], st: GpxRouteStats) => void;
 }
 
 function GpxModePanel({
   gpxText, gpxFileName, gpxStats, gpxInputRef,
-  routeMatch, onFileChange, onClear, onGpxMapReady,
+  routeMatch, onFileChange, onClear,
 }: GpxModePanelProps) {
   if (gpxText) {
     return (
@@ -473,13 +469,18 @@ function GpxModePanel({
             <X className="h-3 w-3" />
           </button>
         </div>
-        <GPXMap gpxText={gpxText} videoMatches={routeMatch.matches} onReady={onGpxMapReady} />
+        <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-4">
+        <p className="text-sm font-medium text-white/85">Route imported</p>
+        <p className="mt-1 text-xs leading-relaxed text-white/45">
+          The cinematic map intro now uses the new route rendering pipeline. This panel only shows route stats and matches.
+        </p>
         {gpxStats && <div className="mt-3"><RouteStatsCard stats={gpxStats} /></div>}
+        </div>
         {routeMatch.warning && (
-          <div className="mt-3 flex items-start gap-2 rounded-xl border border-amber-400/25 bg-amber-400/[0.08] px-3 py-2 text-[11px] text-amber-200">
-            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <p>{routeMatch.warning}</p>
-          </div>
+        <div className="mt-3 flex items-start gap-2 rounded-xl border border-amber-400/25 bg-amber-400/[0.08] px-3 py-2 text-[11px] text-amber-200">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <p>{routeMatch.warning}</p>
+        </div>
         )}
         {routeMatch.matches.length > 0 && (
           <div className="mt-3"><VideoLocationMatcher matches={routeMatch.matches} /></div>
@@ -559,12 +560,6 @@ function LocationModePanel({
   onAddStop, onRemoveStop, onVehicleChange,
   onGenerate, onClearRoute, onDownloadGpx,
 }: LocationModePanelProps) {
-
-  // Build a minimal GPX text string from the location route points so GPXMap
-  // can render the preview (it accepts a gpxText string as source).
-  const previewGpxText = locationPoints
-    ? buildPreviewGpx(locationPoints)
-    : null;
 
   return (
     <div className="space-y-3">
@@ -655,7 +650,7 @@ function LocationModePanel({
       )}
 
       {/* Route result */}
-      {routeGenStatus === "ready" && previewGpxText && locationStats && (
+      {routeGenStatus === "ready" && locationStats && (
         <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4 space-y-3">
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium text-emerald-300 flex items-center gap-1.5">
@@ -680,9 +675,15 @@ function LocationModePanel({
             </div>
           </div>
 
-          <GPXMap gpxText={previewGpxText} videoMatches={routeMatch.matches} onReady={() => {/* stats already set */}} />
-
-          <RouteStatsCard stats={locationStats} />
+          <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-4">
+            <p className="text-sm font-medium text-white/85">Route ready</p>
+            <p className="mt-1 text-xs leading-relaxed text-white/45">
+              The generated route is ready for the map intro and can be downloaded as GPX.
+            </p>
+            <div className="mt-3">
+              <RouteStatsCard stats={locationStats} />
+            </div>
+          </div>
 
           {routeMatch.warning && (
             <div className="flex items-start gap-2 rounded-xl border border-amber-400/25 bg-amber-400/[0.08] px-3 py-2 text-[11px] text-amber-200">
@@ -695,25 +696,4 @@ function LocationModePanel({
       )}
     </div>
   );
-}
-
-// ─── Minimal GPX builder for map preview ─────────────────────────────────────
-
-/**
- * Build a minimal GPX XML string from GpxTrackPoints so the existing
- * GPXMap Leaflet component can render a preview without a real file.
- */
-function buildPreviewGpx(points: GpxTrackPoint[]): string {
-  const trkpts = points
-    .map((p) => {
-      const ele = p.ele !== null ? `\n          <ele>${p.ele.toFixed(1)}</ele>` : "";
-      return `        <trkpt lat="${p.lat}" lon="${p.lng}">${ele}\n        </trkpt>`;
-    })
-    .join("\n");
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<gpx version="1.1" creator="ClipsyReel" xmlns="http://www.topografix.com/GPX/1/1">
-  <trk><trkseg>
-${trkpts}
-  </trkseg></trk>
-</gpx>`;
 }
