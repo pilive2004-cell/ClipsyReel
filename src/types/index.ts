@@ -104,6 +104,29 @@ export interface GpxRouteStats {
   highestPointM: number | null;
 }
 
+/**
+ * A labelled city, town, village or landmark positioned along the GPX route.
+ *
+ * Pre-filled automatically by `detectRouteLabels()` (see `src/lib/route-service.ts`)
+ * and then editable by the user before the map intro is rendered.
+ *
+ * `progress` is normalised 0–1 along the route arc-length, used to:
+ *   - Sort labels from start to end
+ *   - Reveal labels progressively during the animation
+ *   - Trigger the dynamic zoom-in when the drawing head is nearby
+ */
+export interface RouteLabel {
+  name: string;
+  lat: number;
+  lng: number;
+  /** Normalised arc-length position along the route (0 = start, 1 = end). */
+  progress: number;
+  /** "major" = city / town / borough — displayed larger; "minor" = village / hamlet. */
+  priority: "major" | "minor";
+  isStart?: boolean;
+  isEnd?: boolean;
+}
+
 /** GPS coordinates embedded in the video container metadata, when present. */
 export interface VideoGpsMetadata {
   lat: number;

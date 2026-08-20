@@ -10,7 +10,7 @@
  * the implementation bodies — the calling code in components does not change.
  */
 
-import type { GpxRouteStats, GpxTrackPoint } from "@/types";
+import type { GpxRouteStats, GpxTrackPoint, RouteLabel } from "@/types";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -247,4 +247,120 @@ export function buildStraightLineRoute(
   };
 
   return { points, stats, waypoints, vehicleType: vehicle };
+}
+
+// ─── Route label detection ────────────────────────────────────────────────────
+
+/**
+ * Compute cumulative arc-length in km at each GPX point.
+ * Used to convert a lat/lng to a normalised route-progress value.
+ */
+function buildCumDist(pts: GpxTrackPoint[]): number[] {
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) {
+    cum.push(cum[i - 1] + haversineKm(pts[i - 1], pts[i]));
+  }
+  return cum;
+}
+
+/** Find the normalised progress (0–1) of the route point closest to (lat, lng). */
+function closestProgress(
+  lat: number, lng: number,
+  pts: GpxTrackPoint[], cum: number[],
+): number {
+  let minD = Infinity;
+  let idx = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const d = haversineKm({ lat, lng }, pts[i]);
+    if (d < minD) { minD = d; idx = i; }
+  }
+  const total = cum[cum.length - 1];
+  return total > 0 ? cum[idx] / total : 0;
+}
+
+async function reverseGeocodeLabel(
+  lat: number, lng: number,
+): Promise<{ name: string; priority: "major" | "minor" } | null> {
+  try {
+    const ctrl = new AbortController();
+    const tid = window.setTimeout(() => ctrl.abort(), 4_000);
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=jsonv2`,
+      { signal: ctrl.signal, headers: { Accept: "application/json" } },
+    );
+    window.clearTimeout(tid);
+    if (!res.ok) return null;
+    const data: { address?: Record<string, string> } = await res.json();
+    const a = data.address ?? {};
+    const name = a.city ?? a.town ?? a.borough ?? a.suburb ?? a.village ?? a.municipality ?? a.county ?? "";
+    if (!name) return null;
+    const priority: "major" | "minor" = (a.city || a.town || a.borough) ? "major" : "minor";
+    return { name, priority };
+  } catch {
+    return null;
+  }
+}
+
+export type { RouteLabel };
+
+/**
+ * Automatically detect city/place labels along a GPX route.
+ *
+ * Mode A — knownWaypoints provided (location planner): uses those names
+ * directly, no extra network requests.
+ *
+ * Mode B — GPX import: samples N evenly-spaced points and reverse-geocodes
+ * each via Nominatim with 350 ms delays between calls (rate-limit compliance).
+ * Duplicates are removed. Returns labels sorted start → end.
+ */
+export async function detectRouteLabels(
+  points: GpxTrackPoint[],
+  options?: {
+    knownWaypoints?: Waypoint[];
+    maxLabels?: number;
+  },
+): Promise<RouteLabel[]> {
+  if (points.length < 2) return [];
+
+  const cum = buildCumDist(points);
+  const totalKm = cum[cum.length - 1];
+
+  if (options?.knownWaypoints && options.knownWaypoints.length >= 2) {
+    const labels: RouteLabel[] = options.knownWaypoints.map((wp) => ({
+      name: wp.name.split(",")[0].trim(),
+      lat: wp.lat,
+      lng: wp.lng,
+      progress: closestProgress(wp.lat, wp.lng, points, cum),
+      priority: "major" as const,
+    }));
+    labels.sort((a, b) => a.progress - b.progress);
+    if (labels.length > 0) labels[0].isStart = true;
+    if (labels.length > 1) labels[labels.length - 1].isEnd = true;
+    return labels;
+  }
+
+  const sampleCount =
+    options?.maxLabels ??
+    (totalKm < 50 ? 3 : totalKm < 200 ? 4 : totalKm < 500 ? 5 : 6);
+
+  const sampleIndices: number[] = [];
+  for (let i = 0; i < sampleCount; i++) {
+    sampleIndices.push(Math.round((i / (sampleCount - 1)) * (points.length - 1)));
+  }
+
+  const rawLabels: RouteLabel[] = [];
+  for (let i = 0; i < sampleIndices.length; i++) {
+    if (i > 0) await new Promise<void>((r) => window.setTimeout(r, 350));
+    const pt = points[sampleIndices[i]];
+    const progress = cum[sampleIndices[i]] / (totalKm || 1);
+    const result = await reverseGeocodeLabel(pt.lat, pt.lng);
+    if (!result) continue;
+    if (rawLabels.some((l) => l.name.toLowerCase() === result.name.toLowerCase())) continue;
+    rawLabels.push({ name: result.name, lat: pt.lat, lng: pt.lng, progress, priority: result.priority });
+  }
+
+  rawLabels.sort((a, b) => a.progress - b.progress);
+  if (rawLabels.length > 0) rawLabels[0].isStart = true;
+  if (rawLabels.length > 1) rawLabels[rawLabels.length - 1].isEnd = true;
+  return rawLabels;
 }

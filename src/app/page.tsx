@@ -24,7 +24,7 @@ import { generateGearSummaryClip, GearSummaryClip } from "@/lib/gear-summary-cli
 import { buildAnalysisResult, generateMockAnalysisMulti, STYLES } from "@/data/mock";
 import { buildMontage, qualityForPlan } from "@/lib/video-engine";
 import { buildGearSummaryEntries, DEFAULT_GEAR_SELECTIONS } from "@/data/gearCatalog";
-import { AppStep, BestMoment, GpxRouteStats, GpxTrackPoint, MontageResult, ReelAnalysisResult, ReelStyle, UploadedVideo } from "@/types";
+import { AppStep, BestMoment, GpxRouteStats, GpxTrackPoint, MontageResult, ReelAnalysisResult, ReelStyle, RouteLabel, UploadedVideo } from "@/types";
 
 const STEP_ORDER: AppStep[] = ["upload", "style", "analyze", "render", "preview"];
 const STEP_LABELS: Record<AppStep, string> = {
@@ -50,6 +50,7 @@ export default function Home() {
   const [routeIntroStatus, setRouteIntroStatus] = useState<"idle" | "rendering" | "ready" | "error">("idle");
   const [routeIntroPoints, setRouteIntroPoints] = useState<GpxTrackPoint[] | null>(null);
   const [routeIntroStats, setRouteIntroStats] = useState<GpxRouteStats | null>(null);
+  const [routeIntroLabels, setRouteIntroLabels] = useState<RouteLabel[] | null>(null);
   const [gearSummaryClip, setGearSummaryClip] = useState<GearSummaryClip | null>(null);
   const [gearSummaryStatus, setGearSummaryStatus] = useState<"idle" | "rendering" | "ready" | "error">("idle");
 
@@ -244,6 +245,7 @@ export default function Home() {
     setRouteIntroStatus("idle");
     setRouteIntroPoints(null);
     setRouteIntroStats(null);
+    setRouteIntroLabels(null);
     clearGearSummaryClip("idle");
     setMontage(null);
     setStep("upload");
@@ -285,9 +287,10 @@ export default function Home() {
             <p className="mb-2 text-xs text-white/45">Import a GPX file or plan a route from city names to add a cinematic map intro to your reel.</p>
             <RouteSourceSelector
               videos={videos}
-              onRouteDataChange={({ points, stats }) => {
+              onRouteDataChange={({ points, stats, labels }) => {
                 setRouteIntroPoints(points);
                 setRouteIntroStats(stats);
+                setRouteIntroLabels(labels);
                 const available = !!points && points.length > 1;
                 setHasRouteIntro(available);
                 setRouteIntroClip(null);
@@ -476,6 +479,7 @@ export default function Home() {
         <RouteMapIntro
           points={routeIntroPoints}
           routeStats={routeIntroStats}
+          initialLabels={routeIntroLabels ?? undefined}
           onClipReady={setRouteIntroClip}
           onStatusChange={setRouteIntroStatus}
           hideUi

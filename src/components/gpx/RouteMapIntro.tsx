@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, Loader2, TriangleAlert } from "lucide-react";
-import type { GpxRouteStats, GpxTrackPoint } from "@/types";
+import type { GpxRouteStats, GpxTrackPoint, RouteLabel } from "@/types";
 import * as maplibregl from "maplibre-gl";
 import type { GeoJSONSource } from "maplibre-gl";
 
@@ -26,6 +26,13 @@ export interface RouteIntroClip {
 interface RouteMapIntroProps {
   points: GpxTrackPoint[];
   routeStats?: GpxRouteStats | null;
+  /**
+   * Pre-filled city/place labels from the route planner or GPX detection.
+   * When provided, the component skips its own Nominatim reverse-geocoding
+   * and uses these labels directly — faster start and no duplicate API calls.
+   * Labels must be sorted by `progress` (0 = start, 1 = end).
+   */
+  initialLabels?: RouteLabel[];
   onClipReady: (clip: RouteIntroClip | null) => void;
   onStatusChange?: (status: "idle" | "rendering" | "ready" | "error") => void;
   hideUi?: boolean;
@@ -526,6 +533,7 @@ function drawTitleCard(
 export default function RouteMapIntro({
   points,
   routeStats,
+  initialLabels,
   onClipReady,
   onStatusChange,
   hideUi = false,
@@ -561,13 +569,6 @@ export default function RouteMapIntro({
     // Normalize route density → constant-speed camera movement
     const resampled = resampleRoute(points, ROUTE_RESAMPLE_COUNT);
 
-    // Progress fractions on original points (for label timing)
-    const pointProgress = computeProgressPerPoint(points);
-
-    // Label waypoints (evenly spaced on the original track)
-    const labelCount = Math.min(6, Math.max(2, Math.ceil(points.length / 40)));
-    const waypoints = pickWaypoints(points, labelCount);
-
     // Pre-compute the overview camera using pure Mercator math.
     // Available before the Map is constructed — used in the Map constructor
     // for initial tile loading AND re-applied in the load handler via jumpTo.
@@ -578,15 +579,37 @@ export default function RouteMapIntro({
     void (async () => {
       if (cancelled) return;
 
-      // 1. Reverse-geocode label waypoints in parallel
-      const labelData = await Promise.all(
-        waypoints.map(async (wp, i) => {
-          const name = await reverseGeocode(wp.lat, wp.lng);
-          const ptIdx = points.findIndex((p) => p.lat === wp.lat && p.lng === wp.lng);
-          const progress = ptIdx >= 0 ? pointProgress[ptIdx] : i / (waypoints.length - 1);
-          return { lng: wp.lng, lat: wp.lat, name, progress, isStart: i === 0, isEnd: i === waypoints.length - 1 };
-        }),
-      );
+      // 1. Resolve label data.
+      //    If `initialLabels` were pre-filled by the route planner / GPX
+      //    detector, use them directly — no network calls needed, no delay.
+      //    Otherwise fall back to the internal Nominatim reverse-geocoding
+      //    (legacy path for callers that don't supply labels yet).
+      let labelData: Array<{ lng: number; lat: number; name: string; progress: number; isStart: boolean; isEnd: boolean }>;
+
+      if (initialLabels && initialLabels.length >= 2) {
+        // Map RouteLabel[] (external) → internal labelData shape
+        labelData = initialLabels.map((l, i) => ({
+          lng: l.lng,
+          lat: l.lat,
+          name: l.name,
+          progress: l.progress,
+          isStart: i === 0,
+          isEnd: i === initialLabels.length - 1,
+        }));
+      } else {
+        // Fallback: geocode N evenly-spaced waypoints via Nominatim
+        const pointProgress = computeProgressPerPoint(points);
+        const labelCount = Math.min(6, Math.max(2, Math.ceil(points.length / 40)));
+        const waypoints = pickWaypoints(points, labelCount);
+        labelData = await Promise.all(
+          waypoints.map(async (wp, i) => {
+            const name = await reverseGeocode(wp.lat, wp.lng);
+            const ptIdx = points.findIndex((p) => p.lat === wp.lat && p.lng === wp.lng);
+            const progress = ptIdx >= 0 ? pointProgress[ptIdx] : i / (waypoints.length - 1);
+            return { lng: wp.lng, lat: wp.lat, name, progress, isStart: i === 0, isEnd: i === waypoints.length - 1 };
+          }),
+        );
+      }
 
       if (cancelled) return;
 
@@ -1077,7 +1100,7 @@ export default function RouteMapIntro({
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [points, routeStats, onClipReady]);
+  }, [points, routeStats, initialLabels, onClipReady]);
 
   const hostDiv = (
     <div

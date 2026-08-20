@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   Bike,
   Car,
+  CheckCircle2,
   FileUp,
   Footprints,
   Loader2,
@@ -21,7 +22,7 @@ import {
 import { usePlan } from "@/lib/plan-context";
 import { computeRouteStatsFromPoints, parseGpxPointsFromText } from "@/lib/gpx";
 import { matchVideosToRoute } from "@/lib/video-location-matcher";
-import type { GpxRouteStats, GpxTrackPoint, UploadedVideo } from "@/types";
+import type { GpxRouteStats, GpxTrackPoint, RouteLabel, UploadedVideo } from "@/types";
 import type { VehicleType, Waypoint } from "@/lib/route-service";
 import RouteStatsCard from "./gpx/RouteStatsCard";
 import VideoLocationMatcher from "./gpx/VideoLocationMatcher";
@@ -32,7 +33,11 @@ type RouteMode = "gpx" | "locations";
 
 export interface RouteSourceSelectorProps {
   videos: UploadedVideo[];
-  onRouteDataChange?: (route: { points: GpxTrackPoint[] | null; stats: GpxRouteStats | null }) => void;
+  onRouteDataChange?: (route: {
+    points: GpxTrackPoint[] | null;
+    stats: GpxRouteStats | null;
+    labels: RouteLabel[] | null;
+  }) => void;
   onLockedClick: () => void;
 }
 
@@ -136,6 +141,13 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
   const [locationStats,  setLocationStats]  = useState<GpxRouteStats | null>(null);
   const [locationGpxStr, setLocationGpxStr] = useState<string | null>(null);
 
+  // ── Route labels state ───────────────────────────────────────────────────────
+  const [routeLabels,   setRouteLabels]   = useState<RouteLabel[] | null>(null);
+  const [labelsStatus,  setLabelsStatus]  = useState<"idle" | "detecting" | "ready">("idle");
+  // Tracks the in-progress add-label geocode query
+  const [addLabelQuery, setAddLabelQuery] = useState("");
+  const [addLabelStatus, setAddLabelStatus] = useState<"idle" | "loading" | "error">("idle");
+
   // ── Video matching ───────────────────────────────────────────────────────────
   const activePoints = mode === "gpx" ? gpxPoints : locationPoints;
   const activeStats  = mode === "gpx" ? gpxStats  : locationStats;
@@ -145,6 +157,49 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
     return matchVideosToRoute(videos.map((v) => v.metadata), activePoints);
   }, [activePoints, videos]);
 
+  // ── Label helpers ─────────────────────────────────────────────────────────────
+
+  const updateRouteLabel = useCallback((i: number, name: string) => {
+    setRouteLabels((prev) => {
+      if (!prev) return prev;
+      const next = [...prev];
+      next[i] = { ...next[i], name };
+      return next;
+    });
+  }, []);
+
+  const removeRouteLabel = useCallback((i: number) => {
+    setRouteLabels((prev) => {
+      if (!prev) return prev;
+      const next = prev.filter((_, j) => j !== i);
+      if (next.length > 0) { next[0].isStart = true; next[next.length - 1].isEnd = true; }
+      return next;
+    });
+  }, []);
+
+  const addLabelToRoute = useCallback(async (query: string) => {
+    if (!activePoints) return;
+    setAddLabelStatus("loading");
+    try {
+      const { geocodeCity, detectRouteLabels } = await import("@/lib/route-service");
+      const wp = await geocodeCity(query);
+      if (!wp) { setAddLabelStatus("error"); return; }
+      const [newLabel] = await detectRouteLabels(activePoints, { knownWaypoints: [wp] });
+      if (!newLabel) { setAddLabelStatus("error"); return; }
+      setRouteLabels((prev) => {
+        const next = [...(prev ?? []), newLabel].sort((a, b) => a.progress - b.progress);
+        if (next.length > 0) { next[0].isStart = true; next[0].isEnd = undefined; }
+        if (next.length > 1) { next[next.length - 1].isEnd = true; next[next.length - 1].isStart = undefined; }
+        for (let i = 1; i < next.length - 1; i++) { next[i].isStart = undefined; next[i].isEnd = undefined; }
+        return next;
+      });
+      setAddLabelQuery("");
+      setAddLabelStatus("idle");
+    } catch {
+      setAddLabelStatus("error");
+    }
+  }, [activePoints]);
+
   // ── GPX handlers ─────────────────────────────────────────────────────────────
 
   const handleGpxFile = (file: File | undefined) => {
@@ -152,16 +207,34 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
     setGpxFileName(file.name);
     setGpxStats(null);
     setGpxPoints(null);
-    onRouteDataChange?.({ points: null, stats: null });
+    setRouteLabels(null);
+    setLabelsStatus("idle");
+    onRouteDataChange?.({ points: null, stats: null, labels: null });
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       if (typeof reader.result !== "string") return;
       setGpxText(reader.result);
-      const points = parseGpxPointsFromText(reader.result);
-      const stats = points.length > 1 ? computeRouteStatsFromPoints(points) : null;
-      setGpxPoints(points.length > 1 ? points : null);
+      const pts = parseGpxPointsFromText(reader.result);
+      const stats = pts.length > 1 ? computeRouteStatsFromPoints(pts) : null;
+      const activePoints = pts.length > 1 ? pts : null;
+      setGpxPoints(activePoints);
       setGpxStats(stats);
-      onRouteDataChange?.({ points: points.length > 1 ? points : null, stats });
+      // Emit immediately (map intro starts, labels will arrive separately)
+      onRouteDataChange?.({ points: activePoints, stats, labels: null });
+
+      if (activePoints) {
+        setLabelsStatus("detecting");
+        try {
+          const { detectRouteLabels } = await import("@/lib/route-service");
+          const labels = await detectRouteLabels(activePoints);
+          setRouteLabels(labels);
+          setLabelsStatus("ready");
+          onRouteDataChange?.({ points: activePoints, stats, labels });
+        } catch {
+          setLabelsStatus("ready");
+          setRouteLabels([]);
+        }
+      }
     };
     reader.readAsText(file);
   };
@@ -171,7 +244,9 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
     setGpxFileName("");
     setGpxStats(null);
     setGpxPoints(null);
-    onRouteDataChange?.({ points: null, stats: null });
+    setRouteLabels(null);
+    setLabelsStatus("idle");
+    onRouteDataChange?.({ points: null, stats: null, labels: null });
     if (gpxInputRef.current) gpxInputRef.current.value = "";
   };
 
@@ -252,9 +327,12 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
 
     setRouteGenStatus("loading");
     setRouteError(null);
+    setRouteLabels(null);
+    setLabelsStatus("idle");
 
     try {
-      const { generateRoute, exportRouteAsGpx, buildStraightLineRoute } = await import("@/lib/route-service");
+      const { generateRoute, exportRouteAsGpx, buildStraightLineRoute, detectRouteLabels } =
+        await import("@/lib/route-service");
       let result;
       try {
         result = await generateRoute(orderedWaypoints, vehicle);
@@ -267,7 +345,13 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
       setLocationStats(result.stats);
       setLocationGpxStr(gpxStr);
       setRouteGenStatus("ready");
-      onRouteDataChange?.({ points: result.points, stats: result.stats });
+
+      // For location planner: build labels instantly from the user's waypoints
+      setLabelsStatus("detecting");
+      const labels = await detectRouteLabels(result.points, { knownWaypoints: orderedWaypoints });
+      setRouteLabels(labels);
+      setLabelsStatus("ready");
+      onRouteDataChange?.({ points: result.points, stats: result.stats, labels });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Route generation failed.";
       setRouteError(msg);
@@ -281,7 +365,9 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
     setLocationGpxStr(null);
     setRouteGenStatus("idle");
     setRouteError(null);
-    onRouteDataChange?.({ points: null, stats: null });
+    setRouteLabels(null);
+    setLabelsStatus("idle");
+    onRouteDataChange?.({ points: null, stats: null, labels: null });
   };
 
   // ── GPX download for generated routes ────────────────────────────────────────
@@ -336,12 +422,12 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
     // Clear the other mode's data so the pipeline only has one active route
     if (next === "gpx") {
       clearLocationRoute();
-      if (gpxPoints) onRouteDataChange?.({ points: gpxPoints, stats: gpxStats });
-      else            onRouteDataChange?.({ points: null, stats: null });
+      if (gpxPoints) onRouteDataChange?.({ points: gpxPoints, stats: gpxStats, labels: routeLabels });
+      else            onRouteDataChange?.({ points: null, stats: null, labels: null });
     } else {
       clearGpx();
-      if (locationPoints) onRouteDataChange?.({ points: locationPoints, stats: locationStats });
-      else                 onRouteDataChange?.({ points: null, stats: null });
+      if (locationPoints) onRouteDataChange?.({ points: locationPoints, stats: locationStats, labels: routeLabels });
+      else                 onRouteDataChange?.({ points: null, stats: null, labels: null });
     }
   };
 
@@ -401,6 +487,20 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
           onGenerate={generateRouteAction}
           onClearRoute={clearLocationRoute}
           onDownloadGpx={downloadGpx}
+        />
+      )}
+
+      {/* ── Route labels editor — shown when route exists ─────────────────── */}
+      {(labelsStatus !== "idle") && (
+        <RouteLabelEditor
+          labels={routeLabels}
+          status={labelsStatus}
+          addQuery={addLabelQuery}
+          addStatus={addLabelStatus}
+          onUpdate={updateRouteLabel}
+          onRemove={removeRouteLabel}
+          onAddQueryChange={setAddLabelQuery}
+          onAddSubmit={() => { if (addLabelQuery.trim()) addLabelToRoute(addLabelQuery.trim()); }}
         />
       )}
     </div>
@@ -693,6 +793,122 @@ function LocationModePanel({
           )}
           {routeMatch.matches.length > 0 && <VideoLocationMatcher matches={routeMatch.matches} />}
         </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Route label editor ───────────────────────────────────────────────────────
+
+interface RouteLabelEditorProps {
+  labels: RouteLabel[] | null;
+  status: "idle" | "detecting" | "ready";
+  addQuery: string;
+  addStatus: "idle" | "loading" | "error";
+  onUpdate: (i: number, name: string) => void;
+  onRemove: (i: number) => void;
+  onAddQueryChange: (v: string) => void;
+  onAddSubmit: () => void;
+}
+
+function RouteLabelEditor({
+  labels, status, addQuery, addStatus,
+  onUpdate, onRemove, onAddQueryChange, onAddSubmit,
+}: RouteLabelEditorProps) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4 space-y-2.5">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <p className="flex items-center gap-1.5 text-xs font-medium text-white/75">
+          <MapPin className="h-3.5 w-3.5 text-emerald-400" />
+          Cities along the route
+        </p>
+        {status === "detecting" && (
+          <span className="flex items-center gap-1 text-[10px] text-white/40">
+            <Loader2 className="h-2.5 w-2.5 animate-spin" /> detecting…
+          </span>
+        )}
+        {status === "ready" && labels && labels.length > 0 && (
+          <span className="flex items-center gap-1 text-[10px] text-emerald-400/70">
+            <CheckCircle2 className="h-2.5 w-2.5" /> {labels.length} detected
+          </span>
+        )}
+      </div>
+
+      {/* Loading skeleton */}
+      {status === "detecting" && !labels && (
+        <div className="space-y-1.5">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="h-8 animate-pulse rounded-lg bg-white/5" />
+          ))}
+        </div>
+      )}
+
+      {/* Label rows */}
+      {labels && labels.length > 0 && (
+        <div className="space-y-1.5">
+          {labels.map((label, i) => {
+            const isStart = i === 0;
+            const isEnd = i === labels.length - 1;
+            const dotCls = isStart
+              ? "bg-emerald-400"
+              : isEnd
+              ? "bg-rose-400"
+              : label.priority === "major"
+              ? "bg-white/65"
+              : "bg-white/30";
+            return (
+              <div key={i} className="flex items-center gap-2">
+                <span className={`h-2 w-2 shrink-0 rounded-full ${dotCls}`} />
+                <input
+                  type="text"
+                  value={label.name}
+                  onChange={(e) => onUpdate(i, e.target.value)}
+                  className="flex-1 min-w-0 rounded-lg border border-white/8 bg-white/[0.04] px-2.5 py-1.5 text-xs text-white/85 placeholder:text-white/30 outline-none focus:border-white/20 focus:bg-white/[0.07] transition"
+                />
+                <button
+                  type="button"
+                  onClick={() => onRemove(i)}
+                  title="Remove"
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/5 text-white/30 hover:bg-white/10 hover:text-white/70 transition"
+                >
+                  <X className="h-2.5 w-2.5" />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Add city form */}
+      {status === "ready" && (
+        <form
+          onSubmit={(e) => { e.preventDefault(); onAddSubmit(); }}
+          className="flex items-center gap-2"
+        >
+          <input
+            type="text"
+            value={addQuery}
+            onChange={(e) => onAddQueryChange(e.target.value)}
+            placeholder="Add a city…"
+            className="flex-1 min-w-0 rounded-lg border border-dashed border-white/10 bg-transparent px-2.5 py-1.5 text-xs text-white/70 placeholder:text-white/30 outline-none focus:border-white/20 transition"
+          />
+          <button
+            type="submit"
+            disabled={!addQuery.trim() || addStatus === "loading"}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/20 disabled:opacity-40 transition"
+          >
+            {addStatus === "loading" ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Plus className="h-3 w-3" />
+            )}
+          </button>
+        </form>
+      )}
+
+      {addStatus === "error" && (
+        <p className="text-[10px] text-rose-300/75">City not found. Try a different name.</p>
       )}
     </div>
   );
