@@ -119,6 +119,9 @@ export interface RouteLabel {
   name: string;
   lat: number;
   lng: number;
+   region?: string | null;
+   country?: string | null;
+   verified?: boolean;
   /** Normalised arc-length position along the route (0 = start, 1 = end). */
   progress: number;
   /** "major" = city / town / borough — displayed larger; "minor" = village / hamlet. */

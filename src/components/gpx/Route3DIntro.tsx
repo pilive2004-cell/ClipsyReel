@@ -11,7 +11,6 @@ import {
   clamp,
   computeStableOverviewCamera,
   createPlaceLabelSprite,
-  createRouteStatsSprite,
   createTerrainTexture,
   easeInOutCubic,
   moveScalarTowards,
@@ -156,10 +155,6 @@ export default function Route3DIntro({ points, routeStats, onClipReady, onStatus
     group.add(terrain);
 
     const routePoints = buildRouteWorldPoints(samples, terrainSize, heightScale);
-    const routeBounds = new THREE.Box3().setFromPoints(routePoints);
-    const routeCenter = routeBounds.getCenter(new THREE.Vector3());
-    const routeSize = routeBounds.getSize(new THREE.Vector3());
-    const routeSpan = Math.max(routeSize.x, routeSize.z, 80);
     const routeDistanceKm = routeStats?.distanceKm ?? stats.totalDistanceKm;
     const stableOverview = computeStableOverviewCamera(routePoints, bounds, CANVAS_WIDTH / CANVAS_HEIGHT, routeDistanceKm, heading);
 
@@ -215,15 +210,6 @@ export default function Route3DIntro({ points, routeStats, onClipReady, onStatus
       );
       placeSprites.push(sprite);
       group.add(sprite);
-    }
-
-    const distanceKm = routeStats?.distanceKm ?? stats.totalDistanceKm;
-    const elevationGainM = routeStats?.elevationGainM ?? stats.elevationGainM;
-    const statsSprite = createRouteStatsSprite(distanceKm, elevationGainM);
-    if (statsSprite) {
-      statsSprite.position.set(routeCenter.x - routeSpan * 0.9, routeSpan * 0.92 + 28, routeCenter.z - routeSpan * 0.58);
-      placeSprites.push(statsSprite);
-      group.add(statsSprite);
     }
 
     const markerGeometry = new THREE.SphereGeometry(3.2, 20, 20);
@@ -442,7 +428,7 @@ export default function Route3DIntro({ points, routeStats, onClipReady, onStatus
       {status === "rendering" && <div className="h-1.5 overflow-hidden rounded-full bg-white/8"><div className="h-full w-1/3 animate-pulse rounded-full bg-emerald-400/70" /></div>}
       {status === "ready" && (
         <p className="text-xs text-emerald-200/80">
-          Intro 3D prête pour le montage final · {stats.totalDistanceKm.toFixed(1)} km · {Math.round(stats.highestPointM)} m max
+          Intro 3D prête pour le montage final · labels et relief vérifiés
         </p>
       )}
       {status === "error" && <p className="text-xs text-rose-200/75">Impossible de générer l’intro 3D sur ce navigateur.</p>}

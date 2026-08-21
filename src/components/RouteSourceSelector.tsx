@@ -23,13 +23,13 @@ import { usePlan } from "@/lib/plan-context";
 import { computeRouteStatsFromPoints, parseGpxPointsFromText } from "@/lib/gpx";
 import { matchVideosToRoute } from "@/lib/video-location-matcher";
 import type { GpxRouteStats, GpxTrackPoint, RouteLabel, UploadedVideo } from "@/types";
-import type { VehicleType, Waypoint } from "@/lib/route-service";
-import RouteStatsCard from "./gpx/RouteStatsCard";
+import type { PlaceSuggestion, VehicleType, Waypoint } from "@/lib/route-service";
 import VideoLocationMatcher from "./gpx/VideoLocationMatcher";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type RouteMode = "gpx" | "locations";
+type FieldStatus = "idle" | "loading" | "found" | "error";
 
 export interface RouteSourceSelectorProps {
   videos: UploadedVideo[];
@@ -53,24 +53,39 @@ const VEHICLES: Array<{ id: VehicleType; label: string; Icon: React.ElementType 
 // ─── Waypoint input row ───────────────────────────────────────────────────────
 
 interface WaypointInputProps {
-  index: number;
   value: string;
   placeholder: string;
-  status: "idle" | "loading" | "found" | "error";
-  resolved?: Waypoint | null;
+  status: FieldStatus;
+  suggestions: PlaceSuggestion[];
+  selectedMeta?: string | null;
   onChange: (v: string) => void;
+  onSelect: (suggestion: PlaceSuggestion) => void;
   onRemove?: () => void;
   removable?: boolean;
 }
 
-function WaypointInput({ value, placeholder, status, resolved, onChange, onRemove, removable }: WaypointInputProps) {
+function WaypointInput({
+  value,
+  placeholder,
+  status,
+  suggestions,
+  selectedMeta,
+  onChange,
+  onSelect,
+  onRemove,
+  removable,
+}: WaypointInputProps) {
+  const [open, setOpen] = useState(false);
+
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-start gap-2">
       <div className="relative flex-1">
         <input
           type="text"
           value={value}
           onChange={(e) => onChange(e.target.value)}
+          onFocus={() => setOpen(true)}
+          onBlur={() => window.setTimeout(() => setOpen(false), 120)}
           placeholder={placeholder}
           className="w-full rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2.5 pr-8 text-sm text-white/90 placeholder:text-white/35 outline-none focus:border-white/25 focus:bg-white/[0.08]"
         />
@@ -79,6 +94,28 @@ function WaypointInput({ value, placeholder, status, resolved, onChange, onRemov
           {status === "found"   && <MapPin className="h-3.5 w-3.5 text-emerald-400" />}
           {status === "error"   && <AlertTriangle className="h-3.5 w-3.5 text-rose-400" />}
         </div>
+        {open && suggestions.length > 0 && (
+          <div className="absolute inset-x-0 top-[calc(100%+0.35rem)] z-20 overflow-hidden rounded-xl border border-white/10 bg-[#0d1016] shadow-2xl shadow-black/35">
+            {suggestions.map((suggestion) => (
+              <button
+                key={suggestion.id}
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  onSelect(suggestion);
+                  setOpen(false);
+                }}
+                className="flex w-full flex-col items-start gap-0.5 border-b border-white/5 px-3 py-2 text-left text-xs text-white/85 transition last:border-b-0 hover:bg-white/[0.05]"
+              >
+                <span className="font-medium">{suggestion.name}</span>
+                <span className="text-[10px] text-white/45">{suggestion.label}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        {status === "found" && selectedMeta && (
+          <p className="mt-1 text-[10px] text-emerald-300/75">{selectedMeta}</p>
+        )}
       </div>
       {removable && (
         <button
@@ -125,11 +162,12 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
   const [stops, setStops]             = useState<string[]>([]);
   const [vehicle, setVehicle]         = useState<VehicleType>("car");
 
-  // Geocoding resolution status per field
-  type FieldStatus = "idle" | "loading" | "found" | "error";
   const [depStatus,  setDepStatus]  = useState<FieldStatus>("idle");
   const [destStatus, setDestStatus] = useState<FieldStatus>("idle");
   const [stopStatuses, setStopStatuses] = useState<FieldStatus[]>([]);
+  const [depSuggestions, setDepSuggestions] = useState<PlaceSuggestion[]>([]);
+  const [destSuggestions, setDestSuggestions] = useState<PlaceSuggestion[]>([]);
+  const [stopSuggestions, setStopSuggestions] = useState<PlaceSuggestion[][]>([]);
 
   const [depResolved,  setDepResolved]  = useState<Waypoint | null>(null);
   const [destResolved, setDestResolved] = useState<Waypoint | null>(null);
@@ -144,9 +182,6 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
   // ── Route labels state ───────────────────────────────────────────────────────
   const [routeLabels,   setRouteLabels]   = useState<RouteLabel[] | null>(null);
   const [labelsStatus,  setLabelsStatus]  = useState<"idle" | "detecting" | "ready">("idle");
-  // Tracks the in-progress add-label geocode query
-  const [addLabelQuery, setAddLabelQuery] = useState("");
-  const [addLabelStatus, setAddLabelStatus] = useState<"idle" | "loading" | "error">("idle");
 
   // ── Video matching ───────────────────────────────────────────────────────────
   const activePoints = mode === "gpx" ? gpxPoints : locationPoints;
@@ -159,46 +194,41 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
 
   // ── Label helpers ─────────────────────────────────────────────────────────────
 
-  const updateRouteLabel = useCallback((i: number, name: string) => {
-    setRouteLabels((prev) => {
-      if (!prev) return prev;
-      const next = [...prev];
-      next[i] = { ...next[i], name };
-      return next;
-    });
-  }, []);
-
-  const removeRouteLabel = useCallback((i: number) => {
-    setRouteLabels((prev) => {
-      if (!prev) return prev;
-      const next = prev.filter((_, j) => j !== i);
-      if (next.length > 0) { next[0].isStart = true; next[next.length - 1].isEnd = true; }
-      return next;
-    });
-  }, []);
-
-  const addLabelToRoute = useCallback(async (query: string) => {
+  const replaceRouteLabel = useCallback(async (i: number, waypoint: Waypoint) => {
     if (!activePoints) return;
-    setAddLabelStatus("loading");
-    try {
-      const { geocodeCity, detectRouteLabels } = await import("@/lib/route-service");
-      const wp = await geocodeCity(query);
-      if (!wp) { setAddLabelStatus("error"); return; }
-      const [newLabel] = await detectRouteLabels(activePoints, { knownWaypoints: [wp] });
-      if (!newLabel) { setAddLabelStatus("error"); return; }
-      setRouteLabels((prev) => {
-        const next = [...(prev ?? []), newLabel].sort((a, b) => a.progress - b.progress);
-        if (next.length > 0) { next[0].isStart = true; next[0].isEnd = undefined; }
-        if (next.length > 1) { next[next.length - 1].isEnd = true; next[next.length - 1].isStart = undefined; }
-        for (let i = 1; i < next.length - 1; i++) { next[i].isStart = undefined; next[i].isEnd = undefined; }
-        return next;
-      });
-      setAddLabelQuery("");
-      setAddLabelStatus("idle");
-    } catch {
-      setAddLabelStatus("error");
-    }
-  }, [activePoints]);
+    const { createRouteLabelForWaypoint, normalizeRouteLabels } = await import("@/lib/route-service");
+    setRouteLabels((prev) => {
+      if (!prev || !prev[i]) return prev;
+      const next = [...prev];
+      next[i] = createRouteLabelForWaypoint(activePoints, waypoint, { priority: prev[i].priority });
+      const normalized = normalizeRouteLabels(next);
+      onRouteDataChange?.({ points: activePoints, stats: activeStats, labels: normalized });
+      return normalized;
+    });
+  }, [activePoints, activeStats, onRouteDataChange]);
+
+  const removeRouteLabel = useCallback(async (i: number) => {
+    const { normalizeRouteLabels } = await import("@/lib/route-service");
+    setRouteLabels((prev) => {
+      if (!prev) return prev;
+      const normalized = normalizeRouteLabels(prev.filter((_, j) => j !== i));
+      onRouteDataChange?.({ points: activePoints, stats: activeStats, labels: normalized });
+      return normalized;
+    });
+  }, [activePoints, activeStats, onRouteDataChange]);
+
+  const addLabelToRoute = useCallback(async (waypoint: Waypoint) => {
+    if (!activePoints) return;
+    const { createRouteLabelForWaypoint, normalizeRouteLabels } = await import("@/lib/route-service");
+    setRouteLabels((prev) => {
+      const normalized = normalizeRouteLabels([
+        ...(prev ?? []),
+        createRouteLabelForWaypoint(activePoints, waypoint, { priority: "major" }),
+      ]);
+      onRouteDataChange?.({ points: activePoints, stats: activeStats, labels: normalized });
+      return normalized;
+    });
+  }, [activePoints, activeStats, onRouteDataChange]);
 
   // ── GPX handlers ─────────────────────────────────────────────────────────────
 
@@ -252,69 +282,124 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
 
   // ── Geocoding ─────────────────────────────────────────────────────────────────
 
-  // Debounced geocode helper (called from field onChange)
+  const resetLocationOutput = useCallback(() => {
+    setLocationPoints(null);
+    setLocationStats(null);
+    setLocationGpxStr(null);
+    setRouteGenStatus("idle");
+    setRouteError(null);
+    setRouteLabels(null);
+    setLabelsStatus("idle");
+    if (mode === "locations") {
+      onRouteDataChange?.({ points: null, stats: null, labels: null });
+    }
+  }, [mode, onRouteDataChange]);
+
   const geocodeTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
-  const debouncedGeocode = useCallback(
-    (key: string, query: string, setStatus: (s: FieldStatus) => void, setResolved: (w: Waypoint | null) => void) => {
+  const queueSuggestions = useCallback(
+    (
+      key: string,
+      query: string,
+      setStatus: (s: FieldStatus) => void,
+      setSuggestions: (items: PlaceSuggestion[]) => void,
+    ) => {
       clearTimeout(geocodeTimers.current[key]);
-      if (!query.trim()) { setStatus("idle"); setResolved(null); return; }
+      if (!query.trim()) {
+        setStatus("idle");
+        setSuggestions([]);
+        return;
+      }
       setStatus("loading");
       geocodeTimers.current[key] = setTimeout(async () => {
         try {
-          // Dynamic import to avoid loading the service during SSR
-          const { geocodeCity } = await import("@/lib/route-service");
-          const result = await geocodeCity(query);
-          if (result) { setStatus("found"); setResolved(result); }
-          else        { setStatus("error"); setResolved(null); }
+          const { searchCitySuggestions } = await import("@/lib/route-service");
+          const results = await searchCitySuggestions(query);
+          setSuggestions(results);
+          setStatus(results.length > 0 ? "idle" : "error");
         } catch {
+          setSuggestions([]);
           setStatus("error");
-          setResolved(null);
         }
-      }, 600);
+      }, 250);
     },
     [],
   );
 
   const handleDepChange = (v: string) => {
     setDeparture(v);
-    setRouteGenStatus("idle");
-    debouncedGeocode("dep", v, setDepStatus, setDepResolved);
+    setDepResolved(null);
+    resetLocationOutput();
+    queueSuggestions("dep", v, setDepStatus, setDepSuggestions);
   };
 
   const handleDestChange = (v: string) => {
     setDestination(v);
-    setRouteGenStatus("idle");
-    debouncedGeocode("dest", v, setDestStatus, setDestResolved);
+    setDestResolved(null);
+    resetLocationOutput();
+    queueSuggestions("dest", v, setDestStatus, setDestSuggestions);
   };
 
   const handleStopChange = (i: number, v: string) => {
     setStops((prev) => { const next = [...prev]; next[i] = v; return next; });
-    setRouteGenStatus("idle");
-    debouncedGeocode(
-      `stop-${i}`, v,
+    setStopResolved((prev) => { const next = [...prev]; next[i] = null; return next; });
+    resetLocationOutput();
+    queueSuggestions(`stop-${i}`, v,
       (s) => setStopStatuses((p) => { const n = [...p]; n[i] = s; return n; }),
-      (w) => setStopResolved((p) => { const n = [...p]; n[i] = w; return n; }),
+      (items) => setStopSuggestions((p) => { const n = [...p]; n[i] = items; return n; }),
     );
   };
+
+  const selectDeparture = useCallback(async (suggestion: PlaceSuggestion) => {
+    const { suggestionToWaypoint } = await import("@/lib/route-service");
+    setDeparture(suggestion.label);
+    setDepResolved(suggestionToWaypoint(suggestion));
+    setDepStatus("found");
+    setDepSuggestions([]);
+    resetLocationOutput();
+  }, [resetLocationOutput]);
+
+  const selectDestination = useCallback(async (suggestion: PlaceSuggestion) => {
+    const { suggestionToWaypoint } = await import("@/lib/route-service");
+    setDestination(suggestion.label);
+    setDestResolved(suggestionToWaypoint(suggestion));
+    setDestStatus("found");
+    setDestSuggestions([]);
+    resetLocationOutput();
+  }, [resetLocationOutput]);
+
+  const selectStop = useCallback(async (i: number, suggestion: PlaceSuggestion) => {
+    const { suggestionToWaypoint } = await import("@/lib/route-service");
+    setStops((prev) => { const next = [...prev]; next[i] = suggestion.label; return next; });
+    setStopResolved((prev) => { const next = [...prev]; next[i] = suggestionToWaypoint(suggestion); return next; });
+    setStopStatuses((prev) => { const next = [...prev]; next[i] = "found"; return next; });
+    setStopSuggestions((prev) => { const next = [...prev]; next[i] = []; return next; });
+    resetLocationOutput();
+  }, [resetLocationOutput]);
 
   const addStop = () => {
     setStops((p) => [...p, ""]);
     setStopStatuses((p) => [...p, "idle"]);
     setStopResolved((p) => [...p, null]);
+    setStopSuggestions((p) => [...p, []]);
+    resetLocationOutput();
   };
 
   const removeStop = (i: number) => {
     setStops((p) => p.filter((_, j) => j !== i));
     setStopStatuses((p) => p.filter((_, j) => j !== i));
     setStopResolved((p) => p.filter((_, j) => j !== i));
+    setStopSuggestions((p) => p.filter((_, j) => j !== i));
+    resetLocationOutput();
   };
 
   // ── Route generation ──────────────────────────────────────────────────────────
 
+  const hasUnverifiedStops = stops.some((stop, i) => stop.trim() && !stopResolved[i]);
   const canGenerate =
-    depStatus === "found" && depResolved &&
-    destStatus === "found" && destResolved;
+    depStatus === "found" && !!depResolved &&
+    destStatus === "found" && !!destResolved &&
+    !hasUnverifiedStops;
 
   const generateRouteAction = async () => {
     if (!depResolved || !destResolved) return;
@@ -331,15 +416,9 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
     setLabelsStatus("idle");
 
     try {
-      const { generateRoute, exportRouteAsGpx, buildStraightLineRoute, detectRouteLabels } =
+      const { generateRoute, exportRouteAsGpx, detectRouteLabels } =
         await import("@/lib/route-service");
-      let result;
-      try {
-        result = await generateRoute(orderedWaypoints, vehicle);
-      } catch (osrmErr) {
-        console.warn("[RouteSourceSelector] OSRM failed, using straight-line fallback:", osrmErr);
-        result = buildStraightLineRoute(orderedWaypoints, vehicle);
-      }
+      const result = await generateRoute(orderedWaypoints, vehicle);
       const gpxStr = exportRouteAsGpx(result);
       setLocationPoints(result.points);
       setLocationStats(result.stats);
@@ -360,14 +439,7 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
   };
 
   const clearLocationRoute = () => {
-    setLocationPoints(null);
-    setLocationStats(null);
-    setLocationGpxStr(null);
-    setRouteGenStatus("idle");
-    setRouteError(null);
-    setRouteLabels(null);
-    setLabelsStatus("idle");
-    onRouteDataChange?.({ points: null, stats: null, labels: null });
+    resetLocationOutput();
   };
 
   // ── GPX download for generated routes ────────────────────────────────────────
@@ -393,10 +465,20 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
         onClick={onLockedClick}
         className="group relative block w-full overflow-hidden rounded-2xl border border-dashed border-white/10 bg-white/[0.02] text-left transition hover:border-white/20"
       >
-        <div className="pointer-events-none flex h-36 items-center justify-center bg-[radial-gradient(circle_at_top,rgba(16,185,129,0.18),transparent_60%),linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.01))] blur-[1px] grayscale-[0.1] opacity-80">
-          <div className="rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-center">
+        <div className="pointer-events-none flex h-40 items-center justify-center bg-[radial-gradient(circle_at_top,rgba(16,185,129,0.18),transparent_60%),linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.01))] blur-[1px] grayscale-[0.1] opacity-80">
+          <div className="w-full max-w-[320px] rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-center">
             <p className="text-sm font-semibold text-white/85">GPX import & route planner</p>
             <p className="mt-1 text-[11px] text-white/45">Upload a GPX file or plan a route from cities.</p>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <div className="flex items-center justify-center gap-1.5 rounded-xl border border-white/8 bg-white/[0.05] px-3 py-2 text-[11px] font-semibold text-white/60">
+                <FileUp className="h-3.5 w-3.5" />
+                Import GPX
+              </div>
+              <div className="flex items-center justify-center gap-1.5 rounded-xl border border-white/8 bg-white/[0.05] px-3 py-2 text-[11px] font-semibold text-white/60">
+                <Route className="h-3.5 w-3.5" />
+                Plan route
+              </div>
+            </div>
           </div>
         </div>
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-black/55 px-4 text-center">
@@ -448,13 +530,23 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
         <GpxModePanel
           gpxText={gpxText}
           gpxFileName={gpxFileName}
-          gpxStats={gpxStats}
-          gpxPoints={gpxPoints}
           gpxInputRef={gpxInputRef}
           routeMatch={routeMatch}
           onFileChange={handleGpxFile}
           onClear={clearGpx}
           videos={videos}
+          labelsEditor={
+            labelsStatus !== "idle" ? (
+              <RouteLabelEditor
+                key={routeLabels?.map((label) => `${label.name}:${label.lat}:${label.lng}:${label.progress}`).join("|") ?? "empty"}
+                labels={routeLabels}
+                status={labelsStatus}
+                onReplace={replaceRouteLabel}
+                onRemove={removeRouteLabel}
+                onAdd={addLabelToRoute}
+              />
+            ) : null
+          }
         />
       )}
 
@@ -467,40 +559,42 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
           vehicle={vehicle}
           depStatus={depStatus}
           destStatus={destStatus}
+          depSuggestions={depSuggestions}
+          destSuggestions={destSuggestions}
           stopStatuses={stopStatuses}
-          depResolved={depResolved}
-          destResolved={destResolved}
-          stopResolved={stopResolved}
+          stopSuggestions={stopSuggestions}
           routeGenStatus={routeGenStatus}
           routeError={routeError}
-          locationPoints={locationPoints}
-          locationStats={locationStats}
           canGenerate={!!canGenerate}
           routeMatch={routeMatch}
           videos={videos}
+          depMeta={depResolved ? [depResolved.region, depResolved.country].filter(Boolean).join(" · ") : null}
+          destMeta={destResolved ? [destResolved.region, destResolved.country].filter(Boolean).join(" · ") : null}
+          stopMeta={stopResolved.map((stop) => (stop ? [stop.region, stop.country].filter(Boolean).join(" · ") : null))}
           onDepChange={handleDepChange}
           onDestChange={handleDestChange}
+          onDepSelect={selectDeparture}
+          onDestSelect={selectDestination}
           onStopChange={handleStopChange}
+          onStopSelect={selectStop}
           onAddStop={addStop}
           onRemoveStop={removeStop}
-          onVehicleChange={setVehicle}
+          onVehicleChange={(next) => { setVehicle(next); resetLocationOutput(); }}
           onGenerate={generateRouteAction}
           onClearRoute={clearLocationRoute}
           onDownloadGpx={downloadGpx}
-        />
-      )}
-
-      {/* ── Route labels editor — shown when route exists ─────────────────── */}
-      {(labelsStatus !== "idle") && (
-        <RouteLabelEditor
-          labels={routeLabels}
-          status={labelsStatus}
-          addQuery={addLabelQuery}
-          addStatus={addLabelStatus}
-          onUpdate={updateRouteLabel}
-          onRemove={removeRouteLabel}
-          onAddQueryChange={setAddLabelQuery}
-          onAddSubmit={() => { if (addLabelQuery.trim()) addLabelToRoute(addLabelQuery.trim()); }}
+          labelsEditor={
+            labelsStatus !== "idle" ? (
+              <RouteLabelEditor
+                key={routeLabels?.map((label) => `${label.name}:${label.lat}:${label.lng}:${label.progress}`).join("|") ?? "empty"}
+                labels={routeLabels}
+                status={labelsStatus}
+                onReplace={replaceRouteLabel}
+                onRemove={removeRouteLabel}
+                onAdd={addLabelToRoute}
+              />
+            ) : null
+          }
         />
       )}
     </div>
@@ -541,18 +635,17 @@ function TabBtn({
 interface GpxModePanelProps {
   gpxText: string | null;
   gpxFileName: string;
-  gpxStats: GpxRouteStats | null;
-  gpxPoints: GpxTrackPoint[] | null;
   gpxInputRef: React.RefObject<HTMLInputElement | null>;
   routeMatch: ReturnType<typeof matchVideosToRoute>;
   videos: UploadedVideo[];
   onFileChange: (f: File | undefined) => void;
   onClear: () => void;
+  labelsEditor?: React.ReactNode;
 }
 
 function GpxModePanel({
-  gpxText, gpxFileName, gpxStats, gpxInputRef,
-  routeMatch, onFileChange, onClear,
+  gpxText, gpxFileName, gpxInputRef,
+  routeMatch, onFileChange, onClear, labelsEditor,
 }: GpxModePanelProps) {
   if (gpxText) {
     return (
@@ -572,9 +665,8 @@ function GpxModePanel({
         <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-4">
         <p className="text-sm font-medium text-white/85">Route imported</p>
         <p className="mt-1 text-xs leading-relaxed text-white/45">
-          The cinematic map intro now uses the new route rendering pipeline. This panel only shows route stats and matches.
+          Verified place names are prepared for the cinematic map intro. Only the route, marker and labels are kept visually prominent.
         </p>
-        {gpxStats && <div className="mt-3"><RouteStatsCard stats={gpxStats} /></div>}
         </div>
         {routeMatch.warning && (
         <div className="mt-3 flex items-start gap-2 rounded-xl border border-amber-400/25 bg-amber-400/[0.08] px-3 py-2 text-[11px] text-amber-200">
@@ -585,6 +677,7 @@ function GpxModePanel({
         {routeMatch.matches.length > 0 && (
           <div className="mt-3"><VideoLocationMatcher matches={routeMatch.matches} /></div>
         )}
+        {labelsEditor && <div className="mt-3">{labelsEditor}</div>}
       </div>
     );
   }
@@ -609,8 +702,8 @@ function GpxModePanel({
         <div>
           <p className="text-sm font-medium text-white/85">Import a GPX file</p>
           <p className="mt-0.5 text-[11px] leading-relaxed text-white/45">
-            Upload the .gpx file from your ride, hike or road trip — ClipsyReel plots it on a real
-            interactive map with distance, elevation, duration and your video locations.
+            Upload the .gpx file from your ride, hike or road trip — ClipsyReel verifies places and
+            plots the route on a clean cinematic map with your video locations.
           </p>
         </div>
       </button>
@@ -625,40 +718,43 @@ interface LocationModePanelProps {
   destination: string;
   stops: string[];
   vehicle: VehicleType;
-  depStatus: "idle" | "loading" | "found" | "error";
-  destStatus: "idle" | "loading" | "found" | "error";
-  stopStatuses: ("idle" | "loading" | "found" | "error")[];
-  depResolved: Waypoint | null;
-  destResolved: Waypoint | null;
-  stopResolved: Array<Waypoint | null>;
+  depStatus: FieldStatus;
+  destStatus: FieldStatus;
+  depSuggestions: PlaceSuggestion[];
+  destSuggestions: PlaceSuggestion[];
+  depMeta: string | null;
+  destMeta: string | null;
+  stopStatuses: FieldStatus[];
+  stopSuggestions: PlaceSuggestion[][];
+  stopMeta: Array<string | null>;
   routeGenStatus: "idle" | "loading" | "ready" | "error";
   routeError: string | null;
-  locationPoints: GpxTrackPoint[] | null;
-  locationStats: GpxRouteStats | null;
   canGenerate: boolean;
   routeMatch: ReturnType<typeof matchVideosToRoute>;
   videos: UploadedVideo[];
   onDepChange: (v: string) => void;
   onDestChange: (v: string) => void;
+  onDepSelect: (suggestion: PlaceSuggestion) => void;
+  onDestSelect: (suggestion: PlaceSuggestion) => void;
   onStopChange: (i: number, v: string) => void;
+  onStopSelect: (i: number, suggestion: PlaceSuggestion) => void;
   onAddStop: () => void;
   onRemoveStop: (i: number) => void;
   onVehicleChange: (v: VehicleType) => void;
   onGenerate: () => void;
   onClearRoute: () => void;
   onDownloadGpx: () => void;
+  labelsEditor?: React.ReactNode;
 }
 
 function LocationModePanel({
   departure, destination, stops, vehicle,
-  depStatus, destStatus, stopStatuses,
-  depResolved, destResolved,
+  depStatus, destStatus, depSuggestions, destSuggestions, depMeta, destMeta, stopStatuses, stopSuggestions, stopMeta,
   routeGenStatus, routeError,
-  locationPoints, locationStats,
   canGenerate, routeMatch,
-  onDepChange, onDestChange, onStopChange,
+  onDepChange, onDestChange, onDepSelect, onDestSelect, onStopChange, onStopSelect,
   onAddStop, onRemoveStop, onVehicleChange,
-  onGenerate, onClearRoute, onDownloadGpx,
+  onGenerate, onClearRoute, onDownloadGpx, labelsEditor,
 }: LocationModePanelProps) {
 
   return (
@@ -685,34 +781,38 @@ function LocationModePanel({
       {/* Waypoint fields */}
       <div className="space-y-2">
         <WaypointInput
-          index={0}
           value={departure}
           placeholder="Departure city or address"
           status={depStatus}
-          resolved={depResolved}
+          suggestions={depSuggestions}
+          selectedMeta={depMeta}
           onChange={onDepChange}
+          onSelect={onDepSelect}
         />
 
         {stops.map((stop, i) => (
           <WaypointInput
             key={i}
-            index={i + 1}
             value={stop}
             placeholder={`Stop ${i + 1}`}
             status={stopStatuses[i] ?? "idle"}
+            suggestions={stopSuggestions[i] ?? []}
+            selectedMeta={stopMeta[i] ?? null}
             onChange={(v) => onStopChange(i, v)}
+            onSelect={(suggestion) => onStopSelect(i, suggestion)}
             onRemove={() => onRemoveStop(i)}
             removable
           />
         ))}
 
         <WaypointInput
-          index={stops.length + 1}
           value={destination}
           placeholder="Destination city or address"
           status={destStatus}
-          resolved={destResolved}
+          suggestions={destSuggestions}
+          selectedMeta={destMeta}
           onChange={onDestChange}
+          onSelect={onDestSelect}
         />
 
         {stops.length < 3 && (
@@ -750,7 +850,7 @@ function LocationModePanel({
       )}
 
       {/* Route result */}
-      {routeGenStatus === "ready" && locationStats && (
+      {routeGenStatus === "ready" && (
         <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4 space-y-3">
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium text-emerald-300 flex items-center gap-1.5">
@@ -778,11 +878,8 @@ function LocationModePanel({
           <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-4">
             <p className="text-sm font-medium text-white/85">Route ready</p>
             <p className="mt-1 text-xs leading-relaxed text-white/45">
-              The generated route is ready for the map intro and can be downloaded as GPX.
+              The generated route is verified and ready for the map intro. Use the city list below to confirm each displayed place.
             </p>
-            <div className="mt-3">
-              <RouteStatsCard stats={locationStats} />
-            </div>
           </div>
 
           {routeMatch.warning && (
@@ -792,6 +889,7 @@ function LocationModePanel({
             </div>
           )}
           {routeMatch.matches.length > 0 && <VideoLocationMatcher matches={routeMatch.matches} />}
+          {labelsEditor}
         </div>
       )}
     </div>
@@ -803,18 +901,111 @@ function LocationModePanel({
 interface RouteLabelEditorProps {
   labels: RouteLabel[] | null;
   status: "idle" | "detecting" | "ready";
-  addQuery: string;
-  addStatus: "idle" | "loading" | "error";
-  onUpdate: (i: number, name: string) => void;
+  onReplace: (i: number, waypoint: Waypoint) => void;
   onRemove: (i: number) => void;
-  onAddQueryChange: (v: string) => void;
-  onAddSubmit: () => void;
+  onAdd: (waypoint: Waypoint) => void;
+}
+
+function formatStoredLabel(label: RouteLabel): string {
+  const parts = [label.name];
+  if (label.region && !parts.includes(label.region)) parts.push(label.region);
+  if (label.country && !parts.includes(label.country)) parts.push(label.country);
+  return parts.join(", ");
 }
 
 function RouteLabelEditor({
-  labels, status, addQuery, addStatus,
-  onUpdate, onRemove, onAddQueryChange, onAddSubmit,
+  labels, status, onReplace, onRemove, onAdd,
 }: RouteLabelEditorProps) {
+  const nextLabels = labels ?? [];
+  const [drafts, setDrafts] = useState<string[]>(() => nextLabels.map(formatStoredLabel));
+  const [fieldStatuses, setFieldStatuses] = useState<FieldStatus[]>(() => nextLabels.map(() => "found"));
+  const [fieldSuggestions, setFieldSuggestions] = useState<PlaceSuggestion[][]>(() => nextLabels.map(() => []));
+  const [addQuery, setAddQuery] = useState("");
+  const [addStatus, setAddStatus] = useState<FieldStatus>("idle");
+  const [addSuggestions, setAddSuggestions] = useState<PlaceSuggestion[]>([]);
+  const searchTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  const queueSuggestions = useCallback((
+    key: string,
+    query: string,
+    onStatus: (statusValue: FieldStatus) => void,
+    onSuggestions: (suggestions: PlaceSuggestion[]) => void,
+  ) => {
+    clearTimeout(searchTimers.current[key]);
+    if (!query.trim()) {
+      onStatus("idle");
+      onSuggestions([]);
+      return;
+    }
+    onStatus("loading");
+    searchTimers.current[key] = setTimeout(async () => {
+      try {
+        const { searchCitySuggestions } = await import("@/lib/route-service");
+        const results = await searchCitySuggestions(query);
+        onSuggestions(results);
+        onStatus(results.length > 0 ? "idle" : "error");
+      } catch {
+        onSuggestions([]);
+        onStatus("error");
+      }
+    }, 250);
+  }, []);
+
+  const handleDraftChange = (index: number, value: string) => {
+    setDrafts((prev) => {
+      const next = [...prev];
+      next[index] = value;
+      return next;
+    });
+    queueSuggestions(
+      `label-${index}`,
+      value,
+      (statusValue) => setFieldStatuses((prev) => {
+        const next = [...prev];
+        next[index] = statusValue;
+        return next;
+      }),
+      (suggestions) => setFieldSuggestions((prev) => {
+        const next = [...prev];
+        next[index] = suggestions;
+        return next;
+      }),
+    );
+  };
+
+  const selectLabelSuggestion = async (index: number, suggestion: PlaceSuggestion) => {
+    const { suggestionToWaypoint } = await import("@/lib/route-service");
+    setDrafts((prev) => {
+      const next = [...prev];
+      next[index] = suggestion.label;
+      return next;
+    });
+    setFieldStatuses((prev) => {
+      const next = [...prev];
+      next[index] = "found";
+      return next;
+    });
+    setFieldSuggestions((prev) => {
+      const next = [...prev];
+      next[index] = [];
+      return next;
+    });
+    onReplace(index, suggestionToWaypoint(suggestion));
+  };
+
+  const handleAddQueryChange = (value: string) => {
+    setAddQuery(value);
+    queueSuggestions("label-add", value, setAddStatus, setAddSuggestions);
+  };
+
+  const handleAddSuggestion = async (suggestion: PlaceSuggestion) => {
+    const { suggestionToWaypoint } = await import("@/lib/route-service");
+    setAddQuery("");
+    setAddSuggestions([]);
+    setAddStatus("idle");
+    onAdd(suggestionToWaypoint(suggestion));
+  };
+
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4 space-y-2.5">
       {/* Header */}
@@ -860,12 +1051,17 @@ function RouteLabelEditor({
             return (
               <div key={i} className="flex items-center gap-2">
                 <span className={`h-2 w-2 shrink-0 rounded-full ${dotCls}`} />
-                <input
-                  type="text"
-                  value={label.name}
-                  onChange={(e) => onUpdate(i, e.target.value)}
-                  className="flex-1 min-w-0 rounded-lg border border-white/8 bg-white/[0.04] px-2.5 py-1.5 text-xs text-white/85 placeholder:text-white/30 outline-none focus:border-white/20 focus:bg-white/[0.07] transition"
-                />
+                <div className="flex-1">
+                  <WaypointInput
+                    value={drafts[i] ?? formatStoredLabel(label)}
+                    placeholder="Search for a verified city…"
+                    status={fieldStatuses[i] ?? "found"}
+                    suggestions={fieldSuggestions[i] ?? []}
+                    onChange={(value) => handleDraftChange(i, value)}
+                    onSelect={(suggestion) => { void selectLabelSuggestion(i, suggestion); }}
+                    selectedMeta={[label.region, label.country].filter(Boolean).join(" · ") || null}
+                  />
+                </div>
                 <button
                   type="button"
                   onClick={() => onRemove(i)}
@@ -882,29 +1078,20 @@ function RouteLabelEditor({
 
       {/* Add city form */}
       {status === "ready" && (
-        <form
-          onSubmit={(e) => { e.preventDefault(); onAddSubmit(); }}
-          className="flex items-center gap-2"
-        >
-          <input
-            type="text"
+        <div className="space-y-2">
+          <WaypointInput
             value={addQuery}
-            onChange={(e) => onAddQueryChange(e.target.value)}
-            placeholder="Add a city…"
-            className="flex-1 min-w-0 rounded-lg border border-dashed border-white/10 bg-transparent px-2.5 py-1.5 text-xs text-white/70 placeholder:text-white/30 outline-none focus:border-white/20 transition"
+            placeholder="Add a verified city…"
+            status={addStatus}
+            suggestions={addSuggestions}
+            onChange={handleAddQueryChange}
+            onSelect={(suggestion) => { void handleAddSuggestion(suggestion); }}
           />
-          <button
-            type="submit"
-            disabled={!addQuery.trim() || addStatus === "loading"}
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/20 disabled:opacity-40 transition"
-          >
-            {addStatus === "loading" ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <Plus className="h-3 w-3" />
-            )}
-          </button>
-        </form>
+          <div className="flex items-center gap-1 text-[10px] text-white/40">
+            <Plus className="h-3 w-3" />
+            Select a suggestion to store verified coordinates.
+          </div>
+        </div>
       )}
 
       {addStatus === "error" && (

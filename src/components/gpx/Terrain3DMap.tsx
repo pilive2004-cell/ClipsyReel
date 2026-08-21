@@ -289,7 +289,6 @@ export default function Terrain3DMap({ points }: { points: GpxTrackPoint[] }) {
     };
   }, [bounds, heading, samples, stats.totalDistanceKm]);
 
-  const distanceLabel = formatNumber(stats.totalDistanceKm, 1);
   const altitudeLabel = formatNumber(Math.max(stats.highestPointM, 0), 0);
 
   return (
@@ -317,14 +316,7 @@ export default function Terrain3DMap({ points }: { points: GpxTrackPoint[] }) {
           </div>
         </div>
 
-        <div className="mt-3 grid grid-cols-2 gap-2">
-          <div className="rounded-2xl bg-white/8 px-4 py-3">
-            <p className="text-[10px] uppercase tracking-[0.24em] text-white/40">Distance</p>
-            <p className="mt-1 text-2xl font-semibold tracking-[-0.05em] text-white">
-              {distanceLabel}
-              <span className="ml-1 text-sm font-medium text-white/65">km</span>
-            </p>
-          </div>
+        <div className="mt-3 grid grid-cols-1 gap-2">
           <div className="rounded-2xl bg-white/8 px-4 py-3">
             <p className="text-[10px] uppercase tracking-[0.24em] text-white/40">Altitude</p>
             <p className="mt-1 text-2xl font-semibold tracking-[-0.05em] text-white">
