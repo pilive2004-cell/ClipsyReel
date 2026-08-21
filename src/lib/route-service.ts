@@ -17,10 +17,25 @@ import type { GpxRouteStats, GpxTrackPoint, RouteLabel } from "@/types";
 export type VehicleType = "car" | "motorcycle" | "bicycle" | "walking";
 
 export interface Waypoint {
-  /** Human-readable name / address label. */
+  /** Short verified city/place name. */
   name: string;
+  /** Full display label used in dropdowns / inputs. */
+  label: string;
   lat: number;
   lng: number;
+  region?: string | null;
+  country?: string | null;
+}
+
+export interface PlaceSuggestion {
+  id: string;
+  name: string;
+  label: string;
+  lat: number;
+  lng: number;
+  region: string | null;
+  country: string | null;
+  importance: number;
 }
 
 export interface GeneratedRoute {
@@ -53,6 +68,64 @@ function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: num
   const s = Math.sin(dLat / 2) ** 2 +
     Math.cos((a.lat * Math.PI) / 180) * Math.cos((b.lat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+function normaliseText(value: string | null | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function buildPlaceLabel(name: string, region: string | null, country: string | null): string {
+  const parts = [name];
+  if (region && normaliseText(region) !== normaliseText(name)) parts.push(region);
+  if (country && !parts.some((part) => normaliseText(part) === normaliseText(country))) parts.push(country);
+  return parts.join(", ");
+}
+
+function pickPrimaryPlaceName(
+  address: Record<string, string> | undefined,
+  displayName: string,
+): string {
+  const a = address ?? {};
+  return (
+    a.city ||
+    a.town ||
+    a.village ||
+    a.municipality ||
+    a.borough ||
+    a.suburb ||
+    a.county ||
+    displayName.split(",")[0]?.trim() ||
+    displayName.trim()
+  );
+}
+
+function pickRegion(address: Record<string, string> | undefined): string | null {
+  const a = address ?? {};
+  return a.state || a.region || a.province || a.county || a.state_district || null;
+}
+
+function suggestionToInternalWaypoint(suggestion: PlaceSuggestion): Waypoint {
+  return {
+    name: suggestion.name,
+    label: suggestion.label,
+    lat: suggestion.lat,
+    lng: suggestion.lng,
+    region: suggestion.region,
+    country: suggestion.country,
+  };
+}
+
+function disambiguateRouteLabels(labels: RouteLabel[]): RouteLabel[] {
+  const counts = new Map<string, number>();
+  for (const label of labels) {
+    const key = normaliseText(label.name);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return labels.map((label) => {
+    if ((counts.get(normaliseText(label.name)) ?? 0) < 2) return label;
+    const suffix = label.region ?? label.country ?? null;
+    return suffix ? { ...label, name: `${label.name}, ${suffix}` } : label;
+  });
 }
 
 /** Convert a GeoJSON coordinate array to a GpxTrackPoint. */
@@ -98,28 +171,67 @@ function buildStats(
  * geocode per user keystroke (debounce in the UI).
  */
 export async function geocodeCity(query: string): Promise<Waypoint | null> {
-  if (!query.trim()) return null;
+  const [suggestion] = await searchCitySuggestions(query, { limit: 1 });
+  return suggestion ? suggestionToInternalWaypoint(suggestion) : null;
+}
+
+export async function searchCitySuggestions(
+  query: string,
+  options?: { limit?: number },
+): Promise<PlaceSuggestion[]> {
+  if (!query.trim()) return [];
   try {
     const ctrl = new AbortController();
     const tid = window.setTimeout(() => ctrl.abort(), 5_000);
     const url = new URL("https://nominatim.openstreetmap.org/search");
     url.searchParams.set("q", query.trim());
     url.searchParams.set("format", "jsonv2");
-    url.searchParams.set("limit", "1");
+    url.searchParams.set("addressdetails", "1");
+    url.searchParams.set("limit", String(options?.limit ?? 5));
     const res = await fetch(url.toString(), {
       signal: ctrl.signal,
       headers: { Accept: "application/json" },
     });
     window.clearTimeout(tid);
-    if (!res.ok) return null;
-    const results: Array<{ lat: string; lon: string; display_name: string }> = await res.json();
-    if (!results.length) return null;
-    const r = results[0];
-    const label = r.display_name.split(",").slice(0, 2).join(", ");
-    return { name: label, lat: parseFloat(r.lat), lng: parseFloat(r.lon) };
+    if (!res.ok) return [];
+    const results: Array<{
+      place_id: number | string;
+      lat: string;
+      lon: string;
+      display_name: string;
+      importance?: number;
+      address?: Record<string, string>;
+    }> = await res.json();
+    const q = normaliseText(query);
+    return results
+      .map((result) => {
+        const name = pickPrimaryPlaceName(result.address, result.display_name);
+        const region = pickRegion(result.address);
+        const country = result.address?.country ?? null;
+        return {
+          id: String(result.place_id),
+          name,
+          label: buildPlaceLabel(name, region, country),
+          lat: parseFloat(result.lat),
+          lng: parseFloat(result.lon),
+          region,
+          country,
+          importance: result.importance ?? 0,
+        } satisfies PlaceSuggestion;
+      })
+      .sort((a, b) => {
+        const aPrefix = normaliseText(a.label).startsWith(q) || normaliseText(a.name).startsWith(q) ? 1 : 0;
+        const bPrefix = normaliseText(b.label).startsWith(q) || normaliseText(b.name).startsWith(q) ? 1 : 0;
+        if (aPrefix !== bPrefix) return bPrefix - aPrefix;
+        return b.importance - a.importance;
+      });
   } catch {
-    return null;
+    return [];
   }
+}
+
+export function suggestionToWaypoint(suggestion: PlaceSuggestion): Waypoint {
+  return suggestionToInternalWaypoint(suggestion);
 }
 
 // ─── OSRM routing ─────────────────────────────────────────────────────────────
@@ -287,7 +399,7 @@ function closestProgress(
 
 async function reverseGeocodeLabel(
   lat: number, lng: number,
-): Promise<{ name: string; priority: "major" | "minor" } | null> {
+): Promise<{ name: string; region: string | null; country: string | null; priority: "major" | "minor" } | null> {
   try {
     const ctrl = new AbortController();
     const tid = window.setTimeout(() => ctrl.abort(), 4_000);
@@ -301,14 +413,65 @@ async function reverseGeocodeLabel(
     const a = data.address ?? {};
     const name = a.city ?? a.town ?? a.borough ?? a.suburb ?? a.village ?? a.municipality ?? a.county ?? "";
     if (!name) return null;
+    const region = pickRegion(a);
+    const country = a.country ?? null;
     const priority: "major" | "minor" = (a.city || a.town || a.borough) ? "major" : "minor";
-    return { name, priority };
+    return { name, region, country, priority };
   } catch {
     return null;
   }
 }
 
 export type { RouteLabel };
+
+export function createRouteLabelForWaypoint(
+  points: GpxTrackPoint[],
+  waypoint: Waypoint,
+  options?: {
+    priority?: "major" | "minor";
+    progress?: number;
+    verified?: boolean;
+  },
+): RouteLabel {
+  const cum = buildCumDist(points);
+  return {
+    name: waypoint.name,
+    lat: waypoint.lat,
+    lng: waypoint.lng,
+    region: waypoint.region ?? null,
+    country: waypoint.country ?? null,
+    verified: options?.verified ?? true,
+    progress: options?.progress ?? closestProgress(waypoint.lat, waypoint.lng, points, cum),
+    priority: options?.priority ?? "major",
+  };
+}
+
+export function normalizeRouteLabels(labels: RouteLabel[]): RouteLabel[] {
+  if (labels.length === 0) return [];
+  const sorted: RouteLabel[] = [...labels].sort((a, b) => a.progress - b.progress).map((label) => ({
+    ...label,
+    isStart: undefined,
+    isEnd: undefined,
+  }));
+  sorted[0].isStart = true;
+  if (sorted.length > 1) sorted[sorted.length - 1].isEnd = true;
+  return disambiguateRouteLabels(sorted);
+}
+
+async function verifyWaypointNearCoordinates(
+  query: string,
+  nearLat: number,
+  nearLng: number,
+): Promise<Waypoint | null> {
+  const suggestions = await searchCitySuggestions(query, { limit: 5 });
+  if (suggestions.length === 0) return null;
+  const ranked = [...suggestions].sort((a, b) => {
+    const aScore = haversineKm({ lat: nearLat, lng: nearLng }, a) - a.importance * 8;
+    const bScore = haversineKm({ lat: nearLat, lng: nearLng }, b) - b.importance * 8;
+    return aScore - bScore;
+  });
+  return suggestionToInternalWaypoint(ranked[0]);
+}
 
 /**
  * Automatically detect city/place labels along a GPX route.
@@ -333,17 +496,14 @@ export async function detectRouteLabels(
   const totalKm = cum[cum.length - 1];
 
   if (options?.knownWaypoints && options.knownWaypoints.length >= 2) {
-    const labels: RouteLabel[] = options.knownWaypoints.map((wp) => ({
-      name: wp.name.split(",")[0].trim(),
-      lat: wp.lat,
-      lng: wp.lng,
-      progress: closestProgress(wp.lat, wp.lng, points, cum),
-      priority: "major" as const,
-    }));
-    labels.sort((a, b) => a.progress - b.progress);
-    if (labels.length > 0) labels[0].isStart = true;
-    if (labels.length > 1) labels[labels.length - 1].isEnd = true;
-    return labels;
+    return normalizeRouteLabels(
+      options.knownWaypoints.map((wp) =>
+        createRouteLabelForWaypoint(points, wp, {
+          priority: "major",
+          progress: closestProgress(wp.lat, wp.lng, points, cum),
+        }),
+      ),
+    );
   }
 
   const sampleCount =
@@ -362,12 +522,26 @@ export async function detectRouteLabels(
     const progress = cum[sampleIndices[i]] / (totalKm || 1);
     const result = await reverseGeocodeLabel(pt.lat, pt.lng);
     if (!result) continue;
-    if (rawLabels.some((l) => l.name.toLowerCase() === result.name.toLowerCase())) continue;
-    rawLabels.push({ name: result.name, lat: pt.lat, lng: pt.lng, progress, priority: result.priority });
+    const verificationQuery = [result.name, result.country].filter(Boolean).join(", ");
+    const verifiedWaypoint =
+      await verifyWaypointNearCoordinates(verificationQuery || result.name, pt.lat, pt.lng) ??
+      {
+        name: result.name,
+        label: buildPlaceLabel(result.name, result.region, result.country),
+        lat: pt.lat,
+        lng: pt.lng,
+        region: result.region,
+        country: result.country,
+      } satisfies Waypoint;
+    if (rawLabels.some((l) => normaliseText(l.name) === normaliseText(verifiedWaypoint.name))) continue;
+    rawLabels.push(
+      createRouteLabelForWaypoint(points, verifiedWaypoint, {
+        priority: result.priority,
+        progress,
+        verified: true,
+      }),
+    );
   }
 
-  rawLabels.sort((a, b) => a.progress - b.progress);
-  if (rawLabels.length > 0) rawLabels[0].isStart = true;
-  if (rawLabels.length > 1) rawLabels[rawLabels.length - 1].isEnd = true;
-  return rawLabels;
+  return normalizeRouteLabels(rawLabels);
 }
