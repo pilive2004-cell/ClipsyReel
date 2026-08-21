@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { Clapperboard, Film } from "lucide-react";
-import { BestMoment, ReelStyle } from "@/types";
+import { BestMoment, ReelStyle, ReelTitleFont, ReelTitleSize } from "@/types";
 import { STYLES } from "@/data/mock";
 
 interface ReelPreviewProps {
@@ -13,6 +13,9 @@ interface ReelPreviewProps {
   hookText: string;
   bestMoments: BestMoment[];
   watermark: boolean;
+  reelTitle?: string;
+  reelTitleFont?: ReelTitleFont;
+  reelTitleSize?: ReelTitleSize;
   overlayTexts?: string[];
   introDurationSeconds?: number;
   outroDurationSeconds?: number;
@@ -27,6 +30,9 @@ export default function ReelPreview({
   hookText,
   bestMoments,
   watermark,
+  reelTitle = "",
+  reelTitleFont = "cinematic",
+  reelTitleSize = "md",
   overlayTexts = [],
   introDurationSeconds = 0,
   outroDurationSeconds = 0,
@@ -66,6 +72,16 @@ export default function ReelPreview({
       return { text, start, end };
     });
   }, [introDurationSeconds, montageInfo?.durationSeconds, outroDurationSeconds, overlayTexts]);
+  const titleFontClass = reelTitleFont === "classic"
+    ? "font-serif"
+    : reelTitleFont === "modern"
+      ? "font-sans tracking-wide"
+      : "font-serif italic tracking-[0.08em]";
+  const titleSizeClass = reelTitleSize === "sm"
+    ? "text-base"
+    : reelTitleSize === "lg"
+      ? "text-2xl"
+      : "text-xl";
 
   useEffect(() => {
     if (!videoBlob || fallbackState?.source === videoUrl) return;
@@ -154,6 +170,17 @@ export default function ReelPreview({
             >
               {overlayWindows[activeOverlayIndex].text}
             </motion.div>
+          </div>
+        )}
+        {showPreviewChrome && reelTitle.trim().length > 0 && (
+          <div className="absolute inset-x-3 top-20">
+            <motion.p
+              initial={{ opacity: 0, y: -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              className={`text-center leading-tight text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.8)] ${titleFontClass} ${titleSizeClass}`}
+            >
+              {reelTitle}
+            </motion.p>
           </div>
         )}
         {showPreviewChrome && (

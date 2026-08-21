@@ -63,6 +63,9 @@ export interface CaptionVariant {
   text: string;
 }
 
+export type ReelTitleFont = "cinematic" | "modern" | "classic";
+export type ReelTitleSize = "sm" | "md" | "lg";
+
 export interface MusicSuggestion {
   genre: string;
   mood: string;

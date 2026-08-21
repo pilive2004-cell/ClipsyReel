@@ -2,7 +2,7 @@
 
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile } from "@ffmpeg/util";
-import { BestMoment, ReelStyle } from "@/types";
+import { BestMoment, ReelStyle, ReelTitleFont, ReelTitleSize } from "@/types";
 import { STYLE_RECIPES, StyleRecipe } from "@/data/styleRecipes";
 import { pickTransitionName, randomTransitionDuration, STYLE_TRANSITIONS } from "@/data/transitions";
 
@@ -429,10 +429,75 @@ async function generateOverlayTextPng(frameWidth: number, frameHeight: number, t
   return new Uint8Array(await blob.arrayBuffer());
 }
 
-function planOverlayTextWindows(texts: string[], totalDuration: number, introDuration: number, outroDuration: number) {
+interface ReelTitleOverlaySettings {
+  text: string;
+  font: ReelTitleFont;
+  size: ReelTitleSize;
+}
+
+function canvasFontFamilyForTitle(font: ReelTitleFont): string {
+  if (font === "classic") return `Georgia, "Times New Roman", serif`;
+  if (font === "modern") return `"Inter", "Arial", "Helvetica Neue", sans-serif`;
+  return `"Bodoni MT", "Didot", Georgia, serif`;
+}
+
+function titleSizeScale(size: ReelTitleSize): number {
+  if (size === "sm") return 0.06;
+  if (size === "lg") return 0.095;
+  return 0.078;
+}
+
+async function generateReelTitlePng(frameWidth: number, frameHeight: number, title: ReelTitleOverlaySettings): Promise<Uint8Array> {
+  const canvas = document.createElement("canvas");
+  canvas.width = frameWidth;
+  canvas.height = frameHeight;
+  const ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
+  ctx.clearRect(0, 0, frameWidth, frameHeight);
+
+  const fontSize = Math.round(frameWidth * titleSizeScale(title.size));
+  ctx.font = `700 ${fontSize}px ${canvasFontFamilyForTitle(title.font)}`;
+  const lines = wrapCanvasText(ctx, title.text, frameWidth * 0.84).slice(0, 2);
+  const lineHeight = Math.round(fontSize * 1.14);
+  const centerX = frameWidth / 2;
+  const startY = Math.round(frameHeight * 0.16);
+
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  lines.forEach((line, index) => {
+    const y = startY + index * lineHeight;
+    ctx.strokeStyle = "rgba(0,0,0,0.52)";
+    ctx.lineWidth = Math.max(2, Math.round(fontSize * 0.11));
+    ctx.strokeText(line, centerX, y);
+    ctx.fillStyle = "rgba(255,255,255,0.98)";
+    ctx.fillText(line, centerX, y);
+  });
+
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Reel title canvas export failed"))), "image/png");
+  });
+
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+function planReelTitleWindow(totalDuration: number, introDuration: number, outroDuration: number) {
+  const start = Math.max(0.35, introDuration + 0.35);
+  const endBoundary = Math.max(start, totalDuration - Math.max(0.35, outroDuration + 0.35));
+  const available = endBoundary - start;
+  if (available < 1.4) return null;
+  const duration = clamp(available * 0.34, 1.6, 3.2);
+  return { start, end: Math.min(endBoundary, start + duration) };
+}
+
+function planOverlayTextWindows(
+  texts: string[],
+  totalDuration: number,
+  introDuration: number,
+  outroDuration: number,
+  minimumStartSeconds = 0
+) {
   if (texts.length === 0) return [];
 
-  const startBoundary = Math.max(0.35, introDuration + 0.35);
+  const startBoundary = Math.max(0.35, introDuration + 0.35, minimumStartSeconds);
   const endBoundary = Math.max(startBoundary, totalDuration - Math.max(0.35, outroDuration + 0.35));
   const available = endBoundary - startBoundary;
   if (available < 1.8) return [];
@@ -474,6 +539,8 @@ export interface BuildMontageParams {
   keepOriginalAudio?: boolean;
   /** Controls encoder speed at fixed 1080p: "fast" skips Ken Burns zoom (3–5× speedup) at the cost of static framing. */
   renderSpeedProfile?: RenderSpeedProfile;
+  /** Optional reel title shown before hook overlay text. */
+  reelTitle?: ReelTitleOverlaySettings;
   /** Up to three custom overlay texts burned into the final exported MP4. */
   overlayTexts?: string[];
   /** Called with a 0–1 ratio whenever rendering progresses. Never exceeds 0.97 until the file is fully written. */
@@ -563,6 +630,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     watermark = false,
     keepOriginalAudio = false,
     renderSpeedProfile = "standard",
+    reelTitle,
     overlayTexts = [],
     onProgress,
     onPhaseChange,
@@ -581,6 +649,9 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
   const sourceAudioEnabled = videoAudioEnabled ?? files.map(() => true);
   const watermarkLeft = Math.round(w * 0.04);
   const watermarkTop = Math.round(h * 0.07);
+  const cleanedReelTitle = reelTitle?.text.trim()
+    ? { ...reelTitle, text: reelTitle.text.trim() }
+    : null;
   const cleanedOverlayTexts = overlayTexts.map((text) => text.trim()).filter(Boolean).slice(0, 3);
 
   const segments = mode === "reel" ? planReelSegments(bestMoments, recipe, videoDurations) : planStorySegments(videoDurations, recipe, maxStorySeconds);
@@ -639,6 +710,11 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     watermarkName = `wm_${stamp}.png`;
     await ffmpeg.writeFile(watermarkName, await generateWatermarkPng(w));
   }
+  let reelTitleName: string | null = null;
+  if (cleanedReelTitle) {
+    reelTitleName = `reel_title_${stamp}.png`;
+    await ffmpeg.writeFile(reelTitleName, await generateReelTitlePng(w, h, cleanedReelTitle));
+  }
 
   // ── Progress accounting ───────────────────────────────────────────────────
   // IMPORTANT: progress is capped at 0.97 throughout the render loop.
@@ -666,7 +742,13 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
 
   const segmentClipNames: string[] = [];
   const segmentDurations: number[] = [];
-  const tempFiles: string[] = [...inputNames, ...(introSourceName ? [introSourceName] : []), ...(outroSourceName ? [outroSourceName] : []), ...(watermarkName ? [watermarkName] : [])];
+  const tempFiles: string[] = [
+    ...inputNames,
+    ...(introSourceName ? [introSourceName] : []),
+    ...(outroSourceName ? [outroSourceName] : []),
+    ...(watermarkName ? [watermarkName] : []),
+    ...(reelTitleName ? [reelTitleName] : []),
+  ];
   const overlayTextNames: string[] = [];
 
   try {
@@ -684,23 +766,38 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       durationSeconds: number,
       labelPrefix: string
     ) => {
-      if (overlayTextNames.length === 0) {
-        return { finalLabel: baseLabel, overlaysUsed: 0 };
+      const titleWindow = cleanedReelTitle
+        ? planReelTitleWindow(
+            durationSeconds,
+            introClip?.durationSeconds ?? 0,
+            outroClip?.durationSeconds ?? 0
+          )
+        : null;
+      if (overlayTextNames.length === 0 && !titleWindow) {
+        return { finalLabel: baseLabel, overlaysUsed: 0, usedTitle: false };
       }
 
+      const titleInputOffset = reelTitleName ? 1 : 0;
       const overlays = planOverlayTextWindows(
         cleanedOverlayTexts,
         durationSeconds,
         introClip?.durationSeconds ?? 0,
-        outroClip?.durationSeconds ?? 0
+        outroClip?.durationSeconds ?? 0,
+        titleWindow ? titleWindow.end + 0.35 : 0
       );
-      if (overlays.length === 0) {
-        return { finalLabel: baseLabel, overlaysUsed: 0 };
-      }
 
       let currentLabel = baseLabel;
+      if (reelTitleName && titleWindow) {
+        const titleLabel = `${labelPrefix}_titlesrc`;
+        const titleOutLabel = `${labelPrefix}_title`;
+        filterParts.push(`[${firstInputIndex}:v]format=rgba[${titleLabel}]`);
+        filterParts.push(
+          `[${currentLabel}][${titleLabel}]overlay=(W-w)/2:H*0.08:enable='between(t,${titleWindow.start.toFixed(3)},${titleWindow.end.toFixed(3)})'[${titleOutLabel}]`
+        );
+        currentLabel = titleOutLabel;
+      }
       overlays.forEach((overlay, index) => {
-        const inputIndex = firstInputIndex + index;
+        const inputIndex = firstInputIndex + titleInputOffset + index;
         const textLabel = `${labelPrefix}_txtsrc_${index}`;
         const outLabel = `${labelPrefix}_txt_${index}`;
         filterParts.push(`[${inputIndex}:v]format=rgba[${textLabel}]`);
@@ -710,7 +807,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         currentLabel = outLabel;
       });
 
-      return { finalLabel: currentLabel, overlaysUsed: overlays.length };
+      return { finalLabel: currentLabel, overlaysUsed: overlays.length, usedTitle: !!titleWindow };
     };
 
     const appendAudioChain = (
@@ -892,14 +989,15 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
 
       const outputName = `out_${stamp}.mp4`;
       const filterParts: string[] = [];
-      const { finalLabel, overlaysUsed } = appendOverlayFilters(filterParts, "0:v", 1, finalDurations[0], "single");
-      if (overlaysUsed === 0) {
+      const { finalLabel, overlaysUsed, usedTitle } = appendOverlayFilters(filterParts, "0:v", 1, finalDurations[0], "single");
+      if (overlaysUsed === 0 && !usedTitle) {
         return finaliseOutput(finalClipNames[0], finalDurations[0], 1);
       }
       onPhaseChange?.("Burning in overlay text…");
       await ffmpeg.exec([
         "-i",
         finalClipNames[0],
+        ...(reelTitleName ? ["-i", reelTitleName] : []),
         ...overlayTextNames.slice(0, overlaysUsed).flatMap((name) => ["-i", name]),
         "-filter_complex",
         filterParts.join(";"),
@@ -932,6 +1030,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       await ffmpeg.exec([
         "-i", finalClipNames[0],
         "-i", watermarkName as string,
+        ...(reelTitleName ? ["-i", reelTitleName] : []),
         ...overlayTextNames.slice(0, overlaysUsed).flatMap((name) => ["-i", name]),
         "-filter_complex",
         filterParts.join(";"),
@@ -991,6 +1090,9 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       Math.max(acc, 0.5),
       "multi"
     );
+    if (reelTitleName) {
+      execArgs.push("-i", reelTitleName);
+    }
     execArgs.push(...overlayTextNames.slice(0, overlaysUsed).flatMap((name) => ["-i", name]));
     const finalAudioFlags = [
       ...(introName ? [false] : []),

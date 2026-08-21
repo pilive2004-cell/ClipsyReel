@@ -24,7 +24,7 @@ import { generateGearSummaryClip, GearSummaryClip } from "@/lib/gear-summary-cli
 import { buildAnalysisResult, generateMockAnalysisMulti, STYLES } from "@/data/mock";
 import { buildMontage, qualityForPlan } from "@/lib/video-engine";
 import { buildGearSummaryEntries, DEFAULT_GEAR_SELECTIONS } from "@/data/gearCatalog";
-import { AppStep, BestMoment, GpxRouteStats, GpxTrackPoint, MontageResult, ReelAnalysisResult, ReelStyle, RouteLabel, UploadedVideo } from "@/types";
+import { AppStep, BestMoment, GpxRouteStats, GpxTrackPoint, MontageResult, ReelAnalysisResult, ReelStyle, ReelTitleFont, ReelTitleSize, RouteLabel, UploadedVideo } from "@/types";
 
 const STEP_ORDER: AppStep[] = ["upload", "style", "analyze", "render", "preview"];
 const STEP_LABELS: Record<AppStep, string> = {
@@ -44,6 +44,9 @@ export default function Home() {
   const [analysis, setAnalysis] = useState<ReelAnalysisResult | null>(null);
   const [selectedHookId, setSelectedHookId] = useState<string>("");
   const [gearSelections, setGearSelections] = useState(DEFAULT_GEAR_SELECTIONS);
+  const [reelTitle, setReelTitle] = useState("");
+  const [reelTitleFont, setReelTitleFont] = useState<ReelTitleFont>("cinematic");
+  const [reelTitleSize, setReelTitleSize] = useState<ReelTitleSize>("md");
   const [overlayTexts, setOverlayTexts] = useState<[string, string, string]>(["", "", ""]);
   const [routeIntroClip, setRouteIntroClip] = useState<RouteIntroClip | null>(null);
   const [hasRouteIntro, setHasRouteIntro] = useState(false);
@@ -87,6 +90,7 @@ export default function Home() {
   const equipmentSummary = buildGearSummaryEntries(gearSelections);
   const selectedOverlayTexts = overlayTexts.filter((text) => text.trim().length > 0);
   const selectedOverlayTextKey = selectedOverlayTexts.join("\n");
+  const reelTitleKey = `${reelTitle.trim()}|${reelTitleFont}|${reelTitleSize}`;
 
   const clearGearSummaryClip = (nextStatus: "idle" | "rendering" | "ready" | "error" = "idle") => {
     setGearSummaryStatus(nextStatus);
@@ -194,6 +198,11 @@ export default function Home() {
           renderSpeedProfile: "fast",
           watermark: isFree,
           videoAudioEnabled: videos.map((v) => v.keepAudio),
+          reelTitle: {
+            text: reelTitle.trim(),
+            font: reelTitleFont,
+            size: reelTitleSize,
+          },
           overlayTexts: selectedOverlayTexts,
           onProgress: (ratio) => {
             if (cancelled) return;
@@ -219,7 +228,7 @@ export default function Home() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, videos, analysis, style, routeIntroClip, hasRouteIntro, routeIntroStatus, gearSummaryClip, isFree, equipmentSummary.length, gearSummaryStatus, selectedOverlayTextKey]);
+  }, [step, videos, analysis, style, routeIntroClip, hasRouteIntro, routeIntroStatus, gearSummaryClip, isFree, equipmentSummary.length, gearSummaryStatus, selectedOverlayTextKey, reelTitleKey]);
 
   const retryRender = () => {
     setStep("analyze");
@@ -239,6 +248,9 @@ export default function Home() {
     setAnalysis(null);
     setSelectedHookId("");
     setGearSelections(DEFAULT_GEAR_SELECTIONS);
+    setReelTitle("");
+    setReelTitleFont("cinematic");
+    setReelTitleSize("md");
     setOverlayTexts(["", "", ""]);
     setRouteIntroClip(null);
     setHasRouteIntro(false);
@@ -304,6 +316,12 @@ export default function Home() {
 
           <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
             <HookCaptionPanel
+              reelTitle={reelTitle}
+              reelTitleFont={reelTitleFont}
+              reelTitleSize={reelTitleSize}
+              onChangeReelTitle={setReelTitle}
+              onChangeReelTitleFont={setReelTitleFont}
+              onChangeReelTitleSize={setReelTitleSize}
               overlayTexts={overlayTexts}
               onChangeOverlayText={(index, value) =>
                 setOverlayTexts((current) => {
@@ -448,6 +466,9 @@ export default function Home() {
             hookText={selectedHookText}
             bestMoments={analysis.bestMoments}
             watermark={isFree && !montage}
+            reelTitle={reelTitle.trim()}
+            reelTitleFont={reelTitleFont}
+            reelTitleSize={reelTitleSize}
             overlayTexts={selectedOverlayTexts}
             introDurationSeconds={routeIntroClip?.durationSeconds ?? 0}
             outroDurationSeconds={gearSummaryClip?.durationSeconds ?? 0}
