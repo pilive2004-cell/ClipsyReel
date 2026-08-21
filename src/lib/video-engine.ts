@@ -311,42 +311,57 @@ function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: n
  * the preview, this is present in the downloaded file itself.
  */
 async function generateWatermarkPng(frameWidth: number): Promise<Uint8Array> {
-  const width = Math.max(140, Math.round(frameWidth * 0.42));
-  const height = Math.round(width * 0.26);
+  const width = Math.max(172, Math.round(frameWidth * 0.34));
+  const height = Math.round(width * 0.24);
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
 
   ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = "rgba(0,0,0,0.45)";
+  ctx.fillStyle = "rgba(0,0,0,0.42)";
   roundRectPath(ctx, 0, 0, width, height, height / 2);
   ctx.fill();
 
-  const markR = height * 0.34;
-  const markCx = height * 0.58;
-  const markCy = height / 2;
-  const grad = ctx.createLinearGradient(markCx - markR, markCy - markR, markCx + markR, markCy + markR);
+  const iconSize = height * 0.62;
+  const iconX = height * 0.22;
+  const iconY = (height - iconSize) / 2;
+  const iconRadius = iconSize * 0.26;
+  const grad = ctx.createLinearGradient(iconX, iconY, iconX + iconSize, iconY + iconSize);
   grad.addColorStop(0, "#e879f9");
   grad.addColorStop(1, "#fb923c");
   ctx.fillStyle = grad;
-  ctx.beginPath();
-  ctx.arc(markCx, markCy, markR, 0, Math.PI * 2);
+  roundRectPath(ctx, iconX, iconY, iconSize, iconSize, iconRadius);
   ctx.fill();
 
   ctx.fillStyle = "#ffffff";
-  const triSize = markR * 0.85;
+  const bodyX = iconX + iconSize * 0.18;
+  const bodyY = iconY + iconSize * 0.35;
+  const bodyW = iconSize * 0.64;
+  const bodyH = iconSize * 0.3;
+  roundRectPath(ctx, bodyX, bodyY, bodyW, bodyH, iconSize * 0.08);
+  ctx.fill();
   ctx.beginPath();
-  ctx.moveTo(markCx - triSize * 0.3, markCy - triSize * 0.5);
-  ctx.lineTo(markCx - triSize * 0.3, markCy + triSize * 0.5);
-  ctx.lineTo(markCx + triSize * 0.55, markCy);
+  ctx.moveTo(iconX + iconSize * 0.18, iconY + iconSize * 0.18);
+  ctx.lineTo(iconX + iconSize * 0.82, iconY + iconSize * 0.18);
+  ctx.lineTo(iconX + iconSize * 0.72, iconY + iconSize * 0.31);
+  ctx.lineTo(iconX + iconSize * 0.08, iconY + iconSize * 0.31);
   ctx.closePath();
   ctx.fill();
+  ctx.strokeStyle = "rgba(232,121,249,0.95)";
+  ctx.lineWidth = Math.max(1.25, iconSize * 0.05);
+  for (let i = 0; i < 3; i++) {
+    const x = iconX + iconSize * (0.24 + i * 0.18);
+    ctx.beginPath();
+    ctx.moveTo(x, iconY + iconSize * 0.2);
+    ctx.lineTo(x - iconSize * 0.08, iconY + iconSize * 0.29);
+    ctx.stroke();
+  }
 
   ctx.fillStyle = "rgba(255,255,255,0.94)";
-  ctx.font = `700 ${Math.round(height * 0.36)}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+  ctx.font = `700 ${Math.round(height * 0.34)}px system-ui, -apple-system, "Segoe UI", sans-serif`;
   ctx.textBaseline = "middle";
-  ctx.fillText("ClipsyReel", height * 1.12, height / 2 + height * 0.02);
+  ctx.fillText("ClipsyReel", iconX + iconSize + height * 0.22, height / 2 + height * 0.02);
 
   const blob = await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Watermark canvas export failed"))), "image/png");
@@ -564,7 +579,8 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
   const finalCrf = renderSpeedProfile === "fast" ? "25" : "23";
   const audioSampleRate = 48000;
   const sourceAudioEnabled = videoAudioEnabled ?? files.map(() => true);
-  const watermarkMargin = Math.round(w * 0.035);
+  const watermarkLeft = Math.round(w * 0.04);
+  const watermarkTop = Math.round(h * 0.07);
   const cleanedOverlayTexts = overlayTexts.map((text) => text.trim()).filter(Boolean).slice(0, 3);
 
   const segments = mode === "reel" ? planReelSegments(bestMoments, recipe, videoDurations) : planStorySegments(videoDurations, recipe, maxStorySeconds);
@@ -911,7 +927,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     if (finalClipNames.length === 1 && watermark) {
       onPhaseChange?.("Applying watermark…");
       const outputName = `out_${stamp}.mp4`;
-      const filterParts = [`[1:v]format=rgba[wm]`, `[0:v][wm]overlay=W-w-${watermarkMargin}:H-h-${watermarkMargin}[vwm]`];
+      const filterParts = [`[1:v]format=rgba[wm]`, `[0:v][wm]overlay=${watermarkLeft}:${watermarkTop}[vwm]`];
       const { finalLabel, overlaysUsed } = appendOverlayFilters(filterParts, "vwm", 2, finalDurations[0], "singlewm");
       await ffmpeg.exec([
         "-i", finalClipNames[0],
@@ -965,7 +981,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       const wmInputIndex = finalClipNames.length;
       execArgs.push("-i", watermarkName as string);
       filterParts.push(`[${wmInputIndex}:v]format=rgba[wm]`);
-      filterParts.push(`[vpre][wm]overlay=W-w-${watermarkMargin}:H-h-${watermarkMargin}[vout]`);
+      filterParts.push(`[vpre][wm]overlay=${watermarkLeft}:${watermarkTop}[vout]`);
       mapTarget = "[vout]";
     }
     const { finalLabel, overlaysUsed } = appendOverlayFilters(

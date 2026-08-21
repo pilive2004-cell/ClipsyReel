@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Film } from "lucide-react";
+import { Clapperboard, Film } from "lucide-react";
 import { BestMoment, ReelStyle } from "@/types";
 import { STYLES } from "@/data/mock";
 
@@ -180,8 +180,13 @@ export default function ReelPreview({
         )}
 
         {watermark && (
-          <div className="absolute bottom-2 right-3 rounded bg-black/40 px-1.5 py-0.5 text-[9px] font-semibold tracking-wide text-white/70">
-            ClipsyReel
+          <div className="absolute left-3 top-4 flex items-center gap-2 rounded-full bg-black/42 px-2.5 py-1.5 text-white shadow-[0_8px_24px_rgba(0,0,0,0.28)] backdrop-blur-sm">
+            <div className="flex h-6 w-6 items-center justify-center rounded-lg brand-gradient shadow-lg shadow-fuchsia-500/20">
+              <Clapperboard className="h-3.5 w-3.5 text-white" strokeWidth={2.5} />
+            </div>
+            <span className="text-[10px] font-semibold tracking-tight text-white/92">
+              Clipsy<span className="brand-gradient-text">Reel</span>
+            </span>
           </div>
         )}
       </div>

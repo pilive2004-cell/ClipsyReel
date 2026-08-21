@@ -60,8 +60,12 @@ function coordToPoint([lng, lat]: number[]): GpxTrackPoint {
   return { lat, lng, ele: null, time: null };
 }
 
-/** Compute GpxRouteStats from a set of track points and a total distance in metres. */
-function buildStats(points: GpxTrackPoint[], distanceM: number): GpxRouteStats {
+/** Compute GpxRouteStats from a set of track points and route metrics. */
+function buildStats(
+  points: GpxTrackPoint[],
+  distanceM: number,
+  durationSeconds?: number,
+): GpxRouteStats {
   let elevGain = 0;
   let highest: number | null = null;
   for (let i = 1; i < points.length; i++) {
@@ -73,10 +77,12 @@ function buildStats(points: GpxTrackPoint[], distanceM: number): GpxRouteStats {
     }
   }
   const distanceKm = distanceM / 1000;
-  // Rough duration estimate: 60 km/h driving average (used as fallback)
-  const hours = distanceKm / 60;
-  const h = Math.floor(hours);
-  const m = Math.round((hours - h) * 60);
+  const roundedDurationSeconds =
+    typeof durationSeconds === "number" && Number.isFinite(durationSeconds)
+      ? Math.max(0, Math.round(durationSeconds))
+      : Math.round((distanceKm / 60) * 3600);
+  const h = Math.floor(roundedDurationSeconds / 3600);
+  const m = Math.round((roundedDurationSeconds % 3600) / 60);
   const durationLabel = h > 0 ? `${h}h ${m}min` : `${m} min`;
   return { distanceKm, durationLabel, elevationGainM: Math.round(elevGain), highestPointM: highest };
 }
@@ -158,6 +164,7 @@ export async function generateRoute(
     code: string;
     routes?: Array<{
       distance: number;       // metres
+      duration: number;       // seconds
       geometry: GeoJSON.LineString;
     }>;
   }
@@ -172,7 +179,7 @@ export async function generateRoute(
 
   if (points.length < 2) throw new Error("Route returned by OSRM has fewer than 2 points.");
 
-  const stats = buildStats(points, route.distance);
+  const stats = buildStats(points, route.distance, route.duration);
 
   return { points, stats, waypoints, vehicleType: vehicle };
 }

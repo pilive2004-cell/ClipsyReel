@@ -302,6 +302,19 @@ export default function Home() {
             />
           </div>
 
+          <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+            <HookCaptionPanel
+              overlayTexts={overlayTexts}
+              onChangeOverlayText={(index, value) =>
+                setOverlayTexts((current) => {
+                  const next = [...current] as [string, string, string];
+                  next[index] = value;
+                  return next;
+                })
+              }
+            />
+          </div>
+
           <button
             onClick={goToStyle}
             disabled={videos.length === 0}
@@ -324,25 +337,6 @@ export default function Home() {
               }
             />
           </div>
-
-          {analysis && (
-            <div className="space-y-4 rounded-2xl border border-white/10 bg-white/[0.02] p-4">
-              <div>
-                <h2 className="text-sm font-semibold text-white/85">Hook text</h2>
-                <p className="mt-1 text-xs text-white/45">Ajoute ici tes 3 textes personnalisés.</p>
-              </div>
-              <HookCaptionPanel
-                overlayTexts={overlayTexts}
-                onChangeOverlayText={(index, value) =>
-                  setOverlayTexts((current) => {
-                    const next = [...current] as [string, string, string];
-                    next[index] = value;
-                    return next;
-                  })
-                }
-              />
-            </div>
-          )}
 
           {analysis && (
             <CreationExtrasPanel

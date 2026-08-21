@@ -57,13 +57,12 @@ interface WaypointInputProps {
   value: string;
   placeholder: string;
   status: "idle" | "loading" | "found" | "error";
-  resolved?: Waypoint | null;
   onChange: (v: string) => void;
   onRemove?: () => void;
   removable?: boolean;
 }
 
-function WaypointInput({ value, placeholder, status, resolved, onChange, onRemove, removable }: WaypointInputProps) {
+function WaypointInput({ value, placeholder, status, onChange, onRemove, removable }: WaypointInputProps) {
   return (
     <div className="flex items-center gap-2">
       <div className="relative flex-1">
@@ -164,18 +163,24 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
       if (!prev) return prev;
       const next = [...prev];
       next[i] = { ...next[i], name };
+      onRouteDataChange?.({ points: activePoints, stats: activeStats, labels: next });
       return next;
     });
-  }, []);
+  }, [activePoints, activeStats, onRouteDataChange]);
 
   const removeRouteLabel = useCallback((i: number) => {
     setRouteLabels((prev) => {
       if (!prev) return prev;
       const next = prev.filter((_, j) => j !== i);
       if (next.length > 0) { next[0].isStart = true; next[next.length - 1].isEnd = true; }
+      for (let k = 1; k < next.length - 1; k++) {
+        next[k].isStart = undefined;
+        next[k].isEnd = undefined;
+      }
+      onRouteDataChange?.({ points: activePoints, stats: activeStats, labels: next });
       return next;
     });
-  }, []);
+  }, [activePoints, activeStats, onRouteDataChange]);
 
   const addLabelToRoute = useCallback(async (query: string) => {
     if (!activePoints) return;
@@ -191,6 +196,7 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
         if (next.length > 0) { next[0].isStart = true; next[0].isEnd = undefined; }
         if (next.length > 1) { next[next.length - 1].isEnd = true; next[next.length - 1].isStart = undefined; }
         for (let i = 1; i < next.length - 1; i++) { next[i].isStart = undefined; next[i].isEnd = undefined; }
+        onRouteDataChange?.({ points: activePoints, stats: activeStats, labels: next });
         return next;
       });
       setAddLabelQuery("");
@@ -198,7 +204,7 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
     } catch {
       setAddLabelStatus("error");
     }
-  }, [activePoints]);
+  }, [activePoints, activeStats, onRouteDataChange]);
 
   // ── GPX handlers ─────────────────────────────────────────────────────────────
 
@@ -331,15 +337,9 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
     setLabelsStatus("idle");
 
     try {
-      const { generateRoute, exportRouteAsGpx, buildStraightLineRoute, detectRouteLabels } =
+      const { generateRoute, exportRouteAsGpx, detectRouteLabels } =
         await import("@/lib/route-service");
-      let result;
-      try {
-        result = await generateRoute(orderedWaypoints, vehicle);
-      } catch (osrmErr) {
-        console.warn("[RouteSourceSelector] OSRM failed, using straight-line fallback:", osrmErr);
-        result = buildStraightLineRoute(orderedWaypoints, vehicle);
-      }
+      const result = await generateRoute(orderedWaypoints, vehicle);
       const gpxStr = exportRouteAsGpx(result);
       setLocationPoints(result.points);
       setLocationStats(result.stats);
@@ -393,10 +393,20 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
         onClick={onLockedClick}
         className="group relative block w-full overflow-hidden rounded-2xl border border-dashed border-white/10 bg-white/[0.02] text-left transition hover:border-white/20"
       >
-        <div className="pointer-events-none flex h-36 items-center justify-center bg-[radial-gradient(circle_at_top,rgba(16,185,129,0.18),transparent_60%),linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.01))] blur-[1px] grayscale-[0.1] opacity-80">
-          <div className="rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-center">
+        <div className="pointer-events-none flex h-40 items-center justify-center bg-[radial-gradient(circle_at_top,rgba(16,185,129,0.18),transparent_60%),linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.01))] blur-[1px] grayscale-[0.1] opacity-80">
+          <div className="w-full max-w-[320px] rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-center">
             <p className="text-sm font-semibold text-white/85">GPX import & route planner</p>
             <p className="mt-1 text-[11px] text-white/45">Upload a GPX file or plan a route from cities.</p>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <div className="flex items-center justify-center gap-1.5 rounded-xl border border-white/8 bg-white/[0.05] px-3 py-2 text-[11px] font-semibold text-white/60">
+                <FileUp className="h-3.5 w-3.5" />
+                Import GPX
+              </div>
+              <div className="flex items-center justify-center gap-1.5 rounded-xl border border-white/8 bg-white/[0.05] px-3 py-2 text-[11px] font-semibold text-white/60">
+                <Route className="h-3.5 w-3.5" />
+                Plan route
+              </div>
+            </div>
           </div>
         </div>
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-black/55 px-4 text-center">
@@ -455,6 +465,20 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
           onFileChange={handleGpxFile}
           onClear={clearGpx}
           videos={videos}
+          labelsEditor={
+            labelsStatus !== "idle" ? (
+              <RouteLabelEditor
+                labels={routeLabels}
+                status={labelsStatus}
+                addQuery={addLabelQuery}
+                addStatus={addLabelStatus}
+                onUpdate={updateRouteLabel}
+                onRemove={removeRouteLabel}
+                onAddQueryChange={setAddLabelQuery}
+                onAddSubmit={() => { if (addLabelQuery.trim()) addLabelToRoute(addLabelQuery.trim()); }}
+              />
+            ) : null
+          }
         />
       )}
 
@@ -468,12 +492,9 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
           depStatus={depStatus}
           destStatus={destStatus}
           stopStatuses={stopStatuses}
-          depResolved={depResolved}
-          destResolved={destResolved}
           stopResolved={stopResolved}
           routeGenStatus={routeGenStatus}
           routeError={routeError}
-          locationPoints={locationPoints}
           locationStats={locationStats}
           canGenerate={!!canGenerate}
           routeMatch={routeMatch}
@@ -487,20 +508,20 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
           onGenerate={generateRouteAction}
           onClearRoute={clearLocationRoute}
           onDownloadGpx={downloadGpx}
-        />
-      )}
-
-      {/* ── Route labels editor — shown when route exists ─────────────────── */}
-      {(labelsStatus !== "idle") && (
-        <RouteLabelEditor
-          labels={routeLabels}
-          status={labelsStatus}
-          addQuery={addLabelQuery}
-          addStatus={addLabelStatus}
-          onUpdate={updateRouteLabel}
-          onRemove={removeRouteLabel}
-          onAddQueryChange={setAddLabelQuery}
-          onAddSubmit={() => { if (addLabelQuery.trim()) addLabelToRoute(addLabelQuery.trim()); }}
+          labelsEditor={
+            labelsStatus !== "idle" ? (
+              <RouteLabelEditor
+                labels={routeLabels}
+                status={labelsStatus}
+                addQuery={addLabelQuery}
+                addStatus={addLabelStatus}
+                onUpdate={updateRouteLabel}
+                onRemove={removeRouteLabel}
+                onAddQueryChange={setAddLabelQuery}
+                onAddSubmit={() => { if (addLabelQuery.trim()) addLabelToRoute(addLabelQuery.trim()); }}
+              />
+            ) : null
+          }
         />
       )}
     </div>
@@ -548,11 +569,12 @@ interface GpxModePanelProps {
   videos: UploadedVideo[];
   onFileChange: (f: File | undefined) => void;
   onClear: () => void;
+  labelsEditor?: React.ReactNode;
 }
 
 function GpxModePanel({
   gpxText, gpxFileName, gpxStats, gpxInputRef,
-  routeMatch, onFileChange, onClear,
+  routeMatch, onFileChange, onClear, labelsEditor,
 }: GpxModePanelProps) {
   if (gpxText) {
     return (
@@ -585,6 +607,7 @@ function GpxModePanel({
         {routeMatch.matches.length > 0 && (
           <div className="mt-3"><VideoLocationMatcher matches={routeMatch.matches} /></div>
         )}
+        {labelsEditor && <div className="mt-3">{labelsEditor}</div>}
       </div>
     );
   }
@@ -628,12 +651,9 @@ interface LocationModePanelProps {
   depStatus: "idle" | "loading" | "found" | "error";
   destStatus: "idle" | "loading" | "found" | "error";
   stopStatuses: ("idle" | "loading" | "found" | "error")[];
-  depResolved: Waypoint | null;
-  destResolved: Waypoint | null;
   stopResolved: Array<Waypoint | null>;
   routeGenStatus: "idle" | "loading" | "ready" | "error";
   routeError: string | null;
-  locationPoints: GpxTrackPoint[] | null;
   locationStats: GpxRouteStats | null;
   canGenerate: boolean;
   routeMatch: ReturnType<typeof matchVideosToRoute>;
@@ -647,18 +667,18 @@ interface LocationModePanelProps {
   onGenerate: () => void;
   onClearRoute: () => void;
   onDownloadGpx: () => void;
+  labelsEditor?: React.ReactNode;
 }
 
 function LocationModePanel({
   departure, destination, stops, vehicle,
   depStatus, destStatus, stopStatuses,
-  depResolved, destResolved,
   routeGenStatus, routeError,
-  locationPoints, locationStats,
+  locationStats,
   canGenerate, routeMatch,
   onDepChange, onDestChange, onStopChange,
   onAddStop, onRemoveStop, onVehicleChange,
-  onGenerate, onClearRoute, onDownloadGpx,
+  onGenerate, onClearRoute, onDownloadGpx, labelsEditor,
 }: LocationModePanelProps) {
 
   return (
@@ -689,7 +709,6 @@ function LocationModePanel({
           value={departure}
           placeholder="Departure city or address"
           status={depStatus}
-          resolved={depResolved}
           onChange={onDepChange}
         />
 
@@ -711,7 +730,6 @@ function LocationModePanel({
           value={destination}
           placeholder="Destination city or address"
           status={destStatus}
-          resolved={destResolved}
           onChange={onDestChange}
         />
 
@@ -792,6 +810,7 @@ function LocationModePanel({
             </div>
           )}
           {routeMatch.matches.length > 0 && <VideoLocationMatcher matches={routeMatch.matches} />}
+          {labelsEditor}
         </div>
       )}
     </div>

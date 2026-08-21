@@ -8,7 +8,7 @@ interface RouteStatsCardProps {
 /** Displays the real distance/duration/elevation gain/highest point computed from the parsed GPX track. */
 export default function RouteStatsCard({ stats }: RouteStatsCardProps) {
   return (
-    <div className="grid grid-cols-4 gap-2 text-center">
+    <div className="grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
       <div className="rounded-lg bg-white/[0.03] py-2">
         <Route className="mx-auto h-3.5 w-3.5 text-white/40" />
         <p className="mt-1 text-xs font-semibold">{stats.distanceKm} km</p>
