@@ -583,6 +583,7 @@ export default function RouteMapIntro({
 
   useEffect(() => {
     onClipReady(null);
+    let cancelled = false;
     const host = hostRef.current;
     if (!host || points.length < 2) {
       queueMicrotask(() => setStatus("error"));
@@ -595,9 +596,10 @@ export default function RouteMapIntro({
       return;
     }
 
-    setStatus("rendering");
+    queueMicrotask(() => {
+      if (!cancelled) setStatus("rendering");
+    });
 
-    let cancelled = false;
     let map: maplibregl.Map | null = null;
     let raf = 0;
 
@@ -888,7 +890,7 @@ export default function RouteMapIntro({
         const overviewZoom   = ovZoom;
 
         // Smoothed camera state — starts exactly at the overview position
-        let cam: CamState = {
+        const cam: CamState = {
           lat: overviewCenter.lat,
           lng: overviewCenter.lng,
           zoom: overviewZoom,
@@ -1162,7 +1164,6 @@ export default function RouteMapIntro({
         cleanupUrlRef.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [points, routeStats, initialLabels, onClipReady]);
 
   const hostDiv = (
@@ -1202,7 +1203,7 @@ export default function RouteMapIntro({
       )}
       {status === "error" && (
         <p className="text-xs text-rose-200/75">
-          Impossible de générer l'intro carte (MediaRecorder non supporté).
+          Impossible de générer l&apos;intro carte (MediaRecorder non supporte).
         </p>
       )}
 
