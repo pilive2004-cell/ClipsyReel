@@ -12,6 +12,7 @@ import AIAnalysisPanel from "@/components/AIAnalysisPanel";
 import RenderPanel from "@/components/RenderPanel";
 import ReelPreview from "@/components/ReelPreview";
 import HookCaptionPanel from "@/components/HookCaptionPanel";
+import ReelNamePanel from "@/components/ReelNamePanel";
 import RouteSourceSelector from "@/components/RouteSourceSelector";
 import PricingModal from "@/components/PricingModal";
 import UpgradePrompt from "@/components/UpgradePrompt";
@@ -24,7 +25,7 @@ import { generateGearSummaryClip, GearSummaryClip } from "@/lib/gear-summary-cli
 import { buildAnalysisResult, generateMockAnalysisMulti, STYLES } from "@/data/mock";
 import { buildMontage, qualityForPlan } from "@/lib/video-engine";
 import { buildGearSummaryEntries, DEFAULT_GEAR_SELECTIONS } from "@/data/gearCatalog";
-import { AppStep, BestMoment, GpxRouteStats, GpxTrackPoint, MontageResult, ReelAnalysisResult, ReelStyle, ReelTitleFont, ReelTitleSize, RouteLabel, UploadedVideo } from "@/types";
+import { AppStep, BestMoment, GpxRouteStats, GpxTrackPoint, MontageResult, ReelAnalysisResult, ReelStyle, ReelTitleColor, ReelTitleFont, ReelTitleSize, RouteLabel, UploadedVideo } from "@/types";
 
 const STEP_ORDER: AppStep[] = ["upload", "style", "analyze", "render", "preview"];
 const STEP_LABELS: Record<AppStep, string> = {
@@ -47,6 +48,7 @@ export default function Home() {
   const [reelTitle, setReelTitle] = useState("");
   const [reelTitleFont, setReelTitleFont] = useState<ReelTitleFont>("cinematic");
   const [reelTitleSize, setReelTitleSize] = useState<ReelTitleSize>("md");
+  const [reelTitleColor, setReelTitleColor] = useState<ReelTitleColor>("white");
   const [overlayTexts, setOverlayTexts] = useState<[string, string, string]>(["", "", ""]);
   const [routeIntroClip, setRouteIntroClip] = useState<RouteIntroClip | null>(null);
   const [hasRouteIntro, setHasRouteIntro] = useState(false);
@@ -90,7 +92,7 @@ export default function Home() {
   const equipmentSummary = buildGearSummaryEntries(gearSelections);
   const selectedOverlayTexts = overlayTexts.filter((text) => text.trim().length > 0);
   const selectedOverlayTextKey = selectedOverlayTexts.join("\n");
-  const reelTitleKey = `${reelTitle.trim()}|${reelTitleFont}|${reelTitleSize}`;
+  const reelTitleKey = `${reelTitle.trim()}|${reelTitleFont}|${reelTitleSize}|${reelTitleColor}`;
 
   const clearGearSummaryClip = (nextStatus: "idle" | "rendering" | "ready" | "error" = "idle") => {
     setGearSummaryStatus(nextStatus);
@@ -202,6 +204,7 @@ export default function Home() {
             text: reelTitle.trim(),
             font: reelTitleFont,
             size: reelTitleSize,
+            color: reelTitleColor,
           },
           overlayTexts: selectedOverlayTexts,
           onProgress: (ratio) => {
@@ -251,6 +254,7 @@ export default function Home() {
     setReelTitle("");
     setReelTitleFont("cinematic");
     setReelTitleSize("md");
+    setReelTitleColor("white");
     setOverlayTexts(["", "", ""]);
     setRouteIntroClip(null);
     setHasRouteIntro(false);
@@ -281,10 +285,28 @@ export default function Home() {
   return (
     <AppShell onOpenPricing={() => setPricingOpen(true)}>
       <div className={step === "upload" ? "space-y-5" : "hidden"}>
+          <StepBar step={step} />
           <HeroSection />
 
           <div>
-            <h2 className="mb-2 text-sm font-semibold text-white/85">1. Upload your video{videos.length > 1 ? "s" : ""}</h2>
+            <h2 className="mb-2 text-sm font-semibold text-white/85">1. Reel Name</h2>
+            <p className="mb-2 text-xs text-white/45">Set your Reel title, typography and letter size before building the rest of the story.</p>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+              <ReelNamePanel
+                reelTitle={reelTitle}
+                reelTitleFont={reelTitleFont}
+                reelTitleSize={reelTitleSize}
+                reelTitleColor={reelTitleColor}
+                onChangeReelTitle={setReelTitle}
+                onChangeReelTitleFont={setReelTitleFont}
+                onChangeReelTitleSize={setReelTitleSize}
+                onChangeReelTitleColor={setReelTitleColor}
+              />
+            </div>
+          </div>
+
+          <div>
+            <h2 className="mb-2 text-sm font-semibold text-white/85">2. Upload Videos</h2>
             <p className="mb-2 text-xs text-white/45">Upload up to 3 clips — they&apos;ll be combined into one montage.</p>
             <VideoUploader
               videos={videos}
@@ -295,8 +317,8 @@ export default function Home() {
 
           {/* Route source: GPX import OR location-based route planner. */}
           <div>
-            <h2 className="mb-2 text-sm font-semibold text-white/85">Route (optional)</h2>
-            <p className="mb-2 text-xs text-white/45">Import a GPX file or plan a route from city names to add a cinematic map intro to your reel.</p>
+            <h2 className="mb-2 text-sm font-semibold text-white/85">3. Route (Optional)</h2>
+            <p className="mb-2 text-xs text-white/45">Add a GPX route or define departure/destination for a map intro, or skip this step and continue normally.</p>
             <RouteSourceSelector
               videos={videos}
               onRouteDataChange={({ points, stats, labels }) => {
@@ -315,13 +337,9 @@ export default function Home() {
           </div>
 
           <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+            <h2 className="mb-2 text-sm font-semibold text-white/85">4. Hook</h2>
+            <p className="mb-3 text-xs text-white/45">Configure the opening hook overlays that control the attention-grabbing start of your Reel.</p>
             <HookCaptionPanel
-              reelTitle={reelTitle}
-              reelTitleFont={reelTitleFont}
-              reelTitleSize={reelTitleSize}
-              onChangeReelTitle={setReelTitle}
-              onChangeReelTitleFont={setReelTitleFont}
-              onChangeReelTitleSize={setReelTitleSize}
               overlayTexts={overlayTexts}
               onChangeOverlayText={(index, value) =>
                 setOverlayTexts((current) => {
@@ -344,17 +362,30 @@ export default function Home() {
 
       <div className={step === "style" ? "space-y-5" : "hidden"}>
           <StepBar step={step} />
-          <div>
-            <h2 className="mb-1 text-sm font-semibold text-white/85">2. Pick a Reel style</h2>
-            <p className="mb-3 text-xs text-white/45">This shapes cuts, transitions, zoom pacing, hook tone and music mood.</p>
-            <StyleSelector
-              selected={style}
-              onSelect={setStyle}
-              onLockedClick={() =>
-                showUpgrade("This style is a Pro feature", "Cinematic, Sport and Luxury styles are available on Creator Pro and above.")
-              }
-            />
-          </div>
+          {!analysis ? (
+            <div>
+              <h2 className="mb-1 text-sm font-semibold text-white/85">2. Pick a Reel style</h2>
+              <p className="mb-3 text-xs text-white/45">This shapes cuts, transitions, zoom pacing, hook tone and music mood.</p>
+              <StyleSelector
+                selected={style}
+                onSelect={setStyle}
+                onLockedClick={() =>
+                  showUpgrade("This style is a Pro feature", "Cinematic, Sport and Luxury styles are available on Creator Pro and above.")
+                }
+              />
+            </div>
+          ) : (
+            <div className="space-y-3 rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+              <div>
+                <h2 className="mb-1 text-sm font-semibold text-white/85">3. Equipements</h2>
+                <p className="text-xs text-white/45">L&apos;analyse est terminée. Continue directement avec la configuration des équipements.</p>
+              </div>
+              <div className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/75">
+                <span className="text-white/45">Style sélectionné :</span>
+                <span className="font-semibold text-white/90">{STYLES.find((s) => s.id === style)?.label ?? style}</span>
+              </div>
+            </div>
+          )}
 
           {analysis && (
             <CreationExtrasPanel
@@ -469,6 +500,7 @@ export default function Home() {
             reelTitle={reelTitle.trim()}
             reelTitleFont={reelTitleFont}
             reelTitleSize={reelTitleSize}
+            reelTitleColor={reelTitleColor}
             overlayTexts={selectedOverlayTexts}
             introDurationSeconds={routeIntroClip?.durationSeconds ?? 0}
             outroDurationSeconds={gearSummaryClip?.durationSeconds ?? 0}

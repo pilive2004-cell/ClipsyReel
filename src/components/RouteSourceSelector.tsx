@@ -195,40 +195,33 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
   // ── Label helpers ─────────────────────────────────────────────────────────────
 
   const replaceRouteLabel = useCallback(async (i: number, waypoint: Waypoint) => {
-    if (!activePoints) return;
+    if (!activePoints || !routeLabels || !routeLabels[i]) return;
     const { createRouteLabelForWaypoint, normalizeRouteLabels } = await import("@/lib/route-service");
-    setRouteLabels((prev) => {
-      if (!prev || !prev[i]) return prev;
-      const next = [...prev];
-      next[i] = createRouteLabelForWaypoint(activePoints, waypoint, { priority: prev[i].priority });
-      const normalized = normalizeRouteLabels(next);
-      onRouteDataChange?.({ points: activePoints, stats: activeStats, labels: normalized });
-      return normalized;
-    });
-  }, [activePoints, activeStats, onRouteDataChange]);
+    const next = [...routeLabels];
+    next[i] = createRouteLabelForWaypoint(activePoints, waypoint, { priority: routeLabels[i].priority });
+    const normalized = normalizeRouteLabels(next);
+    setRouteLabels(normalized);
+    onRouteDataChange?.({ points: activePoints, stats: activeStats, labels: normalized });
+  }, [activePoints, activeStats, onRouteDataChange, routeLabels]);
 
   const removeRouteLabel = useCallback(async (i: number) => {
+    if (!routeLabels) return;
     const { normalizeRouteLabels } = await import("@/lib/route-service");
-    setRouteLabels((prev) => {
-      if (!prev) return prev;
-      const normalized = normalizeRouteLabels(prev.filter((_, j) => j !== i));
-      onRouteDataChange?.({ points: activePoints, stats: activeStats, labels: normalized });
-      return normalized;
-    });
-  }, [activePoints, activeStats, onRouteDataChange]);
+    const normalized = normalizeRouteLabels(routeLabels.filter((_, j) => j !== i));
+    setRouteLabels(normalized);
+    onRouteDataChange?.({ points: activePoints, stats: activeStats, labels: normalized });
+  }, [activePoints, activeStats, onRouteDataChange, routeLabels]);
 
   const addLabelToRoute = useCallback(async (waypoint: Waypoint) => {
     if (!activePoints) return;
     const { createRouteLabelForWaypoint, normalizeRouteLabels } = await import("@/lib/route-service");
-    setRouteLabels((prev) => {
-      const normalized = normalizeRouteLabels([
-        ...(prev ?? []),
-        createRouteLabelForWaypoint(activePoints, waypoint, { priority: "major" }),
-      ]);
-      onRouteDataChange?.({ points: activePoints, stats: activeStats, labels: normalized });
-      return normalized;
-    });
-  }, [activePoints, activeStats, onRouteDataChange]);
+    const normalized = normalizeRouteLabels([
+      ...(routeLabels ?? []),
+      createRouteLabelForWaypoint(activePoints, waypoint, { priority: "major" }),
+    ]);
+    setRouteLabels(normalized);
+    onRouteDataChange?.({ points: activePoints, stats: activeStats, labels: normalized });
+  }, [activePoints, activeStats, onRouteDataChange, routeLabels]);
 
   // ── GPX handlers ─────────────────────────────────────────────────────────────
 

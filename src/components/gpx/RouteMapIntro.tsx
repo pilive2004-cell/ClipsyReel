@@ -13,6 +13,11 @@ import type { GeoJSONSource } from "maplibre-gl";
  */
 if (typeof window !== "undefined") {
   maplibregl.setWorkerUrl("/maplibre-gl-worker.mjs");
+  try {
+    maplibregl.prewarm();
+  } catch {
+    // Ignore prewarm failures; the map can still render without the shared pool.
+  }
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -39,7 +44,7 @@ interface RouteMapIntroProps {
 }
 
 /** Total duration of the generated intro clip in seconds. */
-const CLIP_DURATION_SECONDS = 26;
+const CLIP_DURATION_SECONDS = 28;
 const MAP_WIDTH = 720;
 const MAP_HEIGHT = 1280;
 const RECORD_FPS = 24;
@@ -58,10 +63,10 @@ const RECORD_FPS = 24;
  *                                pitch flattens.
  *   Phase 4 (T_HOLD → end)       Smooth zoom-out back to full-route overview.
  */
-const T_OVERVIEW  = 5;   // s — end of regional hold (extended for title readability)
-const T_ZOOMIN    = 10;  // s — end of zoom-in to start
-const T_DRAW      = 21;  // s — end of route-draw phase
-const T_HOLD      = 23;  // s — end of completion hold
+const T_OVERVIEW  = 5;    // s — end of regional hold (extended for title readability)
+const T_ZOOMIN    = 10.5; // s — end of zoom-in to start
+const T_DRAW      = 23.5; // s — end of route-draw phase (slower to keep tiles loaded)
+const T_HOLD      = 25.2; // s — end of completion hold
 // Phase 4: T_HOLD → CLIP_DURATION_SECONDS
 
 /**
@@ -70,7 +75,7 @@ const T_HOLD      = 23;  // s — end of completion hold
  * We hardcode this — never derive it from the overview zoom — so the detail
  * phase is always readable regardless of route length.
  */
-const DETAIL_ZOOM = 12;
+const DETAIL_ZOOM = 11.6;
 
 /**
  * Overview zoom is capped so the detail phase is always a zoom-IN (or same).
@@ -114,8 +119,9 @@ const K_PITCH = 4.0;  // pitch convergence speed
  *
  * Adjust these two constants to tune the feel:
  */
-const LABEL_ZOOM_IN_LEVEL   = 14;    // target zoom when near a place (streets readable)
+const LABEL_ZOOM_IN_LEVEL   = 12.5;  // target zoom when near a place (bounded for tile stability)
 const LABEL_ZOOM_TRIGGER_KM = 1.0;   // km — approach distance that triggers zoom-in
+const MIN_DYNAMIC_ZOOM      = 10.7;  // temporary safety zoom in fast/unloaded-risk sections
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
@@ -131,6 +137,23 @@ function easeInOut(t: number) {
 
 function lerp(a: number, b: number, t: number) {
   return a + (b - a) * t;
+}
+
+function normalizedTurn(points: GpxTrackPoint[], index: number): number {
+  if (index <= 1 || index >= points.length - 2) return 0;
+  const a = points[index - 1];
+  const b = points[index];
+  const c = points[index + 1];
+  const v1x = b.lng - a.lng;
+  const v1y = b.lat - a.lat;
+  const v2x = c.lng - b.lng;
+  const v2y = c.lat - b.lat;
+  const m1 = Math.hypot(v1x, v1y);
+  const m2 = Math.hypot(v2x, v2y);
+  if (m1 < 1e-9 || m2 < 1e-9) return 0;
+  const dot = clamp((v1x * v2x + v1y * v2y) / (m1 * m2), -1, 1);
+  const angle = Math.acos(dot); // 0..PI
+  return clamp(angle / Math.PI, 0, 1);
 }
 
 /**
@@ -357,6 +380,18 @@ function buildLabelsGeoJSON(
       properties: { name: l.name, isStart: l.isStart ?? false, isEnd: l.isEnd ?? false },
     })),
   };
+}
+
+function computeWindowCamera(
+  points: GpxTrackPoint[],
+  startIndex: number,
+  endIndex: number,
+  paddingPx: number,
+  maxZoom: number,
+) {
+  const safeStart = clamp(startIndex, 0, Math.max(0, points.length - 1));
+  const safeEnd = clamp(endIndex, safeStart + 1, points.length);
+  return computeOverviewCamera(points.slice(safeStart, safeEnd), MAP_WIDTH, MAP_HEIGHT, paddingPx, maxZoom);
 }
 
 async function readBlobDuration(blob: Blob, fallback: number): Promise<number> {
@@ -652,6 +687,7 @@ export default function RouteMapIntro({
         interactive: false,
         attributionControl: false,
         fadeDuration: 0,
+        refreshExpiredTiles: false,
       });
 
       // 3. Add layers + start recording once tiles have loaded
@@ -904,7 +940,7 @@ export default function RouteMapIntro({
           if (startTime === null) {
             map.triggerRepaint();
             warmupFrames++;
-            if (warmupFrames >= 10) {
+            if ((warmupFrames >= 12 && map.areTilesLoaded()) || warmupFrames >= 30) {
               startTime = now;
               prevFrameTime = now;
               recorder.start(200);
@@ -965,15 +1001,36 @@ export default function RouteMapIntro({
           // zooms in to LABEL_ZOOM_IN_LEVEL when the head approaches a labelled
           // waypoint, then smoothly returns when the head moves away.
           else if (elapsed < T_DRAW) {
-            const phaseT = easeInOut((elapsed - T_ZOOMIN) / (T_DRAW - T_ZOOMIN));
+            const phaseT = clamp((elapsed - T_ZOOMIN) / (T_DRAW - T_ZOOMIN), 0, 1);
             const headIdx = Math.min(
               Math.floor(phaseT * (resampled.length - 1)),
               resampled.length - 1,
             );
             const head = resampled[headIdx];
+            const upcomingTurn = normalizedTurn(resampled, headIdx);
+            const tilesLoaded = map.areTilesLoaded();
+            const lookAheadCount = clamp(
+              Math.round(12 + upcomingTurn * 10 + (tilesLoaded ? 0 : 6)),
+              10,
+              28,
+            );
+            const lookAheadIdx = clamp(headIdx + lookAheadCount, headIdx, resampled.length - 1);
+            const trailIdx = clamp(headIdx - 8, 0, headIdx);
+            const lookAheadPoint = resampled[lookAheadIdx];
+            const localCamera = computeWindowCamera(
+              resampled,
+              trailIdx,
+              Math.min(resampled.length, lookAheadIdx + 5),
+              Math.round(150 + upcomingTurn * 65 + (tilesLoaded ? 0 : 90)),
+              DETAIL_ZOOM + 0.35,
+            );
+            const anticipationWeight = tilesLoaded ? 0.52 : 0.68;
+            const anticipatedLat = lerp(head.lat, lookAheadPoint.lat, anticipationWeight);
+            const anticipatedLng = lerp(head.lng, lookAheadPoint.lng, anticipationWeight);
+            const upcomingDistanceKm = haversineM(head, lookAheadPoint) / 1_000;
 
             // Advance revealed GeoJSON (throttled to ≤ 1 update per 80ms)
-            if (headIdx !== lastRevealedIdx && now - lastGeoJSONUpdateMs > 80) {
+            if (headIdx !== lastRevealedIdx && now - lastGeoJSONUpdateMs > 110) {
               lastRevealedIdx = headIdx;
               lastGeoJSONUpdateMs = now;
               (map.getSource("route-revealed") as GeoJSONSource | undefined)?.setData(
@@ -998,9 +1055,9 @@ export default function RouteMapIntro({
               );
             }
 
-            targetLat   = head.lat;
-            targetLng   = head.lng;
-            targetPitch = 18;
+            targetLat = lerp(localCamera.centerLat, anticipatedLat, 0.78);
+            targetLng = lerp(localCamera.centerLng, anticipatedLng, 0.78);
+            targetPitch = lerp(16, 10, upcomingTurn * 0.85);
 
             // ── Dynamic zoom near place-name labels ───────────────────
             // Find the nearest non-start / non-end label.
@@ -1021,7 +1078,13 @@ export default function RouteMapIntro({
               labelZoomActive = false;
             }
 
-            targetZoom = labelZoomActive ? LABEL_ZOOM_IN_LEVEL : DETAIL_ZOOM;
+            const desiredDetailZoom = labelZoomActive && tilesLoaded ? LABEL_ZOOM_IN_LEVEL : DETAIL_ZOOM;
+            const dynamicCeiling = Math.min(desiredDetailZoom, localCamera.zoom + (labelZoomActive ? 0.45 : 0.2));
+            const safetyZoomPenalty =
+              (tilesLoaded ? 0 : 0.75) +
+              clamp((upcomingDistanceKm - 2.5) * 0.1, 0, 0.65) +
+              upcomingTurn * 0.4;
+            targetZoom = clamp(dynamicCeiling - safetyZoomPenalty, MIN_DYNAMIC_ZOOM, desiredDetailZoom);
 
             routeEndLat = head.lat;
             routeEndLng = head.lng;

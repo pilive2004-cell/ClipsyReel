@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { Clapperboard, Film } from "lucide-react";
-import { BestMoment, ReelStyle, ReelTitleFont, ReelTitleSize } from "@/types";
+import { BestMoment, ReelStyle, ReelTitleColor, ReelTitleFont, ReelTitleSize } from "@/types";
 import { STYLES } from "@/data/mock";
 
 interface ReelPreviewProps {
@@ -16,6 +16,7 @@ interface ReelPreviewProps {
   reelTitle?: string;
   reelTitleFont?: ReelTitleFont;
   reelTitleSize?: ReelTitleSize;
+  reelTitleColor?: ReelTitleColor;
   overlayTexts?: string[];
   introDurationSeconds?: number;
   outroDurationSeconds?: number;
@@ -33,6 +34,7 @@ export default function ReelPreview({
   reelTitle = "",
   reelTitleFont = "cinematic",
   reelTitleSize = "md",
+  reelTitleColor = "white",
   overlayTexts = [],
   introDurationSeconds = 0,
   outroDurationSeconds = 0,
@@ -72,16 +74,62 @@ export default function ReelPreview({
       return { text, start, end };
     });
   }, [introDurationSeconds, montageInfo?.durationSeconds, outroDurationSeconds, overlayTexts]);
+  const titleWindow = useMemo(() => {
+    const totalDuration = Math.max(montageInfo?.durationSeconds ?? 0, 1);
+    const start = Math.max(0.35, introDurationSeconds + 0.35);
+    const endBoundary = Math.max(start, totalDuration - Math.max(0.35, outroDurationSeconds + 0.35));
+    const available = endBoundary - start;
+    if (available < 1.1) return null;
+    const duration = Math.min(2.2, Math.max(1.2, available * 0.2));
+    return { start, end: Math.min(endBoundary, start + duration) };
+  }, [introDurationSeconds, montageInfo?.durationSeconds, outroDurationSeconds]);
   const titleFontClass = reelTitleFont === "classic"
     ? "font-serif"
     : reelTitleFont === "modern"
       ? "font-sans tracking-wide"
-      : "font-serif italic tracking-[0.08em]";
+      : reelTitleFont === "bold"
+        ? "font-sans font-black tracking-tight"
+        : reelTitleFont === "minimal"
+          ? "font-sans font-light tracking-[0.12em]"
+          : reelTitleFont === "handwritten"
+            ? "font-serif italic tracking-[0.02em]"
+              : reelTitleFont === "elegant"
+                ? "font-serif font-medium tracking-[0.06em]"
+                : reelTitleFont === "impact"
+                  ? "font-sans font-extrabold uppercase tracking-tight"
+                  : reelTitleFont === "mono"
+                    ? "font-mono tracking-[0.08em]"
+                    : reelTitleFont === "rounded"
+                      ? "font-sans font-semibold tracking-[0.04em]"
+              : "font-serif italic tracking-[0.08em]";
   const titleSizeClass = reelTitleSize === "sm"
     ? "text-base"
     : reelTitleSize === "lg"
       ? "text-2xl"
       : "text-xl";
+  const titleColorClass = reelTitleColor === "gold"
+    ? "text-amber-300"
+    : reelTitleColor === "coral"
+      ? "text-orange-300"
+      : reelTitleColor === "cyan"
+        ? "text-cyan-300"
+        : reelTitleColor === "lime"
+          ? "text-lime-300"
+          : reelTitleColor === "violet"
+            ? "text-violet-300"
+            : reelTitleColor === "pink"
+              ? "text-pink-300"
+              : reelTitleColor === "red"
+                ? "text-red-400"
+                : reelTitleColor === "blue"
+                  ? "text-blue-400"
+                  : reelTitleColor === "emerald"
+                    ? "text-emerald-300"
+                    : reelTitleColor === "peach"
+                      ? "text-orange-200"
+                      : reelTitleColor === "silver"
+                        ? "text-slate-300"
+            : "text-white";
 
   useEffect(() => {
     if (!videoBlob || fallbackState?.source === videoUrl) return;
@@ -172,12 +220,17 @@ export default function ReelPreview({
             </motion.div>
           </div>
         )}
-        {showPreviewChrome && reelTitle.trim().length > 0 && (
+        {showPreviewChrome &&
+          reelTitle.trim().length > 0 &&
+          !montageInfo &&
+          titleWindow &&
+          currentTimeSeconds >= titleWindow.start &&
+          currentTimeSeconds < titleWindow.end && (
           <div className="absolute inset-x-3 top-20">
             <motion.p
               initial={{ opacity: 0, y: -6 }}
               animate={{ opacity: 1, y: 0 }}
-              className={`text-center leading-tight text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.8)] ${titleFontClass} ${titleSizeClass}`}
+              className={`text-center leading-tight drop-shadow-[0_2px_6px_rgba(0,0,0,0.8)] ${titleColorClass} ${titleFontClass} ${titleSizeClass}`}
             >
               {reelTitle}
             </motion.p>

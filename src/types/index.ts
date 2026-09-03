@@ -63,8 +63,31 @@ export interface CaptionVariant {
   text: string;
 }
 
-export type ReelTitleFont = "cinematic" | "modern" | "classic";
+export type ReelTitleFont =
+  | "cinematic"
+  | "modern"
+  | "classic"
+  | "bold"
+  | "minimal"
+  | "handwritten"
+  | "elegant"
+  | "impact"
+  | "mono"
+  | "rounded";
 export type ReelTitleSize = "sm" | "md" | "lg";
+export type ReelTitleColor =
+  | "white"
+  | "gold"
+  | "coral"
+  | "cyan"
+  | "lime"
+  | "violet"
+  | "pink"
+  | "red"
+  | "blue"
+  | "emerald"
+  | "peach"
+  | "silver";
 
 export interface MusicSuggestion {
   genre: string;

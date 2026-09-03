@@ -2,7 +2,7 @@
 
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile } from "@ffmpeg/util";
-import { BestMoment, ReelStyle, ReelTitleFont, ReelTitleSize } from "@/types";
+import { BestMoment, ReelStyle, ReelTitleColor, ReelTitleFont, ReelTitleSize } from "@/types";
 import { STYLE_RECIPES, StyleRecipe } from "@/data/styleRecipes";
 import { pickTransitionName, randomTransitionDuration, STYLE_TRANSITIONS } from "@/data/transitions";
 
@@ -433,11 +433,19 @@ interface ReelTitleOverlaySettings {
   text: string;
   font: ReelTitleFont;
   size: ReelTitleSize;
+  color: ReelTitleColor;
 }
 
 function canvasFontFamilyForTitle(font: ReelTitleFont): string {
   if (font === "classic") return `Georgia, "Times New Roman", serif`;
   if (font === "modern") return `"Inter", "Arial", "Helvetica Neue", sans-serif`;
+  if (font === "bold") return `"Arial Black", "Inter", "Segoe UI", sans-serif`;
+  if (font === "minimal") return `"Avenir Next", "Inter", "Helvetica Neue", sans-serif`;
+  if (font === "handwritten") return `"Brush Script MT", "Snell Roundhand", "Comic Sans MS", cursive`;
+  if (font === "elegant") return `"Garamond", "Baskerville", Georgia, serif`;
+  if (font === "impact") return `"Impact", "Arial Black", sans-serif`;
+  if (font === "mono") return `"SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace`;
+  if (font === "rounded") return `"Trebuchet MS", "Avenir Next", "Segoe UI", sans-serif`;
   return `"Bodoni MT", "Didot", Georgia, serif`;
 }
 
@@ -445,6 +453,21 @@ function titleSizeScale(size: ReelTitleSize): number {
   if (size === "sm") return 0.06;
   if (size === "lg") return 0.095;
   return 0.078;
+}
+
+function titleColorForCanvas(color: ReelTitleColor): string {
+  if (color === "gold") return "rgba(252,211,77,0.98)";
+  if (color === "coral") return "rgba(253,186,116,0.98)";
+  if (color === "cyan") return "rgba(103,232,249,0.98)";
+  if (color === "lime") return "rgba(190,242,100,0.98)";
+  if (color === "violet") return "rgba(196,181,253,0.98)";
+  if (color === "pink") return "rgba(249,168,212,0.98)";
+  if (color === "red") return "rgba(248,113,113,0.98)";
+  if (color === "blue") return "rgba(96,165,250,0.98)";
+  if (color === "emerald") return "rgba(110,231,183,0.98)";
+  if (color === "peach") return "rgba(254,215,170,0.98)";
+  if (color === "silver") return "rgba(203,213,225,0.98)";
+  return "rgba(255,255,255,0.98)";
 }
 
 async function generateReelTitlePng(frameWidth: number, frameHeight: number, title: ReelTitleOverlaySettings): Promise<Uint8Array> {
@@ -468,7 +491,7 @@ async function generateReelTitlePng(frameWidth: number, frameHeight: number, tit
     ctx.strokeStyle = "rgba(0,0,0,0.52)";
     ctx.lineWidth = Math.max(2, Math.round(fontSize * 0.11));
     ctx.strokeText(line, centerX, y);
-    ctx.fillStyle = "rgba(255,255,255,0.98)";
+    ctx.fillStyle = titleColorForCanvas(title.color);
     ctx.fillText(line, centerX, y);
   });
 
@@ -484,7 +507,7 @@ function planReelTitleWindow(totalDuration: number, introDuration: number, outro
   const endBoundary = Math.max(start, totalDuration - Math.max(0.35, outroDuration + 0.35));
   const available = endBoundary - start;
   if (available < 1.4) return null;
-  const duration = clamp(available * 0.34, 1.6, 3.2);
+  const duration = clamp(available * 0.2, 1.2, 2.2);
   return { start, end: Math.min(endBoundary, start + duration) };
 }
 
