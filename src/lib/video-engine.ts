@@ -5,6 +5,7 @@ import { fetchFile } from "@ffmpeg/util";
 import { BestMoment, ReelStyle, ReelTitleColor, ReelTitleFont, ReelTitleSize } from "@/types";
 import { STYLE_RECIPES, StyleRecipe } from "@/data/styleRecipes";
 import { pickTransitionName, randomTransitionDuration, STYLE_TRANSITIONS } from "@/data/transitions";
+import { detectHardwareAcceleration, buildEncoderArgs, HardwareCodec } from "@/lib/hw-acceleration";
 
 /**
  * Real, in-browser video editing engine powered by ffmpeg.wasm.
@@ -666,8 +667,18 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
   const recipe = STYLE_RECIPES[style];
   const transitionPool = STYLE_TRANSITIONS[style];
   const { w, h } = QUALITY_DIMENSIONS[quality];
-  const finalPreset = renderSpeedProfile === "fast" ? "superfast" : "veryfast";
-  const finalCrf = renderSpeedProfile === "fast" ? "25" : "23";
+  
+  // Detect hardware acceleration and select optimal codec
+  const hwAccelResult = await detectHardwareAcceleration();
+  const selectedCodec: HardwareCodec = hwAccelResult.codec;
+  const encoderArgs = buildEncoderArgs(
+    selectedCodec,
+    renderSpeedProfile === "fast" ? "fast" : "medium",
+    renderSpeedProfile === "fast" ? 25 : 23
+  );
+  // Phase 1 uses more aggressive settings for speed
+  const phase1EncoderArgs = buildEncoderArgs(selectedCodec, "fast", 27);
+  
   const audioSampleRate = 48000;
   const sourceAudioEnabled = videoAudioEnabled ?? files.map(() => true);
   const watermarkLeft = Math.round(w * 0.04);
@@ -693,7 +704,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
 
   mark("start");
   console.group("[video-engine] Render pipeline started");
-  console.log(`Quality: ${quality} | fastMode: ${fastMode} | segments: ${segments.length}`);
+  console.log(`Quality: ${quality} | fastMode: ${fastMode} | codec: ${selectedCodec} | GPU: ${hwAccelResult.isHardwareAccelerated} | segments: ${segments.length}`);
 
   const ffmpeg = await loadFFmpeg();
   mark("ffmpeg-ready");
@@ -877,9 +888,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         "-i", introSourceName,
         "-vf", `fps=${RENDER_FPS},scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setpts=PTS-STARTPTS,format=yuv420p`,
         "-r", String(RENDER_FPS),
-        "-c:v", "libx264",
-        "-preset", finalPreset,
-        "-crf", finalCrf,
+        ...encoderArgs,
         "-pix_fmt", "yuv420p",
         introName,
       ]);
@@ -899,9 +908,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         "-i", outroSourceName,
         "-vf", `fps=${RENDER_FPS},scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setpts=PTS-STARTPTS,format=yuv420p`,
         "-r", String(RENDER_FPS),
-        "-c:v", "libx264",
-        "-preset", finalPreset,
-        "-crf", finalCrf,
+        ...encoderArgs,
         "-pix_fmt", "yuv420p",
         outroName,
       ]);
@@ -937,10 +944,8 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         "-i", inputNames[seg.sourceIndex],
         "-vf", filter,
         "-r", String(RENDER_FPS),
-        "-c:v", "libx264",
+        ...phase1EncoderArgs,
         ...(segmentAudioEnabled ? ["-c:a", "aac", "-b:a", "128k"] : ["-an"]),
-        "-preset", "ultrafast",
-        "-crf", "27",
         "-pix_fmt", "yuv420p",
         clipName,
       ]);
@@ -994,13 +999,8 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
           `fps=${RENDER_FPS},setpts=PTS-STARTPTS,format=yuv420p`,
           "-r",
           String(RENDER_FPS),
-          "-c:v",
-          "libx264",
+          ...encoderArgs,
           "-an",
-          "-preset",
-          finalPreset,
-          "-crf",
-          finalCrf,
           "-pix_fmt",
           "yuv420p",
           outputName,
@@ -1028,13 +1028,8 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         `[${finalLabel}]`,
         "-r",
         String(RENDER_FPS),
-        "-c:v",
-        "libx264",
+        ...encoderArgs,
         ...(sourceAudioEnabled[0] ?? true ? ["-map", "0:a?", "-c:a", "aac", "-b:a", "128k"] : ["-an"]),
-        "-preset",
-        finalPreset,
-        "-crf",
-        finalCrf,
         "-pix_fmt",
         "yuv420p",
         outputName,
@@ -1060,10 +1055,8 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         "-map",
         `[${finalLabel}]`,
         "-r", String(RENDER_FPS),
-        "-c:v", "libx264",
+        ...encoderArgs,
         ...(sourceAudioEnabled[0] ?? true ? ["-map", "0:a?", "-c:a", "aac", "-b:a", "128k"] : ["-an"]),
-        "-preset", finalPreset,
-        "-crf", finalCrf,
         "-pix_fmt", "yuv420p",
         outputName,
       ]);
@@ -1130,9 +1123,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       "-map", `[${finalLabel}]`,
       ...(audioFinalLabel ? ["-map", `[${audioFinalLabel}]`, "-c:a", "aac", "-b:a", "128k"] : ["-an"]),
       "-r", String(RENDER_FPS),
-      "-c:v", "libx264",
-      "-preset", finalPreset,
-      "-crf", finalCrf,
+      ...encoderArgs,
       "-pix_fmt", "yuv420p",
       outputName
     );
