@@ -2,8 +2,11 @@
 
 import { Info, Music2 } from "lucide-react";
 import { MusicSuggestion } from "@/types";
+import { useLocale } from "@/lib/i18n";
 
 export default function MusicSuggestionPanel({ music }: { music: MusicSuggestion }) {
+  const { copy } = useLocale();
+
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
       <div className="flex items-start gap-3">
@@ -21,7 +24,7 @@ export default function MusicSuggestionPanel({ music }: { music: MusicSuggestion
 
       <div className="mt-3 flex items-start gap-1.5 rounded-lg bg-amber-400/10 px-2.5 py-2 text-[11px] text-amber-200/80">
         <Info className="mt-0.5 h-3 w-3 shrink-0" />
-        <span>ClipsyReel suggests the vibe — add this track manually inside Instagram before posting (music licensing stays on Instagram&apos;s side).</span>
+        <span>{copy.music.note}</span>
       </div>
     </div>
   );

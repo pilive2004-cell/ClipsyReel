@@ -5,6 +5,7 @@ import { PLANS } from "@/data/mock";
 import { usePlan } from "@/lib/plan-context";
 import { PlanId } from "@/types";
 import { cn } from "@/lib/utils";
+import { useLocale } from "@/lib/i18n";
 
 interface PlanSelectorProps {
   onChoose?: (planId: PlanId) => void;
@@ -20,11 +21,13 @@ interface PlanSelectorProps {
  */
 export default function PlanSelector({ onChoose }: PlanSelectorProps) {
   const { plan, setPlan } = usePlan();
+  const { copy } = useLocale();
 
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
       {PLANS.map((p) => {
         const isCurrent = plan === p.id;
+        const planCopy = copy.plan(p.id);
         return (
           <div
             key={p.id}
@@ -50,23 +53,23 @@ export default function PlanSelector({ onChoose }: PlanSelectorProps) {
               ) : (
                 <Crown className="h-3.5 w-3.5 text-amber-400" />
               )}
-              <h4 className="text-sm font-semibold text-white/90">{p.name}</h4>
+              <h4 className="text-sm font-semibold text-white/90">{planCopy.name}</h4>
             </div>
-            <p className="mt-0.5 text-[11px] text-white/45">{p.tagline}</p>
+            <p className="mt-0.5 text-[11px] text-white/45">{planCopy.tagline}</p>
 
             <div className="mt-3 flex items-baseline gap-1">
-              <span className="text-2xl font-bold">{p.price === 0 ? "Free" : `€${p.price}`}</span>
+              <span className="text-2xl font-bold">{p.price === 0 ? planCopy.name : `€${p.price}`}</span>
               {p.price > 0 && <span className="text-xs text-white/40">/ month</span>}
             </div>
 
             <ul className="mt-4 flex-1 space-y-2">
-              {p.features.map((f) => (
+              {planCopy.features.map((f) => (
                 <li key={f} className="flex items-start gap-1.5 text-xs text-white/70">
                   <Check className="mt-0.5 h-3 w-3 shrink-0 text-emerald-400" />
                   {f}
                 </li>
               ))}
-              {p.lockedFeatures?.map((f) => (
+              {planCopy.lockedFeatures?.map((f) => (
                 <li key={f} className="flex items-start gap-1.5 text-xs text-white/30 line-through decoration-white/20">
                   <span className="mt-0.5 h-3 w-3 shrink-0 text-center text-[10px]">×</span>
                   {f}
@@ -90,7 +93,7 @@ export default function PlanSelector({ onChoose }: PlanSelectorProps) {
                       : "pro-gradient text-black hover:opacity-90"
               )}
             >
-              {isCurrent ? "Current plan" : p.id === "free" ? "Switch to Free" : `Upgrade to ${p.name}`}
+              {isCurrent ? copy.common.currentPlan : planCopy.cta}
             </button>
           </div>
         );

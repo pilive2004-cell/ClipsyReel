@@ -24,6 +24,7 @@ import { computeRouteStatsFromPoints, parseGpxPointsFromText } from "@/lib/gpx";
 import { matchVideosToRoute } from "@/lib/video-location-matcher";
 import type { GpxRouteStats, GpxTrackPoint, RouteLabel, UploadedVideo } from "@/types";
 import type { PlaceSuggestion, VehicleType, Waypoint } from "@/lib/route-service";
+import { useLocale } from "@/lib/i18n";
 import VideoLocationMatcher from "./gpx/VideoLocationMatcher";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -43,11 +44,11 @@ export interface RouteSourceSelectorProps {
 
 // ─── Vehicle icons ────────────────────────────────────────────────────────────
 
-const VEHICLES: Array<{ id: VehicleType; label: string; Icon: React.ElementType }> = [
-  { id: "car",        label: "Car",        Icon: Car        },
-  { id: "motorcycle", label: "Moto",       Icon: Car        }, // no moto icon in lucide
-  { id: "bicycle",    label: "Bicycle",    Icon: Bike       },
-  { id: "walking",    label: "Walking",    Icon: Footprints },
+const VEHICLES: Array<{ id: VehicleType; Icon: React.ElementType }> = [
+  { id: "car", Icon: Car },
+  { id: "motorcycle", Icon: Car }, // no moto icon in lucide
+  { id: "bicycle", Icon: Bike },
+  { id: "walking", Icon: Footprints },
 ];
 
 // ─── Waypoint input row ───────────────────────────────────────────────────────
@@ -145,6 +146,7 @@ function WaypointInput({
  */
 export default function RouteSourceSelector({ videos, onRouteDataChange, onLockedClick }: RouteSourceSelectorProps) {
   const { isFree } = usePlan();
+  const { copy } = useLocale();
 
   // ── Mode state ───────────────────────────────────────────────────────────────
   const [mode, setMode] = useState<RouteMode>("gpx");
@@ -460,28 +462,26 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
       >
         <div className="pointer-events-none flex h-40 items-center justify-center bg-[radial-gradient(circle_at_top,rgba(16,185,129,0.18),transparent_60%),linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.01))] blur-[1px] grayscale-[0.1] opacity-80">
           <div className="w-full max-w-[320px] rounded-2xl border border-white/10 bg-black/25 px-4 py-3 text-center">
-            <p className="text-sm font-semibold text-white/85">GPX import & route planner</p>
-            <p className="mt-1 text-[11px] text-white/45">Upload a GPX file or plan a route from cities.</p>
+            <p className="text-sm font-semibold text-white/85">{copy.route.modeTitle}</p>
+            <p className="mt-1 text-[11px] text-white/45">{copy.route.modeDescription}</p>
             <div className="mt-3 grid grid-cols-2 gap-2">
               <div className="flex items-center justify-center gap-1.5 rounded-xl border border-white/8 bg-white/[0.05] px-3 py-2 text-[11px] font-semibold text-white/60">
                 <FileUp className="h-3.5 w-3.5" />
-                Import GPX
+                {copy.route.import}
               </div>
               <div className="flex items-center justify-center gap-1.5 rounded-xl border border-white/8 bg-white/[0.05] px-3 py-2 text-[11px] font-semibold text-white/60">
                 <Route className="h-3.5 w-3.5" />
-                Plan route
+                {copy.route.plan}
               </div>
             </div>
           </div>
         </div>
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-black/55 px-4 text-center">
           <span className="flex items-center gap-1 rounded-full bg-amber-400/15 px-2.5 py-1 text-[10px] font-semibold text-amber-300">
-            <Lock className="h-3 w-3" /> PRO FEATURE
+            <Lock className="h-3 w-3" /> {copy.route.proBadge}
           </span>
-          <p className="text-xs font-medium text-white/85">GPX import & route planner</p>
-          <p className="max-w-[240px] text-[11px] leading-relaxed text-white/50">
-            Upload a GPX file or plan a route from cities with Creator Pro.
-          </p>
+          <p className="text-xs font-medium text-white/85">{copy.route.proCardTitle}</p>
+          <p className="max-w-[240px] text-[11px] leading-relaxed text-white/50">{copy.route.proCardDescription}</p>
         </div>
       </button>
     );
@@ -511,10 +511,10 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
       {/* Mode tabs */}
       <div className="flex gap-1 rounded-xl border border-white/8 bg-white/[0.03] p-1">
         <TabBtn active={mode === "gpx"} onClick={() => onModeChange("gpx")} icon={<FileUp className="h-3.5 w-3.5" />}>
-          Import GPX
+          {copy.route.gpxTab}
         </TabBtn>
         <TabBtn active={mode === "locations"} onClick={() => onModeChange("locations")} icon={<Route className="h-3.5 w-3.5" />}>
-          Plan route
+          {copy.route.plannerTab}
         </TabBtn>
       </div>
 
@@ -640,6 +640,7 @@ function GpxModePanel({
   gpxText, gpxFileName, gpxInputRef,
   routeMatch, onFileChange, onClear, labelsEditor,
 }: GpxModePanelProps) {
+  const { copy } = useLocale();
   if (gpxText) {
     return (
       <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
@@ -656,10 +657,8 @@ function GpxModePanel({
           </button>
         </div>
         <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-4">
-        <p className="text-sm font-medium text-white/85">Route imported</p>
-        <p className="mt-1 text-xs leading-relaxed text-white/45">
-          Verified place names are prepared for the cinematic map intro. Only the route, marker and labels are kept visually prominent.
-        </p>
+        <p className="text-sm font-medium text-white/85">{copy.route.gpxSelected}</p>
+        <p className="mt-1 text-xs leading-relaxed text-white/45">{copy.route.modeDescription}</p>
         </div>
         {routeMatch.warning && (
         <div className="mt-3 flex items-start gap-2 rounded-xl border border-amber-400/25 bg-amber-400/[0.08] px-3 py-2 text-[11px] text-amber-200">
@@ -693,11 +692,8 @@ function GpxModePanel({
           <Map className="h-4.5 w-4.5 text-emerald-300" />
         </div>
         <div>
-          <p className="text-sm font-medium text-white/85">Import a GPX file</p>
-          <p className="mt-0.5 text-[11px] leading-relaxed text-white/45">
-            Upload the .gpx file from your ride, hike or road trip — ClipsyReel verifies places and
-            plots the route on a clean cinematic map with your video locations.
-          </p>
+          <p className="text-sm font-medium text-white/85">{copy.route.import}</p>
+          <p className="mt-0.5 text-[11px] leading-relaxed text-white/45">{copy.route.gpxHint}</p>
         </div>
       </button>
     </div>
@@ -749,12 +745,13 @@ function LocationModePanel({
   onAddStop, onRemoveStop, onVehicleChange,
   onGenerate, onClearRoute, onDownloadGpx, labelsEditor,
 }: LocationModePanelProps) {
+  const { copy } = useLocale();
 
   return (
     <div className="space-y-3">
       {/* Vehicle selector */}
       <div className="flex gap-1.5">
-        {VEHICLES.map(({ id, label, Icon }) => (
+        {VEHICLES.map(({ id, Icon }) => (
           <button
             key={id}
             type="button"
@@ -766,7 +763,7 @@ function LocationModePanel({
             }`}
           >
             <Icon className="h-4 w-4" />
-            {label}
+          {copy.route.vehicleLabels[id]}
           </button>
         ))}
       </div>
@@ -775,7 +772,7 @@ function LocationModePanel({
       <div className="space-y-2">
         <WaypointInput
           value={departure}
-          placeholder="Departure city or address"
+          placeholder={copy.route.departure}
           status={depStatus}
           suggestions={depSuggestions}
           selectedMeta={depMeta}
@@ -787,7 +784,7 @@ function LocationModePanel({
           <WaypointInput
             key={i}
             value={stop}
-            placeholder={`Stop ${i + 1}`}
+            placeholder={`${copy.route.stops} ${i + 1}`}
             status={stopStatuses[i] ?? "idle"}
             suggestions={stopSuggestions[i] ?? []}
             selectedMeta={stopMeta[i] ?? null}
@@ -800,7 +797,7 @@ function LocationModePanel({
 
         <WaypointInput
           value={destination}
-          placeholder="Destination city or address"
+          placeholder={copy.route.destination}
           status={destStatus}
           suggestions={destSuggestions}
           selectedMeta={destMeta}
@@ -814,7 +811,7 @@ function LocationModePanel({
             onClick={onAddStop}
             className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-white/10 py-2 text-[11px] text-white/40 transition hover:border-white/20 hover:text-white/60"
           >
-            <Plus className="h-3.5 w-3.5" /> Add a stop
+            <Plus className="h-3.5 w-3.5" /> {copy.route.addStop}
           </button>
         )}
       </div>
@@ -828,9 +825,9 @@ function LocationModePanel({
           className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500/15 border border-emerald-400/25 py-2.5 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {routeGenStatus === "loading" ? (
-            <><Loader2 className="h-4 w-4 animate-spin" /> Calculating route…</>
+            <><Loader2 className="h-4 w-4 animate-spin" /> {copy.route.generating}</>
           ) : (
-            <><Route className="h-4 w-4" /> Generate route</>
+            <><Route className="h-4 w-4" /> {copy.route.generate}</>
           )}
         </button>
       )}
@@ -847,13 +844,13 @@ function LocationModePanel({
         <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4 space-y-3">
           <div className="flex items-center justify-between">
             <p className="text-xs font-medium text-emerald-300 flex items-center gap-1.5">
-              <Route className="h-3.5 w-3.5" /> Route ready
+              <Route className="h-3.5 w-3.5" /> {copy.route.routeStats}
             </p>
             <div className="flex gap-1.5">
               <button
                 type="button"
                 onClick={onDownloadGpx}
-                title="Download as GPX"
+                title={copy.route.import}
                 className="flex h-6 w-6 items-center justify-center rounded-full bg-white/5 text-white/50 hover:bg-white/10 hover:text-white"
               >
                 <Download className="h-3 w-3" />
@@ -869,10 +866,8 @@ function LocationModePanel({
           </div>
 
           <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-4">
-            <p className="text-sm font-medium text-white/85">Route ready</p>
-            <p className="mt-1 text-xs leading-relaxed text-white/45">
-              The generated route is verified and ready for the map intro. Use the city list below to confirm each displayed place.
-            </p>
+            <p className="text-sm font-medium text-white/85">{copy.route.routeStats}</p>
+            <p className="mt-1 text-xs leading-relaxed text-white/45">{copy.route.description}</p>
           </div>
 
           {routeMatch.warning && (

@@ -1,8 +1,10 @@
 "use client";
 
+import type { CSSProperties } from "react";
 import { useState } from "react";
 import { Type } from "lucide-react";
 import { ReelTitleColor, ReelTitleFont, ReelTitleSize } from "@/types";
+import { useLocale } from "@/lib/i18n";
 
 interface ReelNamePanelProps {
   reelTitle: string;
@@ -26,6 +28,7 @@ export default function ReelNamePanel({
   onChangeReelTitleColor,
 }: ReelNamePanelProps) {
   const [colorMenuOpen, setColorMenuOpen] = useState(false);
+  const { copy } = useLocale();
   const colorOptions: { value: ReelTitleColor; swatchClass: string }[] = [
     { value: "white", swatchClass: "bg-white" },
     { value: "gold", swatchClass: "bg-amber-300" },
@@ -40,100 +43,100 @@ export default function ReelNamePanel({
     { value: "peach", swatchClass: "bg-orange-200" },
     { value: "silver", swatchClass: "bg-slate-300" },
   ];
-  const previewText = reelTitle.trim() || "My next adventure";
-  const titleFontClass = reelTitleFont === "classic"
-    ? "font-serif"
-    : reelTitleFont === "modern"
-      ? "font-sans tracking-wide"
-      : reelTitleFont === "bold"
-        ? "font-sans font-black tracking-tight"
-        : reelTitleFont === "minimal"
-          ? "font-sans font-light tracking-[0.12em]"
-          : reelTitleFont === "handwritten"
-            ? "font-serif italic tracking-[0.02em]"
-            : reelTitleFont === "elegant"
-              ? "font-serif font-medium tracking-[0.06em]"
-              : reelTitleFont === "impact"
-                ? "font-sans font-extrabold uppercase tracking-tight"
-                : reelTitleFont === "mono"
-                  ? "font-mono tracking-[0.08em]"
-                  : reelTitleFont === "rounded"
-                    ? "font-sans font-semibold tracking-[0.04em]"
-            : "font-serif italic tracking-[0.08em]";
-  const titleSizeClass = reelTitleSize === "sm"
-    ? "text-base"
-    : reelTitleSize === "lg"
-      ? "text-2xl"
-      : "text-xl";
-  const titleColorClass = reelTitleColor === "gold"
-    ? "text-amber-300"
-    : reelTitleColor === "coral"
-      ? "text-orange-300"
-      : reelTitleColor === "cyan"
-        ? "text-cyan-300"
-        : reelTitleColor === "lime"
-          ? "text-lime-300"
-          : reelTitleColor === "violet"
-            ? "text-violet-300"
-            : reelTitleColor === "pink"
-              ? "text-pink-300"
-              : reelTitleColor === "red"
-                ? "text-red-400"
-                : reelTitleColor === "blue"
-                  ? "text-blue-400"
-                  : reelTitleColor === "emerald"
-                    ? "text-emerald-300"
-                    : reelTitleColor === "peach"
-                      ? "text-orange-200"
-                      : reelTitleColor === "silver"
-                        ? "text-slate-300"
-            : "text-white";
   const selectedColorSwatch = colorOptions.find((option) => option.value === reelTitleColor)?.swatchClass ?? "bg-white";
+  const previewTextColor = reelTitleColor === "gold"
+    ? "#fcd34d"
+    : reelTitleColor === "coral"
+      ? "#fdba74"
+      : reelTitleColor === "cyan"
+        ? "#67e8f9"
+        : reelTitleColor === "lime"
+          ? "#bef264"
+          : reelTitleColor === "violet"
+            ? "#c4b5fd"
+            : reelTitleColor === "pink"
+              ? "#f9a8d4"
+              : reelTitleColor === "red"
+                ? "#f87171"
+                : reelTitleColor === "blue"
+                  ? "#60a5fa"
+                  : reelTitleColor === "emerald"
+                    ? "#6ee7b7"
+                    : reelTitleColor === "peach"
+                      ? "#fed7aa"
+                      : reelTitleColor === "silver"
+                        ? "#cbd5e1"
+                      : "#ffffff";
+  const previewFontFamily = reelTitleFont === "classic"
+    ? `Georgia, "Times New Roman", serif`
+    : reelTitleFont === "modern"
+      ? `"Inter", "Arial", "Helvetica Neue", sans-serif`
+      : reelTitleFont === "bold"
+        ? `"Arial Black", "Inter", "Segoe UI", sans-serif`
+        : reelTitleFont === "minimal"
+          ? `"Avenir Next", "Inter", "Helvetica Neue", sans-serif`
+          : reelTitleFont === "handwritten"
+            ? `"Brush Script MT", "Snell Roundhand", "Comic Sans MS", cursive`
+            : reelTitleFont === "elegant"
+              ? `"Garamond", "Baskerville", Georgia, serif`
+              : reelTitleFont === "impact"
+                ? `"Impact", "Arial Black", sans-serif`
+                : reelTitleFont === "mono"
+                  ? `"SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace`
+                  : reelTitleFont === "rounded"
+                    ? `"Trebuchet MS", "Avenir Next", "Segoe UI", sans-serif`
+                    : `"Bodoni MT", "Didot", Georgia, serif`;
+  const previewFontStyle = reelTitleFont === "handwritten" || reelTitleFont === "elegant" || reelTitleFont === "cinematic" ? "italic" : "normal";
+  const previewFontWeight = reelTitleFont === "bold" || reelTitleFont === "impact" ? 800 : 600;
+  const previewLetterSpacing = reelTitleFont === "impact"
+    ? "-0.03em"
+    : reelTitleFont === "mono"
+      ? "0.06em"
+      : reelTitleFont === "minimal"
+        ? "0.12em"
+        : "0.02em";
+  const previewTextTransform = reelTitleFont === "impact" ? "uppercase" : "none";
+  const previewFontSize = reelTitleSize === "sm" ? "1rem" : reelTitleSize === "lg" ? "1.45rem" : "1.2rem";
 
   return (
     <div className="space-y-4">
       <div className="space-y-2 rounded-xl border border-white/10 bg-white/[0.02] p-3">
         <div className="grid grid-cols-3 gap-2">
           <label className="space-y-1 text-[11px] text-white/45">
-            <span>Typography</span>
+            <span>{copy.reelName.typography}</span>
             <select
               value={reelTitleFont}
               onChange={(e) => onChangeReelTitleFont(e.target.value as ReelTitleFont)}
               className="w-full rounded-lg border border-white/10 bg-black/30 px-2 py-1.5 text-xs text-white/85"
             >
-              <option value="cinematic">Cinematic</option>
-              <option value="modern">Modern</option>
-              <option value="classic">Classic</option>
-              <option value="bold">Bold</option>
-              <option value="minimal">Minimal</option>
-              <option value="handwritten">Handwritten</option>
-              <option value="elegant">Elegant</option>
-              <option value="impact">Impact</option>
-              <option value="mono">Mono</option>
-              <option value="rounded">Rounded</option>
+              {Object.entries(copy.reelName.fontOptions).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
             </select>
           </label>
           <label className="space-y-1 text-[11px] text-white/45">
-            <span>Letter size</span>
+            <span>{copy.reelName.letterSize}</span>
             <select
               value={reelTitleSize}
               onChange={(e) => onChangeReelTitleSize(e.target.value as ReelTitleSize)}
               className="w-full rounded-lg border border-white/10 bg-black/30 px-2 py-1.5 text-xs text-white/85"
             >
-              <option value="sm">Small</option>
-              <option value="md">Medium</option>
-              <option value="lg">Large</option>
+              <option value="sm">{copy.reelName.sizeOptions.sm}</option>
+              <option value="md">{copy.reelName.sizeOptions.md}</option>
+              <option value="lg">{copy.reelName.sizeOptions.lg}</option>
             </select>
           </label>
           <div className="relative space-y-1 text-[11px] text-white/45">
-            <span>Color</span>
+            <span>{copy.reelName.color}</span>
             <button
               type="button"
               onClick={() => setColorMenuOpen((current) => !current)}
               className="flex w-full items-center justify-between rounded-lg border border-white/10 bg-black/30 px-2 py-1.5 text-xs text-white/85"
               aria-haspopup="listbox"
               aria-expanded={colorMenuOpen}
-              aria-label="Choisir une couleur"
+              aria-label={copy.reelName.color}
             >
               <span className="inline-flex items-center gap-2">
                 <span className={`h-3.5 w-3.5 rounded-full border border-white/30 ${selectedColorSwatch}`} />
@@ -157,7 +160,7 @@ export default function ReelNamePanel({
                           isActive ? "border-white ring-2 ring-white/60" : "border-white/20 hover:border-white/40"
                         }`}
                         title={option.value}
-                        aria-label={`Choisir la couleur ${option.value}`}
+                        aria-label={`${copy.reelName.color} ${option.value}`}
                         aria-pressed={isActive}
                       />
                     );
@@ -172,21 +175,26 @@ export default function ReelNamePanel({
       <div className="rounded-xl border border-white/10 bg-black/30 px-4 py-4">
         <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-white/40">
           <Type className="h-3 w-3" />
-          Live preview
+          {copy.reelName.livePreview}
         </div>
         <input
           value={reelTitle}
           onChange={(e) => onChangeReelTitle(e.target.value)}
           maxLength={60}
-          placeholder="Tape ton texte ici"
-          className={`w-full bg-transparent text-center leading-tight drop-shadow-[0_2px_6px_rgba(0,0,0,0.8)] placeholder:text-white/30 focus:outline-none ${titleColorClass} ${titleFontClass} ${titleSizeClass}`}
-          aria-label="Reel title live preview input"
+          placeholder={copy.reelName.placeholder}
+          className="w-full rounded-lg border border-white/10 bg-black/20 px-4 py-5 text-center leading-tight placeholder:text-white/30 focus:border-white/20 focus:outline-none"
+          style={{
+            fontFamily: previewFontFamily,
+            fontStyle: previewFontStyle,
+            fontWeight: previewFontWeight,
+            letterSpacing: previewLetterSpacing,
+            textTransform: previewTextTransform as CSSProperties["textTransform"],
+            fontSize: previewFontSize,
+            color: previewTextColor,
+            WebkitTextFillColor: previewTextColor,
+          }}
+          aria-label={copy.reelName.title}
         />
-        {!reelTitle.trim() && (
-          <p className={`mt-1 text-center leading-tight opacity-60 drop-shadow-[0_2px_6px_rgba(0,0,0,0.8)] ${titleColorClass} ${titleFontClass} ${titleSizeClass}`}>
-            {previewText}
-          </p>
-        )}
       </div>
     </div>
   );

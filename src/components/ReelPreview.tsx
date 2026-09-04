@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import { Clapperboard, Film } from "lucide-react";
 import { BestMoment, ReelStyle, ReelTitleColor, ReelTitleFont, ReelTitleSize } from "@/types";
 import { STYLES } from "@/data/mock";
+import { useLocale } from "@/lib/i18n";
 
 interface ReelPreviewProps {
   videoUrl: string;
@@ -46,6 +47,7 @@ export default function ReelPreview({
   outroDurationSeconds = 0,
   montageInfo,
 }: ReelPreviewProps) {
+  const { copy } = useLocale();
   const HOOK_FADE_IN_SECONDS = 0.72;
   const HOOK_HOLD_SECONDS = 2.35;
   const HOOK_FADE_OUT_SECONDS = 0.72;
@@ -156,7 +158,6 @@ export default function ReelPreview({
     }
     const elapsedSinceMontageStart = Math.max(0, currentTimeSeconds - montageWindow.start);
     const cyclePosition = elapsedSinceMontageStart % HOOK_CYCLE_SECONDS;
-    const holdStart = HOOK_FADE_IN_SECONDS;
     const fadeOutStart = HOOK_FADE_IN_SECONDS + HOOK_HOLD_SECONDS;
     let opacity = 0;
     if (cyclePosition < HOOK_FADE_IN_SECONDS) {
@@ -288,12 +289,12 @@ export default function ReelPreview({
         />
         {loadState === "loading" && (
           <div className="absolute inset-0 flex items-center justify-center bg-black text-[11px] font-medium text-white/45">
-            Loading reel preview…
+            {copy.preview.readyAlt}
           </div>
         )}
         {loadState === "error" && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/90 px-5 text-center text-[11px] font-medium text-white/55">
-            Preview failed to load on this pass. Download the MP4 or regenerate the Reel.
+            {copy.render.error}
           </div>
         )}
 
@@ -442,7 +443,7 @@ export default function ReelPreview({
       {montageInfo && (
         <div className="flex items-center gap-1.5 text-[11px] text-white/40">
           <Film className="h-3 w-3" />
-          Real edit · {montageInfo.clipCount} clips cross-faded · {montageInfo.durationSeconds.toFixed(1)}s
+        {copy.preview.ready} · {montageInfo.clipCount} clips cross-faded · {montageInfo.durationSeconds.toFixed(1)}s
         </div>
       )}
 

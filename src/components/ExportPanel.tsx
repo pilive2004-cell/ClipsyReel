@@ -4,6 +4,7 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import { Download, Layers, Lock, ShieldCheck, Sparkles } from "lucide-react";
 import { usePlan } from "@/lib/plan-context";
+import { useLocale } from "@/lib/i18n";
 
 interface ExportPanelProps {
   videoUrl: string;
@@ -23,6 +24,7 @@ interface ExportPanelProps {
  */
 export default function ExportPanel({ videoUrl, videoName, onLockedClick }: ExportPanelProps) {
   const { plan, isFree } = usePlan();
+  const { copy } = useLocale();
   const [isExporting, setIsExporting] = useState(false);
   const [done, setDone] = useState(false);
 
@@ -47,7 +49,7 @@ export default function ExportPanel({ videoUrl, videoName, onLockedClick }: Expo
       <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-3">
         <div className="flex items-center gap-2 text-xs text-white/70">
           <Sparkles className="h-3.5 w-3.5 text-fuchsia-400" />
-          Export quality
+          {copy.export.quality}
         </div>
         <span className="text-xs font-semibold text-white/90">{quality}</span>
       </div>
@@ -55,10 +57,10 @@ export default function ExportPanel({ videoUrl, videoName, onLockedClick }: Expo
       <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-3">
         <div className="flex items-center gap-2 text-xs text-white/70">
           <ShieldCheck className="h-3.5 w-3.5 text-fuchsia-400" />
-          Watermark
+          {copy.export.watermark}
         </div>
         <span className={isFree ? "text-xs font-semibold text-amber-300" : "text-xs font-semibold text-emerald-400"}>
-          {isFree ? "Visible on export" : "Removed"}
+          {isFree ? copy.export.visible : copy.export.removed}
         </span>
       </div>
 
@@ -69,10 +71,10 @@ export default function ExportPanel({ videoUrl, videoName, onLockedClick }: Expo
       >
         <div className="flex items-center gap-2 text-xs text-white/60">
           <Layers className="h-3.5 w-3.5" />
-          Batch export multiple Reels
+          {copy.export.batch}
         </div>
         {plan === "business" ? (
-          <span className="text-[10px] font-semibold text-emerald-400">Coming soon</span>
+          <span className="text-[10px] font-semibold text-emerald-400">{copy.export.comingSoon}</span>
         ) : (
           <span className="flex items-center gap-1 rounded-full bg-amber-400/15 px-2 py-1 text-[10px] font-semibold text-amber-300">
             <Lock className="h-3 w-3" /> Business
@@ -92,12 +94,12 @@ export default function ExportPanel({ videoUrl, videoName, onLockedClick }: Expo
         ) : (
           <Download className="h-4 w-4" />
         )}
-        {isExporting ? "Rendering your Reel…" : "Download MP4"}
+        {isExporting ? copy.export.rendering : copy.export.download}
       </button>
 
       {done && (
         <p className="text-center text-[11px] text-emerald-400">
-          Your Reel is ready — remember to add it to Instagram manually 🎉
+          {copy.export.done}
         </p>
       )}
 
@@ -106,7 +108,7 @@ export default function ExportPanel({ videoUrl, videoName, onLockedClick }: Expo
           onClick={onLockedClick}
           className="w-full text-center text-[11px] font-medium text-white/40 underline decoration-white/20 underline-offset-2 hover:text-white/65"
         >
-          Remove the watermark with Creator Pro
+          {copy.export.removeWatermark}
         </button>
       )}
     </div>

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Zap, BarChart3, AlertCircle } from "lucide-react";
+import { useLocale } from "@/lib/i18n";
 
 interface RenderMetrics {
   totalDurationMs: number;
@@ -26,6 +27,7 @@ export default function RenderDiagnosticsPanel({
   onQualityChange,
 }: RenderDiagnosticsPanelProps) {
   const [expandedBottleneck, setExpandedBottleneck] = useState<string | null>(null);
+  const { copy } = useLocale();
 
   if (!metrics) {
     return null;
@@ -46,26 +48,26 @@ export default function RenderDiagnosticsPanel({
       {/* Header */}
       <div className="flex items-center gap-2">
         <BarChart3 className="h-4 w-4 text-blue-300" />
-        <h3 className="text-sm font-semibold text-blue-100">Render Diagnostics</h3>
+        <h3 className="text-sm font-semibold text-blue-100">{copy.diagnostics.title}</h3>
       </div>
 
       {/* Main Metrics Grid */}
       <div className="grid grid-cols-2 gap-2 text-xs">
         <div className="rounded-lg bg-black/30 p-2">
-          <p className="text-white/50">Total Time</p>
+          <p className="text-white/50">{copy.diagnostics.totalTime}</p>
           <p className="text-lg font-bold text-white">{totalTime.toFixed(1)}s</p>
         </div>
         <div className="rounded-lg bg-black/30 p-2">
-          <p className="text-white/50">Hardware</p>
+          <p className="text-white/50">{copy.diagnostics.hardware}</p>
           <p className="text-sm font-semibold text-blue-200">{metrics.hardwareCodec}</p>
         </div>
         <div className="rounded-lg bg-black/30 p-2">
-          <p className="text-white/50">Phase 1 (Cuts)</p>
+          <p className="text-white/50">{copy.diagnostics.phase1}</p>
           <p className="text-lg font-bold text-white">{phase1Time.toFixed(1)}s</p>
           <p className="text-[10px] text-white/40">{timePerSegment.toFixed(1)}s/segment</p>
         </div>
         <div className="rounded-lg bg-black/30 p-2">
-          <p className="text-white/50">Phase 2 (Compose)</p>
+          <p className="text-white/50">{copy.diagnostics.phase2}</p>
           <p className="text-lg font-bold text-white">{phase2Time.toFixed(1)}s</p>
         </div>
       </div>
@@ -73,7 +75,7 @@ export default function RenderDiagnosticsPanel({
       {/* Performance Score */}
       <div className="space-y-1 rounded-lg bg-black/30 p-2">
         <div className="flex items-center justify-between">
-          <p className="text-xs font-semibold text-white">Performance Score</p>
+          <p className="text-xs font-semibold text-white">{copy.diagnostics.performance}</p>
           <p className="text-sm font-bold text-blue-200">{overallScore.toFixed(0)}/100</p>
         </div>
         <div className="h-2 overflow-hidden rounded-full bg-black/50">
@@ -92,14 +94,14 @@ export default function RenderDiagnosticsPanel({
       >
         <Zap className={`h-3.5 w-3.5 ${metrics.gpuAvailable ? "text-emerald-400" : "text-orange-400"}`} />
         <span className={metrics.gpuAvailable ? "text-emerald-200" : "text-orange-200"}>
-          {metrics.gpuAvailable ? "GPU Acceleration Active" : "CPU Mode (consider upgrading GPU for faster renders)"}
+          {metrics.gpuAvailable ? copy.diagnostics.gpuOn : copy.diagnostics.cpuMode}
         </span>
       </div>
 
       {/* Bottlenecks */}
       {metrics.bottlenecks.length > 0 && (
         <div className="space-y-1">
-          <p className="text-xs font-semibold text-white/70">Bottlenecks Detected</p>
+          <p className="text-xs font-semibold text-white/70">{copy.diagnostics.bottlenecks}</p>
           <div className="space-y-1">
             {metrics.bottlenecks.map((bottleneck, idx) => (
               <button
@@ -115,10 +117,10 @@ export default function RenderDiagnosticsPanel({
                 {expandedBottleneck === bottleneck && (
                   <p className="mt-1 pl-5 text-[10px] text-white/50">
                     {bottleneck.includes("Ken Burns")
-                      ? "Disable Ken Burns zoom in preview mode to render 30% faster"
+                      ? copy.diagnostics.kenBurns
                       : bottleneck.includes("GPU")
-                        ? "Install NVIDIA drivers or upgrade GPU for hardware acceleration"
-                        : "Consider using preview quality mode for faster feedback"}
+                        ? copy.diagnostics.gpuAdvice
+                        : copy.diagnostics.previewAdvice}
                   </p>
                 )}
               </button>
@@ -130,7 +132,7 @@ export default function RenderDiagnosticsPanel({
       {/* Recommendations */}
       {metrics.recommendations.length > 0 && (
         <div className="space-y-1">
-          <p className="text-xs font-semibold text-white/70">Suggestions</p>
+          <p className="text-xs font-semibold text-white/70">{copy.diagnostics.suggestions}</p>
           <ul className="space-y-1 text-[10px] text-white/60">
             {metrics.recommendations.map((rec, idx) => (
               <li key={idx} className="flex gap-2 rounded bg-white/5 p-1.5">
@@ -145,7 +147,7 @@ export default function RenderDiagnosticsPanel({
       {/* Quality Selector */}
       {onQualityChange && (
         <div className="space-y-1 border-t border-white/10 pt-2">
-          <p className="text-xs font-semibold text-white/70">Render Quality</p>
+          <p className="text-xs font-semibold text-white/70">{copy.diagnostics.quality}</p>
           <div className="grid grid-cols-3 gap-1">
             {(["preview", "standard", "premium"] as const).map((quality) => (
               <button
@@ -157,9 +159,9 @@ export default function RenderDiagnosticsPanel({
                     : "border border-white/20 text-white/60 hover:border-white/40"
                 }`}
               >
-                {quality === "preview" && "🚀 Fast"}
-                {quality === "standard" && "✨ Std"}
-                {quality === "premium" && "👑 Max"}
+                {quality === "preview" && copy.diagnostics.fast}
+                {quality === "standard" && copy.diagnostics.standard}
+                {quality === "premium" && copy.diagnostics.premium}
               </button>
             ))}
           </div>

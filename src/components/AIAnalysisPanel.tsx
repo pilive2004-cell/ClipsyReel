@@ -3,9 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { CheckCircle2, Loader2, Sparkles } from "lucide-react";
-import { ANALYSIS_STEPS } from "@/data/mock";
 import { analyzeAllVideos } from "@/lib/video-analysis";
 import { BestMoment, UploadedVideo } from "@/types";
+import { useLocale } from "@/lib/i18n";
 
 interface AIAnalysisPanelProps {
   videos: UploadedVideo[];
@@ -34,6 +34,7 @@ interface AIAnalysisPanelProps {
 export default function AIAnalysisPanel({ videos, onComplete }: AIAnalysisPanelProps) {
   const [progress, setProgress] = useState(0);
   const onCompleteRef = useRef(onComplete);
+  const { copy } = useLocale();
   useEffect(() => {
     onCompleteRef.current = onComplete;
   }, [onComplete]);
@@ -71,7 +72,8 @@ export default function AIAnalysisPanel({ videos, onComplete }: AIAnalysisPanelP
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const stepIndex = Math.min(ANALYSIS_STEPS.length - 1, Math.floor(progress * ANALYSIS_STEPS.length));
+  const analysisSteps = copy.analysisSteps;
+  const stepIndex = Math.min(analysisSteps.length - 1, Math.floor(progress * analysisSteps.length));
   const progressPct = Math.round(progress * 100);
 
   return (
@@ -92,8 +94,8 @@ export default function AIAnalysisPanel({ videos, onComplete }: AIAnalysisPanelP
       </div>
 
       <div>
-        <p className="text-base font-semibold text-white/90">Analyzing your video{videos.length > 1 ? "s" : ""}…</p>
-        <p className="mt-1 text-xs text-white/45">Scanning real frames for motion, sharpness & exposure</p>
+        <p className="text-base font-semibold text-white/90">{copy.analysis.title}…</p>
+        <p className="mt-1 text-xs text-white/45">{copy.analysis.description}</p>
       </div>
 
       <div className="w-full max-w-xs">
@@ -107,7 +109,7 @@ export default function AIAnalysisPanel({ videos, onComplete }: AIAnalysisPanelP
       </div>
 
       <ul className="w-full max-w-xs space-y-2.5 text-left">
-        {ANALYSIS_STEPS.map((step, i) => {
+        {analysisSteps.map((step, i) => {
           const isDone = i < stepIndex;
           const isActive = i === stepIndex;
           return (

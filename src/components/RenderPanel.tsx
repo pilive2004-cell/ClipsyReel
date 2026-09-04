@@ -3,6 +3,7 @@
 import { motion } from "framer-motion";
 import { Clapperboard } from "lucide-react";
 import FunProgressBar from "@/components/FunProgressBar";
+import { useLocale } from "@/lib/i18n";
 
 interface RenderPanelProps {
   /** 0-1 progress. `null` while the ffmpeg.wasm engine itself is still downloading/booting. */
@@ -10,15 +11,6 @@ interface RenderPanelProps {
   phaseLabel: string;
   styleLabel: string;
 }
-
-const FUN_MESSAGES = [
-  "Warming up the engines 🚀",
-  "Cutting your best moments ✂️",
-  "Adding cinematic zoom 🔍",
-  "Cross-fading your clips 🎞️",
-  "Sprinkling some movie magic ✨",
-  "Almost ready to launch 🎬",
-];
 
 /**
  * Shown while the real ffmpeg.wasm montage (cuts + Ken Burns zoom + transitions)
@@ -29,6 +21,7 @@ const FUN_MESSAGES = [
  * rotating captions keep the wait feeling fun instead of dead time.
  */
 export default function RenderPanel({ progress, phaseLabel, styleLabel }: RenderPanelProps) {
+  const { copy } = useLocale();
   return (
     <div className="flex flex-col items-center gap-6 rounded-3xl border border-white/10 glass-card px-5 py-10 text-center">
       <div className="relative flex h-20 w-20 items-center justify-center">
@@ -47,15 +40,13 @@ export default function RenderPanel({ progress, phaseLabel, styleLabel }: Render
       </div>
 
       <div>
-        <p className="text-base font-semibold text-white/90">Editing your {styleLabel} montage…</p>
+        <p className="text-base font-semibold text-white/90">{copy.render.editing.replace("{style}", styleLabel)}</p>
         <p className="mt-1 text-xs text-white/45">{phaseLabel}</p>
       </div>
 
-      <FunProgressBar progress={progress} messages={FUN_MESSAGES} />
+      <FunProgressBar progress={progress} messages={copy.renderMessages} />
 
-      <p className="max-w-[220px] text-[11px] leading-relaxed text-white/35">
-        Real cuts, zoom and transitions are being rendered on your device — no upload to a server needed.
-      </p>
+      <p className="max-w-[220px] text-[11px] leading-relaxed text-white/35">{copy.renderNote}</p>
     </div>
   );
 }

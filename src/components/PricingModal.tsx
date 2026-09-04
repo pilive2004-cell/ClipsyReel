@@ -3,6 +3,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { X } from "lucide-react";
 import PlanSelector from "./PlanSelector";
+import { useLocale } from "@/lib/i18n";
 
 interface PricingModalProps {
   open: boolean;
@@ -10,6 +11,8 @@ interface PricingModalProps {
 }
 
 export default function PricingModal({ open, onClose }: PricingModalProps) {
+  const { copy } = useLocale();
+
   return (
     <AnimatePresence>
       {open && (
@@ -30,8 +33,8 @@ export default function PricingModal({ open, onClose }: PricingModalProps) {
           >
             <div className="mb-4 flex items-center justify-between">
               <div>
-                <h2 className="text-lg font-bold">Unlock ClipsyReel Pro</h2>
-                <p className="text-xs text-white/45">Create more, faster, without the watermark.</p>
+                <h2 className="text-lg font-bold">{copy.pricing.title}</h2>
+                <p className="text-xs text-white/45">{copy.pricing.subtitle}</p>
               </div>
               <button
                 onClick={onClose}
@@ -44,7 +47,7 @@ export default function PricingModal({ open, onClose }: PricingModalProps) {
             <PlanSelector onChoose={() => onClose()} />
 
             <p className="mt-4 text-center text-[10px] text-white/30">
-              Cancel anytime. Prices shown in EUR. Payments are simulated in this MVP — Stripe Checkout integrates here later.
+              {copy.pricing.footer}
             </p>
           </motion.div>
         </motion.div>

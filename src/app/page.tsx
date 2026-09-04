@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowLeft, ArrowRight, Check, RotateCcw } from "lucide-react";
 
@@ -21,23 +21,18 @@ import CreationExtrasPanel from "@/components/CreationExtrasPanel";
 import RouteMapIntro, { RouteIntroClip } from "@/components/gpx/RouteMapIntro";
 
 import { usePlan } from "@/lib/plan-context";
+import { useLocale } from "@/lib/i18n";
 import { generateGearSummaryClip, GearSummaryClip } from "@/lib/gear-summary-clip";
-import { buildAnalysisResult, generateMockAnalysisMulti, STYLES } from "@/data/mock";
-import { buildMontage, qualityForPlan } from "@/lib/video-engine";
+import { buildAnalysisResult, generateMockAnalysisMulti } from "@/data/mock";
+import { buildMontage, preloadRenderPipeline, qualityForPlan } from "@/lib/video-engine";
 import { buildGearSummaryEntries, DEFAULT_GEAR_SELECTIONS } from "@/data/gearCatalog";
 import { AppStep, BestMoment, GpxRouteStats, GpxTrackPoint, MontageResult, ReelAnalysisResult, ReelStyle, ReelTitleColor, ReelTitleFont, ReelTitleSize, RouteLabel, UploadedVideo } from "@/types";
 
 const STEP_ORDER: AppStep[] = ["upload", "style", "analyze", "render", "preview"];
-const STEP_LABELS: Record<AppStep, string> = {
-  upload: "Upload",
-  style: "Style",
-  analyze: "Analyze",
-  render: "Edit",
-  preview: "Preview",
-};
 
 export default function Home() {
   const { isFree, reelsUsedThisWeek, weeklyFreeLimit, consumeReelCredit } = usePlan();
+  const { copy } = useLocale();
 
   const [step, setStep] = useState<AppStep>("upload");
   const [videos, setVideos] = useState<UploadedVideo[]>([]);
@@ -45,6 +40,7 @@ export default function Home() {
   const [analysis, setAnalysis] = useState<ReelAnalysisResult | null>(null);
   const [selectedHookId, setSelectedHookId] = useState<string>("");
   const [gearSelections, setGearSelections] = useState(DEFAULT_GEAR_SELECTIONS);
+  const [gearPortraitFile, setGearPortraitFile] = useState<File | null>(null);
   const [reelTitle, setReelTitle] = useState("");
   const [reelTitleFont, setReelTitleFont] = useState<ReelTitleFont>("cinematic");
   const [reelTitleSize, setReelTitleSize] = useState<ReelTitleSize>("md");
@@ -69,8 +65,39 @@ export default function Home() {
 
   const [pricingOpen, setPricingOpen] = useState(false);
   const [upgradePrompt, setUpgradePrompt] = useState<{ title: string; message: string } | null>(null);
+  const renderPipelineWarmedRef = useRef(false);
 
   const showUpgrade = (title: string, message: string) => setUpgradePrompt({ title, message });
+
+  useEffect(() => {
+    if (videos.length === 0 || renderPipelineWarmedRef.current) return;
+    renderPipelineWarmedRef.current = true;
+
+    let cancelled = false;
+    const warmUp = () => {
+      void preloadRenderPipeline().catch((error) => {
+        if (!cancelled) {
+          console.warn("[ClipsyReel] Render pipeline warm-up failed:", error);
+        }
+      });
+    };
+
+    if (typeof window === "undefined") return undefined;
+
+    const idleCallback = window.requestIdleCallback?.(warmUp, { timeout: 2000 });
+    if (idleCallback === undefined) {
+      const timeoutId = window.setTimeout(warmUp, 1200);
+      return () => {
+        cancelled = true;
+        window.clearTimeout(timeoutId);
+      };
+    }
+
+    return () => {
+      cancelled = true;
+      window.cancelIdleCallback?.(idleCallback);
+    };
+  }, [videos.length]);
 
   const weeklyLimitReached = isFree && reelsUsedThisWeek >= weeklyFreeLimit;
 
@@ -79,8 +106,8 @@ export default function Home() {
   const startAnalysis = () => {
     if (weeklyLimitReached) {
       showUpgrade(
-        "You've used this week's free Reel",
-        "Free plan includes 1 Reel per week. Upgrade to Creator Pro for 30 Reels a month — no waiting."
+        copy.pricing.title,
+        copy.pricing.subtitle
       );
       return;
     }
@@ -108,12 +135,12 @@ export default function Home() {
   useEffect(() => {
     let cancelled = false;
 
-    if (equipmentSummary.length === 0) return;
+    if (equipmentSummary.length === 0 && !gearPortraitFile) return;
 
     queueMicrotask(() => {
       if (cancelled) return;
 
-      void generateGearSummaryClip({ selections: gearSelections })
+      void generateGearSummaryClip({ selections: gearSelections, portrait: gearPortraitFile ?? undefined })
         .then((clip) => {
           if (cancelled) {
             if (clip?.url) URL.revokeObjectURL(clip.url);
@@ -135,7 +162,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [equipmentSummary.length, gearSelections]);
+  }, [equipmentSummary.length, gearSelections, gearPortraitFile]);
 
   useEffect(() => {
     return () => {
@@ -254,6 +281,7 @@ export default function Home() {
     setAnalysis(null);
     setSelectedHookId("");
     setGearSelections(DEFAULT_GEAR_SELECTIONS);
+    setGearPortraitFile(null);
     setReelTitle("");
     setReelTitleFont("cinematic");
     setReelTitleSize("md");
@@ -276,14 +304,14 @@ export default function Home() {
   const requiresMapIntro = hasRouteIntro;
   const renderPhaseLabel =
     hasRouteIntro && routeIntroStatus === "rendering" && routeIntroClip === null
-      ? "Preparing animated route map…"
+      ? copy.render.processingRoute
       : equipmentSummary.length > 0 && gearSummaryStatus === "rendering" && gearSummaryClip === null
-        ? "Preparing equipment summary card…"
+      ? copy.render.processingGear
       : renderPhase
         ? renderPhase
       : renderProgress !== null
-        ? "Cutting, zooming & cross-fading your clips…"
-        : "Loading editing engine…";
+        ? copy.render.processingCuts
+      : copy.render.loading;
 
   return (
     <AppShell onOpenPricing={() => setPricingOpen(true)}>
@@ -292,8 +320,8 @@ export default function Home() {
           <HeroSection />
 
           <div>
-            <h2 className="mb-2 text-sm font-semibold text-white/85">1. Reel Name</h2>
-            <p className="mb-2 text-xs text-white/45">Set your Reel title, typography and letter size before building the rest of the story.</p>
+            <h2 className="mb-2 text-sm font-semibold text-white/85">{copy.reelName.title}</h2>
+            <p className="mb-2 text-xs text-white/45">{copy.reelName.description}</p>
             <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
               <ReelNamePanel
                 reelTitle={reelTitle}
@@ -309,8 +337,8 @@ export default function Home() {
           </div>
 
           <div>
-            <h2 className="mb-2 text-sm font-semibold text-white/85">2. Upload Videos</h2>
-            <p className="mb-2 text-xs text-white/45">Upload up to 3 clips — they&apos;ll be combined into one montage.</p>
+            <h2 className="mb-2 text-sm font-semibold text-white/85">{copy.upload.title}</h2>
+            <p className="mb-2 text-xs text-white/45">{copy.upload.description}</p>
             <VideoUploader
               videos={videos}
               onChange={setVideos}
@@ -320,8 +348,8 @@ export default function Home() {
 
           {/* Route source: GPX import OR location-based route planner. */}
           <div>
-            <h2 className="mb-2 text-sm font-semibold text-white/85">3. Route (Optional)</h2>
-            <p className="mb-2 text-xs text-white/45">Add a GPX route or define departure/destination for a map intro, or skip this step and continue normally.</p>
+            <h2 className="mb-2 text-sm font-semibold text-white/85">{copy.route.title}</h2>
+            <p className="mb-2 text-xs text-white/45">{copy.route.description}</p>
             <RouteSourceSelector
               videos={videos}
               onRouteDataChange={({ points, stats, labels }) => {
@@ -334,14 +362,14 @@ export default function Home() {
                 setRouteIntroStatus(available ? "rendering" : "idle");
               }}
               onLockedClick={() =>
-                showUpgrade("GPX route maps are a Pro feature", "Upload your ride/hike GPX file or plan a route from city names with Creator Pro.")
+                showUpgrade(copy.route.lockedTitle, copy.route.lockedMessage)
               }
             />
           </div>
 
           <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
-            <h2 className="mb-2 text-sm font-semibold text-white/85">4. Hook</h2>
-            <p className="mb-3 text-xs text-white/45">Configure the opening hook overlays that control the attention-grabbing start of your Reel.</p>
+            <h2 className="mb-2 text-sm font-semibold text-white/85">{copy.hook.title}</h2>
+            <p className="mb-3 text-xs text-white/45">{copy.hook.description}</p>
             <HookCaptionPanel
               overlayTexts={overlayTexts}
               overlayFonts={overlayFonts}
@@ -383,7 +411,7 @@ export default function Home() {
             disabled={videos.length === 0}
             className="flex w-full items-center justify-center gap-2 rounded-2xl brand-gradient py-3.5 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(0,0,0,0.28)] transition disabled:cursor-not-allowed disabled:opacity-30"
           >
-            Choose a style <ArrowRight className="h-4 w-4" />
+            {copy.common.chooseStyle} <ArrowRight className="h-4 w-4" />
           </button>
       </StepContent>
 
@@ -391,25 +419,25 @@ export default function Home() {
           <StepBar step={step} />
           {!analysis ? (
             <div>
-              <h2 className="mb-1 text-sm font-semibold text-white/85">2. Pick a Reel style</h2>
-              <p className="mb-3 text-xs text-white/45">This shapes cuts, transitions, zoom pacing, hook tone and music mood.</p>
+              <h2 className="mb-1 text-sm font-semibold text-white/85">{copy.styleText.pickTitle}</h2>
+              <p className="mb-3 text-xs text-white/45">{copy.styleText.pickDescription}</p>
               <StyleSelector
                 selected={style}
                 onSelect={setStyle}
                 onLockedClick={() =>
-                  showUpgrade("This style is a Pro feature", "Cinematic, Sport and Luxury styles are available on Creator Pro and above.")
+                  showUpgrade(copy.styleText.pickTitle, copy.styleText.pickDescription)
                 }
               />
             </div>
           ) : (
             <div className="space-y-3 rounded-2xl border border-white/10 bg-white/[0.02] p-4">
               <div>
-                <h2 className="mb-1 text-sm font-semibold text-white/85">3. Equipements</h2>
-                <p className="text-xs text-white/45">L&apos;analyse est terminée. Continue directement avec la configuration des équipements.</p>
+                <h2 className="mb-1 text-sm font-semibold text-white/85">{copy.styleText.equipmentTitle}</h2>
+                <p className="text-xs text-white/45">{copy.styleText.equipmentDescription}</p>
               </div>
               <div className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/75">
-                <span className="text-white/45">Style sélectionné :</span>
-                <span className="font-semibold text-white/90">{STYLES.find((s) => s.id === style)?.label ?? style}</span>
+                <span className="text-white/45">{copy.styleText.selectedStyle}</span>
+                <span className="font-semibold text-white/90">{style ? copy.style(style).label : ""}</span>
               </div>
             </div>
           )}
@@ -417,20 +445,26 @@ export default function Home() {
           {analysis && (
             <CreationExtrasPanel
             selections={gearSelections}
+            portraitFile={gearPortraitFile}
+            onChangePortraitFile={(file) => {
+            setGearPortraitFile(file);
+            const nextSummary = buildGearSummaryEntries(gearSelections);
+            clearGearSummaryClip(nextSummary.length > 0 || !!file ? "rendering" : "idle");
+            }}
             onSelectGearBrand={(key, brand) =>
-              setGearSelections((current) => {
-                const next = {
-                  ...current,
-                  [key]: {
-                    brand,
-                    model: "",
-                    customModel: "",
-                  },
-                };
-                const nextSummary = buildGearSummaryEntries(next);
-                clearGearSummaryClip(nextSummary.length > 0 ? "rendering" : "idle");
-                return next;
-              })
+            setGearSelections((current) => {
+              const next = {
+                ...current,
+                [key]: {
+                  brand,
+                  model: "",
+                  customModel: "",
+                },
+              };
+              const nextSummary = buildGearSummaryEntries(next);
+              clearGearSummaryClip(nextSummary.length > 0 || !!gearPortraitFile ? "rendering" : "idle");
+              return next;
+            })
             }
             onSelectGearModel={(key, model) =>
               setGearSelections((current) => {
@@ -443,7 +477,7 @@ export default function Home() {
                  },
                 };
                 const nextSummary = buildGearSummaryEntries(next);
-                clearGearSummaryClip(nextSummary.length > 0 ? "rendering" : "idle");
+                clearGearSummaryClip(nextSummary.length > 0 || !!gearPortraitFile ? "rendering" : "idle");
                 return next;
               })
             }
@@ -457,7 +491,7 @@ export default function Home() {
                  },
                 };
                 const nextSummary = buildGearSummaryEntries(next);
-                clearGearSummaryClip(nextSummary.length > 0 ? "rendering" : "idle");
+                clearGearSummaryClip(nextSummary.length > 0 || !!gearPortraitFile ? "rendering" : "idle");
                 return next;
               })
             }
@@ -472,14 +506,14 @@ export default function Home() {
                 disabled={!style}
                 className="flex flex-1 items-center justify-center gap-2 rounded-2xl brand-gradient py-3.5 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(0,0,0,0.28)] transition disabled:cursor-not-allowed disabled:opacity-30"
               >
-                Analyze video{videos.length > 1 ? "s" : ""} <ArrowRight className="h-4 w-4" />
+                {copy.common.analyzeVideos} <ArrowRight className="h-4 w-4" />
               </button>
             ) : (
               <button
                 onClick={startRender}
                 className="flex flex-1 items-center justify-center gap-2 rounded-2xl brand-gradient py-3.5 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(0,0,0,0.28)] transition"
               >
-                Generate Reel <ArrowRight className="h-4 w-4" />
+                {copy.common.generateReel} <ArrowRight className="h-4 w-4" />
               </button>
             )}
           </div>
@@ -492,17 +526,17 @@ export default function Home() {
       <StepContent isVisible={step === "render" && style !== null}>
         {style && (
           <>
-            <RenderPanel progress={renderProgress} phaseLabel={renderPhaseLabel} styleLabel={STYLES.find((s) => s.id === style)?.label ?? style} />
+            <RenderPanel progress={renderProgress} phaseLabel={renderPhaseLabel} styleLabel={style ? copy.style(style).label : ""} />
             {renderError && (
               <div className="space-y-2 rounded-2xl border border-rose-400/20 bg-rose-400/[0.06] px-4 py-3 text-xs text-rose-300">
                 <p>{renderError}</p>
                 <div className="flex gap-2">
                   <button onClick={retryRender} className="flex-1 rounded-xl bg-white/10 py-2 font-semibold text-white/85 hover:bg-white/15">
-                    Retry
+                    {copy.render.retry}
                   </button>
                   {!requiresMapIntro && (
                     <button onClick={skipRenderFallback} className="flex-1 rounded-xl bg-white/5 py-2 font-semibold text-white/60 hover:bg-white/10">
-                      Continue with raw clip
+                      {copy.render.continueRaw}
                     </button>
                   )}
                 </div>
@@ -519,7 +553,7 @@ export default function Home() {
 
               <div className="flex items-center gap-2 rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.06] px-4 py-2.5 text-xs text-emerald-300">
                 <Check className="h-3.5 w-3.5" />
-                {montage ? "Montage rendered — real cuts, zoom & transitions applied" : "Analysis complete — your Reel is ready to preview"}
+                {montage ? copy.preview.ready : copy.preview.readyAlt}
               </div>
 
               <ReelPreview
@@ -542,7 +576,7 @@ export default function Home() {
                 montageInfo={montage ? { clipCount: montage.clipCount, durationSeconds: montage.durationSeconds } : undefined}
               />
 
-              <Section title="Export">
+              <Section title={copy.common.exportLabel}>
                 <ExportPanel videoUrl={previewUrl} videoName={combinedName} onLockedClick={() => setPricingOpen(true)} />
               </Section>
 
@@ -551,7 +585,7 @@ export default function Home() {
                 className="flex w-full items-center justify-center gap-2 rounded-2xl border border-white/15 bg-white/[0.04] py-3.5 text-sm font-semibold text-white transition hover:border-white/25 hover:bg-white/[0.08] active:scale-[0.99]"
               >
                 <RotateCcw className="h-4 w-4" />
-                Start a new Reel
+                {copy.common.startNew}
               </button>
             </>
           )}
@@ -583,6 +617,7 @@ export default function Home() {
 }
 
 function StepBar({ step }: { step: AppStep }) {
+  const { copy } = useLocale();
   const currentIndex = STEP_ORDER.indexOf(step);
   return (
     <div className="flex items-center gap-1.5">
@@ -591,17 +626,18 @@ function StepBar({ step }: { step: AppStep }) {
           <div className={"h-1 flex-1 rounded-full " + (i <= currentIndex ? "brand-gradient" : "bg-white/10")} />
         </div>
       ))}
-      <span className="ml-1 shrink-0 text-[10px] font-medium text-white/40">{STEP_LABELS[step]}</span>
+      <span className="ml-1 shrink-0 text-[10px] font-medium text-white/40">{copy.stepLabel(step)}</span>
     </div>
   );
 }
 
 function BackButton({ onClick }: { onClick: () => void }) {
+  const { copy } = useLocale();
   return (
     <button
       onClick={onClick}
       className="flex items-center justify-center rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-3.5 text-white/60 transition hover:bg-white/[0.05]"
-      aria-label="Back"
+      aria-label={copy.common.back}
     >
       <ArrowLeft className="h-4 w-4" />
     </button>

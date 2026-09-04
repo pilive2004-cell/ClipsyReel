@@ -3,10 +3,10 @@
 import { useState } from "react";
 import { Clapperboard, Download, Sparkles } from "lucide-react";
 import { BestMoment, ReelStyle, UploadedVideo } from "@/types";
-import { STYLES } from "@/data/mock";
 import { buildMontage, qualityForPlan } from "@/lib/video-engine";
 import { usePlan } from "@/lib/plan-context";
 import FunProgressBar from "@/components/FunProgressBar";
+import { useLocale } from "@/lib/i18n";
 
 interface StoryPanelProps {
   videos: UploadedVideo[];
@@ -28,14 +28,11 @@ const FUN_MESSAGES = ["Sampling your whole story 📖", "Cross-fading clips 🎞
  */
 export default function StoryPanel({ videos, style, bestMoments, watermark }: StoryPanelProps) {
   const { plan } = usePlan();
+  const { copy } = useLocale();
   const [status, setStatus] = useState<"idle" | "rendering" | "done" | "error">("idle");
   const [progress, setProgress] = useState<number | null>(null);
   const [result, setResult] = useState<{ url: string; durationSeconds: number; clipCount: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  const styleDef = STYLES.find((s) => s.id === style)!;
-  const totalDuration = videos.reduce((sum, v) => sum + v.durationSeconds, 0);
-  const cappedTarget = Math.min(MAX_STORY_SECONDS, Math.max(totalDuration, 4));
 
   const handleCreate = async () => {
     setStatus("rendering");
@@ -57,7 +54,7 @@ export default function StoryPanel({ videos, style, bestMoments, watermark }: St
       setStatus("done");
     } catch (e) {
       console.error(e);
-      setError("Couldn't render the Story on this device. Try shorter videos.");
+      setError(copy.story.error);
       setStatus("error");
     }
   };
@@ -75,12 +72,10 @@ export default function StoryPanel({ videos, style, bestMoments, watermark }: St
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="flex items-center gap-1.5 text-sm font-semibold text-white/85">
-            <Clapperboard className="h-4 w-4 text-fuchsia-400" /> Instagram Story cut
+            <Clapperboard className="h-4 w-4 text-fuchsia-400" /> {copy.story.title}
           </p>
           <p className="mt-1 text-[11px] leading-relaxed text-white/45">
-            A longer {styleDef.label.toLowerCase()}-style edit sampled across{" "}
-            {videos.length > 1 ? `all ${videos.length} of your clips` : "your whole video"}, capped at {MAX_STORY_SECONDS}s
-            (Instagram&apos;s Story limit). Target length: ~{cappedTarget.toFixed(0)}s.
+            {copy.story.description}
           </p>
         </div>
       </div>
@@ -90,7 +85,7 @@ export default function StoryPanel({ videos, style, bestMoments, watermark }: St
           onClick={handleCreate}
           className="flex w-full items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] py-3 text-xs font-semibold text-white/85 transition hover:bg-white/[0.08]"
         >
-          <Sparkles className="h-3.5 w-3.5 text-fuchsia-400" /> Create Story version
+          <Sparkles className="h-3.5 w-3.5 text-fuchsia-400" /> {copy.story.create}
         </button>
       ) : null}
 
@@ -115,15 +110,15 @@ export default function StoryPanel({ videos, style, bestMoments, watermark }: St
             onClick={handleDownload}
             className="flex w-full items-center justify-center gap-2 rounded-2xl brand-gradient py-3 text-xs font-semibold text-white shadow-lg shadow-fuchsia-500/25"
           >
-            <Download className="h-3.5 w-3.5" /> Download Story MP4
+            <Download className="h-3.5 w-3.5" /> {copy.story.download}
           </button>
           <button onClick={handleCreate} className="w-full text-center text-[11px] font-medium text-white/40 hover:text-white/65">
-            Re-generate
+            {copy.story.regenerate}
           </button>
         </div>
       )}
       {plan === "free" && status === "idle" && (
-        <p className="text-center text-[10px] text-white/30">Uses the same weekly Reel credit as your main export.</p>
+        <p className="text-center text-[10px] text-white/30">{copy.story.usesCredit}</p>
       )}
     </div>
   );

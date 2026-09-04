@@ -1,8 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import { Clapperboard, Crown, Sparkles } from "lucide-react";
 import { usePlan } from "@/lib/plan-context";
-import { PLANS } from "@/data/mock";
+import { LANGUAGE_OPTIONS, useLocale } from "@/lib/i18n";
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -11,7 +12,9 @@ interface AppShellProps {
 
 export default function AppShell({ children, onOpenPricing }: AppShellProps) {
   const { plan, isPro } = usePlan();
-  const planLabel = PLANS.find((p) => p.id === plan)?.name ?? "Free";
+  const { copy, locale, setLocale } = useLocale();
+  const planLabel = copy.plan(plan).name;
+  const [languageOpen, setLanguageOpen] = useState(false);
 
   return (
     <div className="relative isolate min-h-dvh flex flex-col overflow-hidden">
@@ -28,17 +31,51 @@ export default function AppShell({ children, onOpenPricing }: AppShellProps) {
             </span>
           </div>
 
-          <button
-            onClick={onOpenPricing}
-            className={
-              isPro
-                ? "flex items-center gap-1.5 rounded-full pro-gradient px-3 py-1.5 text-xs font-semibold text-black shadow-md shadow-orange-500/20"
-                : "flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-white/80 transition hover:border-white/20 hover:bg-white/10"
-            }
-          >
-            {isPro ? <Crown className="h-3.5 w-3.5" /> : <Sparkles className="h-3.5 w-3.5" />}
-            {planLabel}
-          </button>
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <button
+                onClick={() => setLanguageOpen((current) => !current)}
+                className="flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-white/80 transition hover:border-white/20 hover:bg-white/10"
+                aria-haspopup="listbox"
+                aria-expanded={languageOpen}
+              >
+                {copy.languageLabel}
+                <span className="text-white/50">▾</span>
+              </button>
+              {languageOpen && (
+                <div className="absolute right-0 z-30 mt-2 w-36 overflow-hidden rounded-2xl border border-white/10 bg-[#0b0d13] p-1 shadow-2xl">
+                  {LANGUAGE_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => {
+                        setLocale(option.value);
+                        setLanguageOpen(false);
+                      }}
+                      className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-xs transition ${
+                        locale === option.value ? "bg-white/10 text-white" : "text-white/65 hover:bg-white/[0.04] hover:text-white"
+                      }`}
+                    >
+                      <span>{option.label}</span>
+                      {locale === option.value && <span className="text-fuchsia-300">•</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <button
+              onClick={onOpenPricing}
+              className={
+                isPro
+                  ? "flex items-center gap-1.5 rounded-full pro-gradient px-3 py-1.5 text-xs font-semibold text-black shadow-md shadow-orange-500/20"
+                  : "flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-white/80 transition hover:border-white/20 hover:bg-white/10"
+              }
+            >
+              {isPro ? <Crown className="h-3.5 w-3.5" /> : <Sparkles className="h-3.5 w-3.5" />}
+              {planLabel}
+            </button>
+          </div>
         </div>
       </header>
 

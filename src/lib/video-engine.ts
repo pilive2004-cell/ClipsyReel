@@ -6,6 +6,7 @@ import { BestMoment, ReelStyle, ReelTitleColor, ReelTitleFont, ReelTitleSize } f
 import { STYLE_RECIPES, StyleRecipe } from "@/data/styleRecipes";
 import { pickTransitionName, randomTransitionDuration, STYLE_TRANSITIONS } from "@/data/transitions";
 import { detectHardwareAcceleration, buildEncoderArgs, HardwareCodec } from "@/lib/hw-acceleration";
+import { buildRenderCacheKey, fingerprintFile, getCachedBinaryAsset, putCachedBinaryAsset } from "@/lib/render-asset-cache";
 
 /**
  * Real, in-browser video editing engine powered by ffmpeg.wasm.
@@ -74,6 +75,14 @@ async function loadFFmpeg(): Promise<FFmpeg> {
   })();
 
   return loadingPromise;
+}
+
+/**
+ * Preloads the two heaviest render-time dependencies during idle time:
+ * ffmpeg.wasm core and hardware codec detection.
+ */
+export async function preloadRenderPipeline(): Promise<void> {
+  await Promise.all([loadFFmpeg(), detectHardwareAcceleration()]);
 }
 
 /** Destroys the singleton on unrecoverable FS errors so the next render gets a clean instance. */
@@ -683,6 +692,8 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
   );
   // Phase 1 uses more aggressive settings for speed
   const phase1EncoderArgs = buildEncoderArgs(selectedCodec, "fast", 27);
+  const renderCodecProfile = encoderArgs.join(" ");
+  const phase1CodecProfile = phase1EncoderArgs.join(" ");
   
   const audioSampleRate = 48000;
   const sourceAudioEnabled = videoAudioEnabled ?? files.map(() => true);
@@ -747,12 +758,35 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
   let watermarkName: string | null = null;
   if (watermark) {
     watermarkName = `wm_${stamp}.png`;
-    await ffmpeg.writeFile(watermarkName, await generateWatermarkPng(w));
+    const watermarkCacheKey = await buildRenderCacheKey("watermark-v1", [w]);
+    const cachedWatermark = getCachedBinaryAsset(watermarkCacheKey);
+    if (cachedWatermark) {
+      await ffmpeg.writeFile(watermarkName, cachedWatermark);
+    } else {
+      const data = await generateWatermarkPng(w);
+      putCachedBinaryAsset(watermarkCacheKey, data, "image/png");
+      await ffmpeg.writeFile(watermarkName, data);
+    }
   }
   let reelTitleName: string | null = null;
   if (cleanedReelTitle) {
     reelTitleName = `reel_title_${stamp}.png`;
-    await ffmpeg.writeFile(reelTitleName, await generateReelTitlePng(w, h, cleanedReelTitle));
+    const reelTitleCacheKey = await buildRenderCacheKey("reel-title-v1", [
+      w,
+      h,
+      cleanedReelTitle.text,
+      cleanedReelTitle.font,
+      cleanedReelTitle.size,
+      cleanedReelTitle.color,
+    ]);
+    const cachedTitle = getCachedBinaryAsset(reelTitleCacheKey);
+    if (cachedTitle) {
+      await ffmpeg.writeFile(reelTitleName, cachedTitle);
+    } else {
+      const data = await generateReelTitlePng(w, h, cleanedReelTitle);
+      putCachedBinaryAsset(reelTitleCacheKey, data, "image/png");
+      await ffmpeg.writeFile(reelTitleName, data);
+    }
   }
 
   // ── Progress accounting ───────────────────────────────────────────────────
@@ -793,7 +827,19 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
   try {
     for (let i = 0; i < cleanedOverlayTexts.length; i++) {
       const name = `overlay_text_${stamp}_${i}.png`;
-      await ffmpeg.writeFile(name, await generateOverlayTextPng(w, h, cleanedOverlayTexts[i]));
+      const overlayCacheKey = await buildRenderCacheKey("overlay-text-v1", [
+        w,
+        h,
+        cleanedOverlayTexts[i],
+      ]);
+      const cachedOverlay = getCachedBinaryAsset(overlayCacheKey);
+      if (cachedOverlay) {
+        await ffmpeg.writeFile(name, cachedOverlay);
+      } else {
+        const data = await generateOverlayTextPng(w, h, cleanedOverlayTexts[i]);
+        putCachedBinaryAsset(overlayCacheKey, data, "image/png");
+        await ffmpeg.writeFile(name, data);
+      }
       overlayTextNames.push(name);
       tempFiles.push(name);
     }
@@ -888,15 +934,33 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       onPhaseChange?.("Transcoding map intro…");
       mark("intro-start");
       introName = `intro_norm_${stamp}.mp4`;
-      await ffmpeg.exec([
-        "-fflags", "+genpts",
-        "-i", introSourceName,
-        "-vf", `fps=${RENDER_FPS},scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setpts=PTS-STARTPTS,format=yuv420p`,
-        "-r", String(RENDER_FPS),
-        ...encoderArgs,
-        "-pix_fmt", "yuv420p",
-        introName,
+      const introCacheKey = await buildRenderCacheKey("intro-norm-v1", [
+        fingerprintFile(introClip!.file),
+        introClip!.durationSeconds,
+        quality,
+        w,
+        h,
+        RENDER_FPS,
+        selectedCodec,
+        renderCodecProfile,
       ]);
+      const cachedIntro = getCachedBinaryAsset(introCacheKey);
+      if (cachedIntro) {
+        await ffmpeg.writeFile(introName, cachedIntro);
+        console.log("[video-engine] Map intro cache hit");
+      } else {
+        await ffmpeg.exec([
+          "-fflags", "+genpts",
+          "-i", introSourceName,
+          "-vf", `fps=${RENDER_FPS},scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setpts=PTS-STARTPTS,format=yuv420p`,
+          "-r", String(RENDER_FPS),
+          ...encoderArgs,
+          "-pix_fmt", "yuv420p",
+          introName,
+        ]);
+        const data = await ffmpeg.readFile(introName);
+        putCachedBinaryAsset(introCacheKey, data as Uint8Array, "video/mp4");
+      }
       tempFiles.push(introName);
       completedUnits++;
       mark("intro-done");
@@ -908,15 +972,33 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       onPhaseChange?.("Transcoding outro card…");
       mark("outro-start");
       outroName = `outro_norm_${stamp}.mp4`;
-      await ffmpeg.exec([
-        "-fflags", "+genpts",
-        "-i", outroSourceName,
-        "-vf", `fps=${RENDER_FPS},scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setpts=PTS-STARTPTS,format=yuv420p`,
-        "-r", String(RENDER_FPS),
-        ...encoderArgs,
-        "-pix_fmt", "yuv420p",
-        outroName,
+      const outroCacheKey = await buildRenderCacheKey("outro-norm-v1", [
+        fingerprintFile(outroClip!.file),
+        outroClip!.durationSeconds,
+        quality,
+        w,
+        h,
+        RENDER_FPS,
+        selectedCodec,
+        renderCodecProfile,
       ]);
+      const cachedOutro = getCachedBinaryAsset(outroCacheKey);
+      if (cachedOutro) {
+        await ffmpeg.writeFile(outroName, cachedOutro);
+        console.log("[video-engine] Outro card cache hit");
+      } else {
+        await ffmpeg.exec([
+          "-fflags", "+genpts",
+          "-i", outroSourceName,
+          "-vf", `fps=${RENDER_FPS},scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setpts=PTS-STARTPTS,format=yuv420p`,
+          "-r", String(RENDER_FPS),
+          ...encoderArgs,
+          "-pix_fmt", "yuv420p",
+          outroName,
+        ]);
+        const data = await ffmpeg.readFile(outroName);
+        putCachedBinaryAsset(outroCacheKey, data as Uint8Array, "video/mp4");
+      }
       tempFiles.push(outroName);
       completedUnits++;
       mark("outro-done");
@@ -932,28 +1014,58 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       // Pass fastMode to skip zoompan (the main per-frame bottleneck)
       const filter = buildSegmentFilter(seg, i, recipe, w, h, RENDER_FPS, fastMode);
       const segmentAudioEnabled = sourceAudioEnabled[seg.sourceIndex] ?? true;
-
-      await ffmpeg.exec([
-        // NOTE: -ss and -t must both come *before* -i. When -t is placed
-        // after -i (with no further -i afterwards) ffmpeg treats it as an
-        // OUTPUT duration limit applied *after* the filtergraph instead of
-        // an input trim — so it was cutting/measuring the clip on the
-        // post-`setpts` (speed-adjusted) timeline rather than trimming
-        // `seg.length` seconds of source. That silently desynced the real
-        // encoded clip duration from `segmentDurations` below for any
-        // style/segment with speed != 1 (i.e. almost everything, and
-        // especially slow-mo segments), which threw off the Phase 2 xfade
-        // `offset` math and made transitions land wrong or disappear.
-        "-ss", seg.start.toFixed(3),
-        "-t", seg.length.toFixed(3),
-        "-i", inputNames[seg.sourceIndex],
-        "-vf", filter,
-        "-r", String(RENDER_FPS),
-        ...phase1EncoderArgs,
-        ...(segmentAudioEnabled ? ["-c:a", "aac", "-b:a", "128k"] : ["-an"]),
-        "-pix_fmt", "yuv420p",
-        clipName,
+      const segmentCacheKey = await buildRenderCacheKey("segment-v1", [
+        fingerprintFile(files[seg.sourceIndex]),
+        seg.sourceIndex,
+        seg.start,
+        seg.length,
+        recipe.clipDuration,
+        recipe.speed,
+        recipe.zoom,
+        recipe.zoomIntensity,
+        fastMode,
+        effectiveKenBurnsTier,
+        quality,
+        renderSpeedProfile,
+        mode,
+        selectedCodec,
+        phase1CodecProfile,
+        w,
+        h,
+        RENDER_FPS,
+        segmentAudioEnabled,
+        seg.slowMo ?? false,
       ]);
+      const cachedSegment = getCachedBinaryAsset(segmentCacheKey);
+
+      if (cachedSegment) {
+        await ffmpeg.writeFile(clipName, cachedSegment);
+        console.log(`[video-engine] Segment cache hit: ${i + 1}/${segments.length}`);
+      } else {
+        await ffmpeg.exec([
+          // NOTE: -ss and -t must both come *before* -i. When -t is placed
+          // after -i (with no further -i afterwards) ffmpeg treats it as an
+          // OUTPUT duration limit applied *after* the filtergraph instead of
+          // an input trim — so it was cutting/measuring the clip on the
+          // post-`setpts` (speed-adjusted) timeline rather than trimming
+          // `seg.length` seconds of source. That silently desynced the real
+          // encoded clip duration from `segmentDurations` below for any
+          // style/segment with speed != 1 (i.e. almost everything, and
+          // especially slow-mo segments), which threw off the Phase 2 xfade
+          // `offset` math and made transitions land wrong or disappear.
+          "-ss", seg.start.toFixed(3),
+          "-t", seg.length.toFixed(3),
+          "-i", inputNames[seg.sourceIndex],
+          "-vf", filter,
+          "-r", String(RENDER_FPS),
+          ...phase1EncoderArgs,
+          ...(segmentAudioEnabled ? ["-c:a", "aac", "-b:a", "128k"] : ["-an"]),
+          "-pix_fmt", "yuv420p",
+          clipName,
+        ]);
+        const data = await ffmpeg.readFile(clipName);
+        putCachedBinaryAsset(segmentCacheKey, data as Uint8Array, "video/mp4");
+      }
 
       segmentClipNames.push(clipName);
       segmentDurations.push(seg.length / effectiveSpeed(seg, recipe));

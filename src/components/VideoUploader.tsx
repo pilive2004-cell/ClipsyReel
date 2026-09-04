@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { getVideoDuration } from "@/lib/video-engine";
 import { readVideoMetadata } from "@/lib/video-metadata";
 import { UploadedVideo } from "@/types";
+import { useLocale } from "@/lib/i18n";
 
 interface VideoUploaderProps {
   videos: UploadedVideo[];
@@ -29,6 +30,7 @@ export default function VideoUploader({
   onChange,
   maxVideos = DEFAULT_MAX,
 }: VideoUploaderProps) {
+  const { copy } = useLocale();
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -114,7 +116,7 @@ export default function VideoUploader({
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium text-white/90">{v.name}</p>
               <p className="text-xs text-white/50">
-                {v.sizeMb} MB · clip {i + 1} · ready to craft
+                {v.sizeMb} MB · clip {i + 1} · {copy.upload.ready}
               </p>
               <p className="text-[11px] text-white/35">
                 {v.metadata.gps
@@ -130,8 +132,8 @@ export default function VideoUploader({
                   ? "bg-emerald-400/15 text-emerald-300 hover:bg-emerald-400/25"
                   : "bg-white/5 text-white/45 hover:bg-white/10 hover:text-white/70"
               )}
-              aria-label={v.keepAudio ? "Mute clip audio" : "Keep clip audio"}
-              title={v.keepAudio ? "Audio on" : "Audio off"}
+              aria-label={v.keepAudio ? copy.upload.audioOn : copy.upload.audioOff}
+              title={v.keepAudio ? copy.upload.audioOn : copy.upload.audioOff}
             >
               {v.keepAudio ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
             </button>
@@ -195,7 +197,7 @@ export default function VideoUploader({
                       transition={{ ease: "easeOut" }}
                     />
                   </div>
-                  <p className="text-xs text-white/50">Uploading… {Math.min(100, Math.round(progress))}%</p>
+                  <p className="text-xs text-white/50">{copy.upload.upload} {Math.min(100, Math.round(progress))}%</p>
                 </motion.div>
               ) : (
                 <motion.div
@@ -210,10 +212,10 @@ export default function VideoUploader({
                   </div>
                   <div>
                     <p className="text-sm font-semibold text-white/90">
-                      {videos.length === 0 ? "Tap to upload your MP4" : `Add another clip (${videos.length}/${maxVideos})`}
+                      {videos.length === 0 ? copy.upload.tap : `${copy.upload.add} (${videos.length}/${maxVideos})`}
                     </p>
                     <p className="mt-0.5 text-xs text-white/45">
-                      {videos.length === 0 ? "or drag & drop · up to 500MB" : "Combine up to 3 clips into one montage"}
+                      {videos.length === 0 ? copy.upload.drag : copy.upload.combine}
                     </p>
                   </div>
                 </motion.div>
@@ -223,7 +225,7 @@ export default function VideoUploader({
         </div>
       )}
 
-      {!canAddMore && <p className="text-center text-[11px] text-white/35">Maximum of {maxVideos} clips per montage.</p>}
+      {!canAddMore && <p className="text-center text-[11px] text-white/35">{copy.upload.max.replace("{maxVideos}", String(maxVideos))}</p>}
     </div>
   );
 }

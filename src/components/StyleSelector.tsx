@@ -4,6 +4,7 @@ import { Lock } from "lucide-react";
 import { STYLES } from "@/data/mock";
 import { ReelStyle } from "@/types";
 import { usePlan } from "@/lib/plan-context";
+import { useLocale } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 interface StyleSelectorProps {
@@ -14,12 +15,14 @@ interface StyleSelectorProps {
 
 export default function StyleSelector({ selected, onSelect, onLockedClick }: StyleSelectorProps) {
   const { isFree } = usePlan();
+  const { copy } = useLocale();
 
   return (
     <div className="grid grid-cols-2 gap-2.5">
       {STYLES.map((style) => {
         const locked = isFree && style.proOnly;
         const isSelected = selected === style.id;
+        const localizedStyle = copy.style(style.id);
         return (
           <button
             key={style.id}
@@ -36,14 +39,14 @@ export default function StyleSelector({ selected, onSelect, onLockedClick }: Sty
               <span>{style.emoji}</span>
             </div>
             <div className="flex w-full items-center justify-between">
-              <span className="text-sm font-semibold text-white/90">{style.label}</span>
+              <span className="text-sm font-semibold text-white/90">{localizedStyle.label}</span>
               {locked && (
                 <span className="flex items-center gap-0.5 rounded-full bg-black/40 px-1.5 py-0.5 text-[9px] font-semibold text-amber-300">
                   <Lock className="h-2.5 w-2.5" /> PRO
                 </span>
               )}
             </div>
-            <p className="text-[11px] leading-tight text-white/45">{style.description}</p>
+            <p className="text-[11px] leading-tight text-white/45">{localizedStyle.description}</p>
           </button>
         );
       })}

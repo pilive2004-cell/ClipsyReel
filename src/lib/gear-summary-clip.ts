@@ -1,4 +1,4 @@
-import { GEAR_LABELS, GearCategoryKey, GearItemSelection, GearSelections } from "@/data/gearCatalog";
+import { buildGearSummaryEntries, GEAR_LABELS, GearCategoryKey, GearItemSelection, GearSelections } from "@/data/gearCatalog";
 
 export interface GearSummaryClip {
   file: File;
@@ -103,6 +103,74 @@ function fillTextBlock(
   });
 }
 
+async function loadImageFromFile(file: File): Promise<HTMLImageElement> {
+  const url = URL.createObjectURL(file);
+  try {
+    const image = new Image();
+    image.decoding = "async";
+    image.src = url;
+    if (typeof image.decode === "function") {
+      await image.decode();
+    } else {
+      await new Promise<void>((resolve, reject) => {
+        image.onload = () => resolve();
+        image.onerror = () => reject(new Error("Portrait image failed to load"));
+      });
+    }
+    return image;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function drawImageCover(
+  ctx: CanvasRenderingContext2D,
+  image: CanvasImageSource,
+  x: number,
+  y: number,
+  w: number,
+  h: number
+) {
+  const naturalWidth = (image as HTMLImageElement).naturalWidth || (image as ImageBitmap).width || w;
+  const naturalHeight = (image as HTMLImageElement).naturalHeight || (image as ImageBitmap).height || h;
+  const scale = Math.max(w / naturalWidth, h / naturalHeight);
+  const drawWidth = naturalWidth * scale;
+  const drawHeight = naturalHeight * scale;
+  const drawX = x + (w - drawWidth) / 2;
+  const drawY = y + (h - drawHeight) / 2;
+  ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+}
+
+function drawSelectedEntry(
+  ctx: CanvasRenderingContext2D,
+  label: string,
+  value: string,
+  x: number,
+  y: number,
+  w: number,
+  h: number
+) {
+  roundRectPath(ctx, x, y, w, h, 18);
+  const fill = ctx.createLinearGradient(x, y, x, y + h);
+  fill.addColorStop(0, "rgba(30, 41, 59, 0.6)");
+  fill.addColorStop(1, "rgba(15, 23, 42, 0.8)");
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.12)";
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+
+  // Premium label
+  ctx.fillStyle = "rgba(255, 200, 70, 0.85)";
+  ctx.font = "800 11px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  ctx.fillText(label.toUpperCase(), x + 16, y + 20);
+
+  // Premium value
+  ctx.fillStyle = "rgba(248,250,252,0.95)";
+  ctx.font = "700 18px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  fillTextBlock(ctx, value, x + 16, y + 44, w - 32, 20, 2);
+}
+
 function drawSingleSelection(
   ctx: CanvasRenderingContext2D,
   selection: GearItemSelection,
@@ -168,7 +236,7 @@ function drawSlot(
   });
 }
 
-function drawFrame(ctx: CanvasRenderingContext2D, selections: GearSelections) {
+function drawFrame(ctx: CanvasRenderingContext2D, selections: GearSelections, portraitImage: HTMLImageElement | null) {
   const { width, height } = ctx.canvas;
   ctx.clearRect(0, 0, width, height);
 
@@ -194,6 +262,94 @@ function drawFrame(ctx: CanvasRenderingContext2D, selections: GearSelections) {
   ctx.lineWidth = 1.2;
   ctx.stroke();
 
+  if (portraitImage) {
+    const heroX = cardX + 24;
+    const heroY = cardY + 24;
+    const heroW = cardW - 48;
+    const heroH = 520;
+    roundRectPath(ctx, heroX, heroY, heroW, heroH, 34);
+    ctx.save();
+    ctx.clip();
+    drawImageCover(ctx, portraitImage, heroX, heroY, heroW, heroH);
+    const overlay = ctx.createLinearGradient(heroX, heroY, heroX, heroY + heroH);
+    overlay.addColorStop(0, "rgba(3, 7, 18, 0)");
+    overlay.addColorStop(0.4, "rgba(3, 7, 18, 0.2)");
+    overlay.addColorStop(0.75, "rgba(3, 7, 18, 0.5)");
+    overlay.addColorStop(1, "rgba(3, 7, 18, 0.88)");
+    ctx.fillStyle = overlay;
+    ctx.fillRect(heroX, heroY, heroW, heroH);
+    ctx.restore();
+
+    // Premium badge
+    const badgeW = 186;
+    const badgeH = 40;
+    roundRectPath(ctx, heroX + 28, heroY + 32, badgeW, badgeH, 20);
+    ctx.fillStyle = "rgba(255, 196, 64, 0.92)";
+    ctx.fill();
+    ctx.shadowColor = "rgba(0, 0, 0, 0.3)";
+    ctx.shadowBlur = 8;
+    ctx.shadowOffsetY = 2;
+    ctx.stroke();
+    ctx.shadowColor = "transparent";
+    ctx.fillStyle = "#0a0f1c";
+    ctx.font = "900 14px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("⚡ MOTO + GEAR", heroX + 28 + badgeW / 2, heroY + 52);
+    ctx.textAlign = "left";
+
+    // Premium title
+    ctx.fillStyle = "rgba(255,255,255,0.98)";
+    ctx.font = "900 52px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+    ctx.fillText("My Bike & Kit", heroX + 28, heroY + heroH - 86);
+    
+    // Premium subtitle
+    ctx.fillStyle = "rgba(226,232,240,0.88)";
+    ctx.font = "500 16px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+    ctx.fillText("Moto + équipement sélectionné", heroX + 28, heroY + heroH - 54);
+
+    const entries = buildGearSummaryEntries(selections);
+    const listX = heroX;
+    const listY = heroY + heroH + 28;
+    const listW = heroW;
+    const columnGap = 18;
+    const rowGap = 16;
+    const itemW = (listW - columnGap) / 2;
+    const itemH = 108;
+    const rows = Math.max(1, Math.ceil(entries.length / 2));
+
+    // Premium equipment section container
+    const containerH = rows * itemH + Math.max(0, rows - 1) * rowGap + 32;
+    roundRectPath(ctx, listX, listY, listW, containerH, 28);
+    const containerGradient = ctx.createLinearGradient(listX, listY, listX, listY + containerH);
+    containerGradient.addColorStop(0, "rgba(255,255,255,0.04)");
+    containerGradient.addColorStop(1, "rgba(255,255,255,0.01)");
+    ctx.fillStyle = containerGradient;
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.06)";
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+
+    // Equipment title
+    ctx.fillStyle = "rgba(248,250,252,0.92)";
+    ctx.font = "700 14px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+    ctx.fillText("ÉQUIPEMENT SÉLECTIONNÉ", listX + 18, listY + 24);
+
+    if (entries.length === 0) {
+      ctx.fillStyle = "rgba(248,250,252,0.62)";
+      ctx.font = "600 16px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+      ctx.fillText("Aucun équipement sélectionné", listX + 28, listY + 54);
+    } else {
+      entries.forEach((entry, index) => {
+        const col = index % 2;
+        const row = Math.floor(index / 2);
+        const x = listX + 12 + col * (itemW + columnGap);
+        const y = listY + 42 + row * (itemH + rowGap);
+        drawSelectedEntry(ctx, entry.label, entry.value, x, y, itemW, itemH);
+      });
+    }
+    return;
+  }
+
   const headerY = cardY + 4;
   ctx.fillStyle = "rgba(248,250,252,0.98)";
   ctx.font = "800 52px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
@@ -214,19 +370,21 @@ function drawFrame(ctx: CanvasRenderingContext2D, selections: GearSelections) {
     const h = rowHeights[slot.row];
     drawSlot(ctx, slot, selections, x, y, w, h);
   });
-
 }
 
-function hasAnySelection(selections: GearSelections) {
+function hasAnySelection(selections: GearSelections, portrait: File | null) {
+  if (portrait) return true;
   return Object.values(selections).some((selection) => selection.brand.trim() || selection.model.trim() || selection.customModel.trim());
 }
 
 export async function generateGearSummaryClip({
   selections,
+  portrait,
 }: {
   selections: GearSelections;
+  portrait?: File | null;
 }): Promise<GearSummaryClip | null> {
-  if (!hasAnySelection(selections)) return Promise.resolve(null);
+  if (!hasAnySelection(selections, portrait ?? null)) return Promise.resolve(null);
   if (typeof document === "undefined") {
     return Promise.reject(new Error("Gear summary rendering requires a browser environment."));
   }
@@ -251,6 +409,7 @@ export async function generateGearSummaryClip({
     const chunks: BlobPart[] = [];
     let animationFrame = 0;
     const startedAt = performance.now();
+    let portraitImage: HTMLImageElement | null = null;
 
     const stop = () => {
       stream.getTracks().forEach((track) => track.stop());
@@ -274,18 +433,23 @@ export async function generateGearSummaryClip({
       });
     };
 
-    const tick = (now: number) => {
-      drawFrame(context, selections);
-      if ((now - startedAt) / 1000 < CLIP_DURATION_SECONDS) {
-        animationFrame = requestAnimationFrame(tick);
-        return;
+    void (async () => {
+      if (portrait) {
+        portraitImage = await loadImageFromFile(portrait);
       }
-
-      if (recorder.state !== "inactive") recorder.stop();
-    };
-
-    drawFrame(context, selections);
-    recorder.start();
-    animationFrame = requestAnimationFrame(tick);
+      drawFrame(context, selections, portraitImage);
+      recorder.start();
+      animationFrame = requestAnimationFrame(function tick(now: number) {
+        drawFrame(context, selections, portraitImage);
+        if ((now - startedAt) / 1000 < CLIP_DURATION_SECONDS) {
+          animationFrame = requestAnimationFrame(tick);
+          return;
+        }
+        if (recorder.state !== "inactive") recorder.stop();
+      });
+    })().catch((error) => {
+      stop();
+      reject(error instanceof Error ? error : new Error("The gear summary portrait could not be loaded."));
+    });
   });
 }

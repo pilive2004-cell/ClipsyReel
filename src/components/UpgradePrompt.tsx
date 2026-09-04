@@ -2,6 +2,7 @@
 
 import { AnimatePresence, motion } from "framer-motion";
 import { Crown, X } from "lucide-react";
+import { useLocale } from "@/lib/i18n";
 
 interface UpgradePromptProps {
   open: boolean;
@@ -13,6 +14,8 @@ interface UpgradePromptProps {
 
 /** Contextual, non-aggressive paywall prompt shown right when a Free user hits a Pro-only action. */
 export default function UpgradePrompt({ open, title, message, onClose, onUpgrade }: UpgradePromptProps) {
+  const { copy } = useLocale();
+
   return (
     <AnimatePresence>
       {open && (
@@ -50,10 +53,10 @@ export default function UpgradePrompt({ open, title, message, onClose, onUpgrade
                 onClick={onUpgrade}
                 className="w-full rounded-xl brand-gradient py-2.5 text-sm font-semibold text-white shadow-lg shadow-fuchsia-500/20"
               >
-                See Pro plans
+                {copy.upgrade.seePlans}
               </button>
               <button onClick={onClose} className="w-full py-2 text-xs font-medium text-white/40 hover:text-white/60">
-                Maybe later
+                {copy.upgrade.later}
               </button>
             </div>
           </motion.div>
