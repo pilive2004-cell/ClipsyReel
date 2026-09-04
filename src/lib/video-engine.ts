@@ -278,6 +278,8 @@ function buildSegmentFilter(seg: Segment, index: number, recipe: StyleRecipe, w:
 export type MontageMode = "reel" | "story";
 export type RenderQuality = "720p" | "1080p";
 export type RenderSpeedProfile = "standard" | "fast";
+export type KenBurnsTier = "skip" | "standard" | "enhanced";
+
 
 const QUALITY_DIMENSIONS: Record<RenderQuality, { w: number; h: number }> = {
   "720p": { w: 720, h: 1280 },
@@ -563,6 +565,8 @@ export interface BuildMontageParams {
   keepOriginalAudio?: boolean;
   /** Controls encoder speed at fixed 1080p: "fast" skips Ken Burns zoom (3–5× speedup) at the cost of static framing. */
   renderSpeedProfile?: RenderSpeedProfile;
+  /** Ken Burns zoom control: "skip" for 15-25% speedup, "standard" for cinematic zoom, "enhanced" for premium effect. Defaults to "standard". */
+  kenBurnsTier?: KenBurnsTier;
   /** Optional reel title shown before hook overlay text. */
   reelTitle?: ReelTitleOverlaySettings;
   /** Up to three custom overlay texts burned into the final exported MP4. */
@@ -654,15 +658,16 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     watermark = false,
     keepOriginalAudio = false,
     renderSpeedProfile = "standard",
+    kenBurnsTier = "standard",
     reelTitle,
     overlayTexts = [],
     onProgress,
     onPhaseChange,
   } = params;
 
-  // Fast mode: skips Ken Burns zoompan — 3–5× speedup on Phase 1 at the cost
-  // of static framing. Trades cinematic zoom for responsiveness.
-  const fastMode = renderSpeedProfile === "fast";
+  // Determine Ken Burns mode: use tier, or auto-detect from renderSpeedProfile
+  const effectiveKenBurnsTier: KenBurnsTier = kenBurnsTier !== "standard" ? kenBurnsTier : (renderSpeedProfile === "fast" ? "skip" : "standard");
+  const fastMode = effectiveKenBurnsTier === "skip";
 
   const recipe = STYLE_RECIPES[style];
   const transitionPool = STYLE_TRANSITIONS[style];
@@ -704,7 +709,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
 
   mark("start");
   console.group("[video-engine] Render pipeline started");
-  console.log(`Quality: ${quality} | fastMode: ${fastMode} | codec: ${selectedCodec} | GPU: ${hwAccelResult.isHardwareAccelerated} | segments: ${segments.length}`);
+  console.log(`Quality: ${quality} | KenBurns: ${effectiveKenBurnsTier} | codec: ${selectedCodec} | GPU: ${hwAccelResult.isHardwareAccelerated} | segments: ${segments.length}`);
 
   const ffmpeg = await loadFFmpeg();
   mark("ffmpeg-ready");
@@ -956,7 +961,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       completedUnits++;
     }
     mark("phase1-done");
-    console.log(`[video-engine] Phase 1 (${segments.length} clips, fastMode=${fastMode}): ${elapsed("phase1-start", "phase1-done")}`);
+    console.log(`[video-engine] Phase 1 (${segments.length} clips, HW codec, KenBurns=${effectiveKenBurnsTier}): ${elapsed("phase1-start", "phase1-done")}`);
 
     const finalClipNames = [...(introName ? [introName] : []), ...segmentClipNames, ...(outroName ? [outroName] : [])];
     const finalDurations = [...(introName ? [introClip!.durationSeconds] : []), ...segmentDurations, ...(outroName ? [outroClip!.durationSeconds] : [])];

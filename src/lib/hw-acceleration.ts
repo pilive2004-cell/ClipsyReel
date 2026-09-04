@@ -10,7 +10,7 @@
  */
 
 // WebGL extension type for debug renderer info
-interface WebGLDebugRendererInfo extends WebGLExtension {
+interface WebGLDebugRendererInfo {
   UNMASKED_VENDOR_WEBGL: number;
   UNMASKED_RENDERER_WEBGL: number;
 }
