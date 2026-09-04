@@ -8,6 +8,16 @@ import { pickTransitionName, randomTransitionDuration, STYLE_TRANSITIONS } from 
 import { detectHardwareAcceleration, buildEncoderArgs, HardwareCodec } from "@/lib/hw-acceleration";
 import { buildRenderCacheKey, fingerprintFile, getCachedBinaryAsset, putCachedBinaryAsset } from "@/lib/render-asset-cache";
 
+/** Clone file data to prevent ArrayBuffer detachment issues with FFmpeg worker */
+async function getFileDataForFFmpeg(file: File | Blob): Promise<Uint8Array> {
+  const data = await fetchFile(file);
+  // Clone the Uint8Array to avoid "already detached" errors when the same file is used multiple times
+  if (data instanceof Uint8Array) {
+    return new Uint8Array(data);
+  }
+  return data;
+}
+
 /**
  * Real, in-browser video editing engine powered by ffmpeg.wasm.
  *
@@ -736,7 +746,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
   const inputNames: string[] = [];
   for (let i = 0; i < files.length; i++) {
     const name = `src_${stamp}_${i}.mp4`;
-    await ffmpeg.writeFile(name, await fetchFile(files[i]));
+    await ffmpeg.writeFile(name, await getFileDataForFFmpeg(files[i]));
     inputNames.push(name);
     onProgress?.(0.01 + (i + 1) / files.length * 0.03);
   }
@@ -746,13 +756,13 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
   let introSourceName: string | null = null;
   if (introClip) {
     introSourceName = `intro_${stamp}.webm`;
-    await ffmpeg.writeFile(introSourceName, await fetchFile(introClip.file));
+    await ffmpeg.writeFile(introSourceName, await getFileDataForFFmpeg(introClip.file));
   }
 
   let outroSourceName: string | null = null;
   if (outroClip) {
     outroSourceName = `outro_${stamp}.webm`;
-    await ffmpeg.writeFile(outroSourceName, await fetchFile(outroClip.file));
+    await ffmpeg.writeFile(outroSourceName, await getFileDataForFFmpeg(outroClip.file));
   }
 
   let watermarkName: string | null = null;

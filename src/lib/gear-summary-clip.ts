@@ -104,23 +104,20 @@ function fillTextBlock(
 }
 
 async function loadImageFromFile(file: File): Promise<HTMLImageElement> {
-  const url = URL.createObjectURL(file);
-  try {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
     const image = new Image();
     image.decoding = "async";
+    image.onload = () => {
+      // Image loaded successfully — keep URL valid
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Failed to load portrait image"));
+    };
     image.src = url;
-    if (typeof image.decode === "function") {
-      await image.decode();
-    } else {
-      await new Promise<void>((resolve, reject) => {
-        image.onload = () => resolve();
-        image.onerror = () => reject(new Error("Portrait image failed to load"));
-      });
-    }
-    return image;
-  } finally {
-    URL.revokeObjectURL(url);
-  }
+  });
 }
 
 function drawImageCover(
