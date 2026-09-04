@@ -50,6 +50,9 @@ export default function Home() {
   const [reelTitleSize, setReelTitleSize] = useState<ReelTitleSize>("md");
   const [reelTitleColor, setReelTitleColor] = useState<ReelTitleColor>("white");
   const [overlayTexts, setOverlayTexts] = useState<[string, string, string]>(["", "", ""]);
+  const [overlayFonts, setOverlayFonts] = useState<[ReelTitleFont, ReelTitleFont, ReelTitleFont]>(["cinematic", "cinematic", "cinematic"]);
+  const [overlaySizes, setOverlaySizes] = useState<[ReelTitleSize, ReelTitleSize, ReelTitleSize]>(["md", "md", "md"]);
+  const [overlayColors, setOverlayColors] = useState<[ReelTitleColor, ReelTitleColor, ReelTitleColor]>(["white", "white", "white"]);
   const [routeIntroClip, setRouteIntroClip] = useState<RouteIntroClip | null>(null);
   const [hasRouteIntro, setHasRouteIntro] = useState(false);
   const [routeIntroStatus, setRouteIntroStatus] = useState<"idle" | "rendering" | "ready" | "error">("idle");
@@ -341,9 +344,33 @@ export default function Home() {
             <p className="mb-3 text-xs text-white/45">Configure the opening hook overlays that control the attention-grabbing start of your Reel.</p>
             <HookCaptionPanel
               overlayTexts={overlayTexts}
+              overlayFonts={overlayFonts}
+              overlaySizes={overlaySizes}
+              overlayColors={overlayColors}
               onChangeOverlayText={(index, value) =>
                 setOverlayTexts((current) => {
                   const next = [...current] as [string, string, string];
+                  next[index] = value;
+                  return next;
+                })
+              }
+              onChangeOverlayFont={(index, value) =>
+                setOverlayFonts((current) => {
+                  const next = [...current] as [ReelTitleFont, ReelTitleFont, ReelTitleFont];
+                  next[index] = value;
+                  return next;
+                })
+              }
+              onChangeOverlaySize={(index, value) =>
+                setOverlaySizes((current) => {
+                  const next = [...current] as [ReelTitleSize, ReelTitleSize, ReelTitleSize];
+                  next[index] = value;
+                  return next;
+                })
+              }
+              onChangeOverlayColor={(index, value) =>
+                setOverlayColors((current) => {
+                  const next = [...current] as [ReelTitleColor, ReelTitleColor, ReelTitleColor];
                   next[index] = value;
                   return next;
                 })
@@ -502,6 +529,9 @@ export default function Home() {
             reelTitleSize={reelTitleSize}
             reelTitleColor={reelTitleColor}
             overlayTexts={selectedOverlayTexts}
+            overlayFonts={overlayFonts}
+            overlaySizes={overlaySizes}
+            overlayColors={overlayColors}
             introDurationSeconds={routeIntroClip?.durationSeconds ?? 0}
             outroDurationSeconds={gearSummaryClip?.durationSeconds ?? 0}
             montageInfo={montage ? { clipCount: montage.clipCount, durationSeconds: montage.durationSeconds } : undefined}

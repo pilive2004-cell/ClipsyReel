@@ -18,6 +18,9 @@ interface ReelPreviewProps {
   reelTitleSize?: ReelTitleSize;
   reelTitleColor?: ReelTitleColor;
   overlayTexts?: string[];
+  overlayFonts?: [ReelTitleFont, ReelTitleFont, ReelTitleFont];
+  overlaySizes?: [ReelTitleSize, ReelTitleSize, ReelTitleSize];
+  overlayColors?: [ReelTitleColor, ReelTitleColor, ReelTitleColor];
   introDurationSeconds?: number;
   outroDurationSeconds?: number;
   /** Real montage stats from ffmpeg.wasm rendering (clip count / final duration). */
@@ -36,6 +39,9 @@ export default function ReelPreview({
   reelTitleSize = "md",
   reelTitleColor = "white",
   overlayTexts = [],
+  overlayFonts = ["cinematic", "cinematic", "cinematic"],
+  overlaySizes = ["md", "md", "md"],
+  overlayColors = ["white", "white", "white"],
   introDurationSeconds = 0,
   outroDurationSeconds = 0,
   montageInfo,
@@ -295,17 +301,89 @@ export default function ReelPreview({
         <div className={`pointer-events-none absolute inset-0 bg-gradient-to-t ${styleDef.gradient} mix-blend-overlay opacity-15`} />
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-black/5 to-black/20" />
 
-        {/* Hook text overlay */}
+        {/* Overlay texts with cinematic animations and styling */}
         {showPreviewChrome && overlayWindows.length > 0 && activeOverlayIndex !== null && (
-          <div className="absolute inset-x-5 bottom-28 flex justify-center">
-            <motion.div
-              key={`${activeOverlayIndex}-${overlayWindows[activeOverlayIndex].text}`}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="max-w-[88%] rounded-full bg-black/52 px-4 py-2 text-center text-[11px] font-semibold text-white shadow-[0_12px_28px_rgba(0,0,0,0.35)] backdrop-blur"
-            >
-              {overlayWindows[activeOverlayIndex].text}
-            </motion.div>
+          <div className="absolute inset-x-3 top-1/4 flex justify-center pointer-events-none">
+            {(() => {
+              const overlay = overlayWindows[activeOverlayIndex];
+              const overlayFont = overlayFonts[activeOverlayIndex];
+              const overlaySize = overlaySizes[activeOverlayIndex];
+              const overlayColor = overlayColors[activeOverlayIndex];
+
+              const fontClass = overlayFont === "classic"
+                ? "font-serif"
+                : overlayFont === "modern"
+                  ? "font-sans tracking-wide"
+                  : overlayFont === "bold"
+                    ? "font-sans font-black tracking-tight"
+                    : overlayFont === "minimal"
+                      ? "font-sans font-light tracking-[0.12em]"
+                      : overlayFont === "handwritten"
+                        ? "font-handwriting"
+                        : overlayFont === "elegant"
+                          ? "font-serif italic"
+                          : overlayFont === "impact"
+                            ? "font-sans font-black"
+                            : overlayFont === "mono"
+                              ? "font-mono"
+                              : overlayFont === "rounded"
+                                ? "font-rounded"
+                                : "font-sans";
+
+              const sizeClass = overlaySize === "sm"
+                ? "text-xl leading-tight"
+                : overlaySize === "lg"
+                  ? "text-3xl leading-tight"
+                  : "text-2xl leading-tight";
+
+              const colorClass = overlayColor === "white"
+                ? "text-white"
+                : overlayColor === "gold"
+                  ? "text-amber-300"
+                  : overlayColor === "coral"
+                    ? "text-orange-400"
+                    : overlayColor === "cyan"
+                      ? "text-cyan-400"
+                      : overlayColor === "lime"
+                        ? "text-lime-300"
+                        : overlayColor === "violet"
+                          ? "text-violet-300"
+                          : overlayColor === "pink"
+                            ? "text-pink-300"
+                            : overlayColor === "red"
+                              ? "text-red-400"
+                              : overlayColor === "blue"
+                                ? "text-blue-400"
+                                : overlayColor === "emerald"
+                                  ? "text-emerald-300"
+                                  : overlayColor === "peach"
+                                    ? "text-orange-200"
+                                    : "text-slate-300";
+
+              const fadeDuration = 0.5;
+              const elapsedInWindow = Math.max(0, currentTimeSeconds - overlay.start);
+              const windowDuration = overlay.end - overlay.start;
+              const progress = Math.min(1, elapsedInWindow / windowDuration);
+
+              let opacity = 1;
+              if (progress < fadeDuration / windowDuration) {
+                opacity = (progress * windowDuration) / fadeDuration;
+              } else if (progress > 1 - fadeDuration / windowDuration) {
+                opacity = ((1 - progress) * windowDuration) / fadeDuration;
+              }
+
+              return (
+                <motion.div
+                  key={`${activeOverlayIndex}-${overlay.text}`}
+                  initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                  animate={{ opacity, scale: 1, y: 0 }}
+                  transition={{ type: "spring", stiffness: 100, damping: 20 }}
+                  className={`max-w-[80%] px-5 py-3.5 rounded-[20px] bg-gradient-to-br from-black/45 to-black/25 backdrop-blur-md border border-white/10 shadow-[0_20px_40px_rgba(0,0,0,0.5)] text-center ${fontClass} ${sizeClass} ${colorClass} font-semibold drop-shadow-[0_2px_8px_rgba(0,0,0,0.6)]`}
+                >
+                  {overlay.text}
+                </motion.div>
+              );
+            })()}
           </div>
         )}
         {showPreviewChrome &&
