@@ -170,10 +170,14 @@ export default function VideoUploader({
               handleFile(e.dataTransfer.files?.[0]);
             }}
             className={cn(
-              "flex w-full flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed px-4 py-10 text-center transition",
-              isDragging ? "border-fuchsia-400/60 bg-fuchsia-500/5" : "border-white/10 bg-white/[0.02] hover:border-white/20 hover:bg-white/[0.04]"
+              "relative flex w-full flex-col items-center justify-center gap-3 overflow-hidden rounded-2xl border-2 border-dashed px-4 py-10 text-center transition",
+              isDragging
+                ? "border-fuchsia-300/60 bg-[#121024] shadow-[0_0_0_1px_rgba(217,70,239,0.2),0_18px_40px_rgba(124,58,237,0.2)]"
+                : "border-white/10 bg-[#0b0f17] hover:border-white/22 hover:bg-[#0f1522]"
             )}
           >
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(120%_78%_at_50%_-8%,rgba(217,70,239,0.2),transparent_58%),radial-gradient(100%_90%_at_50%_120%,rgba(124,58,237,0.16),transparent_62%)]" />
+            <div className="pointer-events-none absolute inset-[1px] rounded-[15px] border border-white/5" />
             <AnimatePresence mode="wait">
               {isUploading ? (
                 <motion.div
@@ -181,7 +185,7 @@ export default function VideoUploader({
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  className="flex w-full flex-col items-center gap-3"
+                  className="relative z-10 flex w-full flex-col items-center gap-3"
                 >
                   <FileVideo className="h-8 w-8 text-fuchsia-400" />
                   <div className="h-1.5 w-40 overflow-hidden rounded-full bg-white/10">
@@ -199,7 +203,7 @@ export default function VideoUploader({
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  className="flex flex-col items-center gap-3"
+                  className="relative z-10 flex flex-col items-center gap-3"
                 >
                   <div className="flex h-14 w-14 items-center justify-center rounded-2xl brand-gradient shadow-lg shadow-fuchsia-500/20">
                     {videos.length === 0 ? <UploadCloud className="h-6 w-6 text-white" /> : <Plus className="h-6 w-6 text-white" />}

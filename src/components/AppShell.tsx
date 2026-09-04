@@ -14,7 +14,9 @@ export default function AppShell({ children, onOpenPricing }: AppShellProps) {
   const planLabel = PLANS.find((p) => p.id === plan)?.name ?? "Free";
 
   return (
-    <div className="min-h-dvh flex flex-col">
+    <div className="relative isolate min-h-dvh flex flex-col overflow-hidden">
+      <div className="pointer-events-none fixed inset-0 -z-20 bg-[linear-gradient(180deg,#07070f_0%,#0b0a14_24%,#171028_50%,#22133a_66%,#171128_84%,#07070f_100%)]" />
+      <div className="pointer-events-none fixed inset-0 -z-10 bg-[radial-gradient(140%_115%_at_20%_-16%,rgba(124,58,237,0.13)_0%,rgba(124,58,237,0.075)_34%,rgba(124,58,237,0.03)_62%,transparent_100%),radial-gradient(130%_120%_at_86%_64%,rgba(217,70,239,0.10)_0%,rgba(217,70,239,0.06)_36%,rgba(217,70,239,0.02)_66%,transparent_100%)]" />
       <header className="sticky top-0 z-40 border-b border-white/5 bg-black/40 backdrop-blur-xl">
         <div className="mx-auto flex max-w-md items-center justify-between px-4 py-3 sm:max-w-2xl">
           <div className="flex items-center gap-2">

@@ -354,7 +354,7 @@ export default function Home() {
           <button
             onClick={goToStyle}
             disabled={videos.length === 0}
-            className="flex w-full items-center justify-center gap-2 rounded-2xl brand-gradient py-3.5 text-sm font-semibold text-white shadow-lg shadow-fuchsia-500/25 transition disabled:cursor-not-allowed disabled:opacity-30"
+            className="flex w-full items-center justify-center gap-2 rounded-2xl brand-gradient py-3.5 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(0,0,0,0.28)] transition disabled:cursor-not-allowed disabled:opacity-30"
           >
             Choose a style <ArrowRight className="h-4 w-4" />
           </button>
@@ -443,14 +443,14 @@ export default function Home() {
               <button
                 onClick={startAnalysis}
                 disabled={!style}
-                className="flex flex-1 items-center justify-center gap-2 rounded-2xl brand-gradient py-3.5 text-sm font-semibold text-white shadow-lg shadow-fuchsia-500/25 transition disabled:cursor-not-allowed disabled:opacity-30"
+                className="flex flex-1 items-center justify-center gap-2 rounded-2xl brand-gradient py-3.5 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(0,0,0,0.28)] transition disabled:cursor-not-allowed disabled:opacity-30"
               >
                 Analyze video{videos.length > 1 ? "s" : ""} <ArrowRight className="h-4 w-4" />
               </button>
             ) : (
               <button
                 onClick={startRender}
-                className="flex flex-1 items-center justify-center gap-2 rounded-2xl brand-gradient py-3.5 text-sm font-semibold text-white shadow-lg shadow-fuchsia-500/25 transition"
+                className="flex flex-1 items-center justify-center gap-2 rounded-2xl brand-gradient py-3.5 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(0,0,0,0.28)] transition"
               >
                 Generate Reel <ArrowRight className="h-4 w-4" />
               </button>

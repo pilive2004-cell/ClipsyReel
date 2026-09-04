@@ -661,20 +661,15 @@ export default function RouteMapIntro({
           version: 8,
           glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
           sources: {
-            "carto-voyager": {
+            "osm-raster": {
               type: "raster",
-              tiles: [
-                "https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png",
-                "https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png",
-                "https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png",
-                "https://d.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png",
-              ],
+              tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
               tileSize: 256,
               maxzoom: 19,
-              attribution: "© OpenStreetMap © CARTO",
+              attribution: "© OpenStreetMap contributors",
             },
           },
-          layers: [{ id: "base-tiles", type: "raster", source: "carto-voyager" }],
+          layers: [{ id: "base-tiles", type: "raster", source: "osm-raster" }],
         },
         // Start tile loading at the exact overview position computed above.
         // The load handler re-applies these via jumpTo after adding layers.

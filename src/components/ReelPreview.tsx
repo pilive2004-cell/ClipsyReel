@@ -40,8 +40,14 @@ export default function ReelPreview({
   outroDurationSeconds = 0,
   montageInfo,
 }: ReelPreviewProps) {
+  const HOOK_FADE_IN_SECONDS = 0.72;
+  const HOOK_HOLD_SECONDS = 2.35;
+  const HOOK_FADE_OUT_SECONDS = 0.72;
+  const HOOK_CYCLE_SECONDS = HOOK_FADE_IN_SECONDS + HOOK_HOLD_SECONDS + HOOK_FADE_OUT_SECONDS;
   const styleDef = STYLES.find((s) => s.id === style)!;
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const previousTypedLengthRef = useRef(0);
   const [fallbackState, setFallbackState] = useState<{ source: string; url: string } | null>(null);
   const [readySource, setReadySource] = useState<string | null>(null);
   const [errorSource, setErrorSource] = useState<string | null>(null);
@@ -130,6 +136,37 @@ export default function ReelPreview({
                       : reelTitleColor === "silver"
                         ? "text-slate-300"
             : "text-white";
+  const trimmedHookText = hookText.trim();
+  const hookTextLength = trimmedHookText.length;
+  const hookTextSizeClass = hookTextLength <= 28
+    ? "text-[22px] leading-[1.16]"
+    : hookTextLength <= 52
+      ? "text-[19px] leading-[1.2]"
+      : "text-[17px] leading-[1.26]";
+  const easeInOut = (value: number) => value * value * (3 - 2 * value);
+  const hookTimeline = useMemo(() => {
+    if (!showPreviewChrome || hookTextLength === 0) {
+      return { opacity: 0, typedLength: 0 };
+    }
+    const elapsedSinceMontageStart = Math.max(0, currentTimeSeconds - montageWindow.start);
+    const cyclePosition = elapsedSinceMontageStart % HOOK_CYCLE_SECONDS;
+    const holdStart = HOOK_FADE_IN_SECONDS;
+    const fadeOutStart = HOOK_FADE_IN_SECONDS + HOOK_HOLD_SECONDS;
+    let opacity = 0;
+    if (cyclePosition < HOOK_FADE_IN_SECONDS) {
+      opacity = easeInOut(cyclePosition / HOOK_FADE_IN_SECONDS);
+    } else if (cyclePosition < fadeOutStart) {
+      opacity = 1;
+    } else {
+      opacity = 1 - easeInOut((cyclePosition - fadeOutStart) / HOOK_FADE_OUT_SECONDS);
+    }
+
+    const typingDuration = Math.min(1.45, Math.max(0.8, hookTextLength * 0.03));
+    const typingProgress = Math.min(1, easeInOut(Math.min(1, cyclePosition / typingDuration)));
+    const typedLength = Math.max(0, Math.min(hookTextLength, Math.floor(hookTextLength * typingProgress)));
+    return { opacity, typedLength };
+  }, [HOOK_CYCLE_SECONDS, HOOK_FADE_IN_SECONDS, HOOK_FADE_OUT_SECONDS, HOOK_HOLD_SECONDS, currentTimeSeconds, hookTextLength, montageWindow.start, showPreviewChrome]);
+  const typedHookText = trimmedHookText.slice(0, hookTimeline.typedLength);
 
   useEffect(() => {
     if (!videoBlob || fallbackState?.source === videoUrl) return;
@@ -152,6 +189,57 @@ export default function ReelPreview({
       if (fallbackState?.url) URL.revokeObjectURL(fallbackState.url);
     };
   }, [fallbackState]);
+
+  useEffect(() => {
+    return () => {
+      if (audioContextRef.current) {
+        void audioContextRef.current.close();
+        audioContextRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!showPreviewChrome || hookTextLength === 0 || document.hidden) {
+      previousTypedLengthRef.current = hookTimeline.typedLength;
+      return;
+    }
+    if (hookTimeline.typedLength <= previousTypedLengthRef.current) {
+      previousTypedLengthRef.current = hookTimeline.typedLength;
+      return;
+    }
+
+    const AudioContextCtor = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextCtor) {
+      console.warn("[ReelPreview] AudioContext API unavailable for typewriter sound effect.");
+      previousTypedLengthRef.current = hookTimeline.typedLength;
+      return;
+    }
+    const nextAudioContext = audioContextRef.current ?? new AudioContextCtor();
+    audioContextRef.current = nextAudioContext;
+    if (nextAudioContext.state === "suspended") {
+      void nextAudioContext.resume().catch((error: unknown) => {
+        console.warn("[ReelPreview] Unable to resume typewriter audio context:", error);
+      });
+    }
+
+    const addedCharacters = hookTimeline.typedLength - previousTypedLengthRef.current;
+    previousTypedLengthRef.current = hookTimeline.typedLength;
+    for (let i = 0; i < addedCharacters; i++) {
+      const oscillator = nextAudioContext.createOscillator();
+      const gain = nextAudioContext.createGain();
+      const startTime = nextAudioContext.currentTime + i * 0.026;
+      oscillator.type = "triangle";
+      oscillator.frequency.setValueAtTime(1750, startTime);
+      gain.gain.setValueAtTime(0.0001, startTime);
+      gain.gain.exponentialRampToValueAtTime(0.015, startTime + 0.006);
+      gain.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.04);
+      oscillator.connect(gain);
+      gain.connect(nextAudioContext.destination);
+      oscillator.start(startTime);
+      oscillator.stop(startTime + 0.043);
+    }
+  }, [hookTextLength, hookTimeline.typedLength, showPreviewChrome]);
 
   const markReady = () => {
     setErrorSource((current) => (current === effectiveVideoUrl ? null : current));
@@ -236,15 +324,17 @@ export default function ReelPreview({
             </motion.p>
           </div>
         )}
-        {showPreviewChrome && (
-          <div className="absolute inset-x-3 bottom-16">
-            <motion.p
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="text-sm font-bold leading-snug text-white drop-shadow-[0_2px_6px_rgba(0,0,0,0.8)]"
+        {showPreviewChrome && hookTextLength > 0 && (
+          <div className="pointer-events-none absolute inset-x-4 top-[30%] flex justify-center">
+            <div
+              className="w-fit max-w-[90%] rounded-[20px] border border-white/14 bg-black/48 px-5 py-4 shadow-[0_12px_32px_rgba(0,0,0,0.38)] backdrop-blur-md"
+              style={{ opacity: hookTimeline.opacity, transition: "opacity 120ms linear" }}
             >
-              {hookText}
-            </motion.p>
+              <p className={`relative text-center font-extrabold tracking-[0.01em] text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.9)] ${hookTextSizeClass}`}>
+                <span className="invisible">{trimmedHookText}</span>
+                <span className="absolute inset-0">{typedHookText}</span>
+              </p>
+            </div>
           </div>
         )}
 

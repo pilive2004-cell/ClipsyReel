@@ -141,9 +141,8 @@ export default function GPXMap({ gpxText, videoMatches, onReady, heightClassName
           style={{ background: "#0a0a10" }}
         >
           <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
-            url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png"
-            subdomains={["a", "b", "c", "d"]}
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
             maxZoom={19}
           />
           <GpxRouteLayer gpxText={gpxText} invisibleIcon={icons.invisible} onLoaded={handleLoaded} />
