@@ -287,7 +287,7 @@ export default function Home() {
 
   return (
     <AppShell onOpenPricing={() => setPricingOpen(true)}>
-      <div className={step === "upload" ? "space-y-5" : "hidden"}>
+      <StepContent isVisible={step === "upload"}>
           <StepBar step={step} />
           <HeroSection />
 
@@ -385,9 +385,9 @@ export default function Home() {
           >
             Choose a style <ArrowRight className="h-4 w-4" />
           </button>
-      </div>
+      </StepContent>
 
-      <div className={step === "style" ? "space-y-5" : "hidden"}>
+      <StepContent isVisible={step === "style"}>
           <StepBar step={step} />
           {!analysis ? (
             <div>
@@ -483,73 +483,79 @@ export default function Home() {
               </button>
             )}
           </div>
-      </div>
+      </StepContent>
 
-      {step === "analyze" && <AIAnalysisPanel videos={videos} onComplete={handleAnalysisComplete} />}
+      <StepContent isVisible={step === "analyze"}>
+        <AIAnalysisPanel videos={videos} onComplete={handleAnalysisComplete} />
+      </StepContent>
 
-      {step === "render" && style && (
-        <div className="space-y-4">
-          <RenderPanel progress={renderProgress} phaseLabel={renderPhaseLabel} styleLabel={STYLES.find((s) => s.id === style)?.label ?? style} />
-          {renderError && (
-            <div className="space-y-2 rounded-2xl border border-rose-400/20 bg-rose-400/[0.06] px-4 py-3 text-xs text-rose-300">
-              <p>{renderError}</p>
-              <div className="flex gap-2">
-                <button onClick={retryRender} className="flex-1 rounded-xl bg-white/10 py-2 font-semibold text-white/85 hover:bg-white/15">
-                  Retry
-                </button>
-                {!requiresMapIntro && (
-                  <button onClick={skipRenderFallback} className="flex-1 rounded-xl bg-white/5 py-2 font-semibold text-white/60 hover:bg-white/10">
-                    Continue with raw clip
+      <StepContent isVisible={step === "render" && style !== null}>
+        {style && (
+          <>
+            <RenderPanel progress={renderProgress} phaseLabel={renderPhaseLabel} styleLabel={STYLES.find((s) => s.id === style)?.label ?? style} />
+            {renderError && (
+              <div className="space-y-2 rounded-2xl border border-rose-400/20 bg-rose-400/[0.06] px-4 py-3 text-xs text-rose-300">
+                <p>{renderError}</p>
+                <div className="flex gap-2">
+                  <button onClick={retryRender} className="flex-1 rounded-xl bg-white/10 py-2 font-semibold text-white/85 hover:bg-white/15">
+                    Retry
                   </button>
-                )}
+                  {!requiresMapIntro && (
+                    <button onClick={skipRenderFallback} className="flex-1 rounded-xl bg-white/5 py-2 font-semibold text-white/60 hover:bg-white/10">
+                      Continue with raw clip
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
+          </>
+        )}
+      </StepContent>
+
+      <StepContent isVisible={step === "preview" && analysis !== null && videos.length > 0}>
+          {analysis && (
+            <>
+              <StepBar step={step} />
+
+              <div className="flex items-center gap-2 rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.06] px-4 py-2.5 text-xs text-emerald-300">
+                <Check className="h-3.5 w-3.5" />
+                {montage ? "Montage rendered — real cuts, zoom & transitions applied" : "Analysis complete — your Reel is ready to preview"}
+              </div>
+
+              <ReelPreview
+                videoUrl={previewUrl}
+                videoBlob={montage?.blob}
+                style={analysis.style}
+                hookText={selectedHookText}
+                bestMoments={analysis.bestMoments}
+                watermark={isFree && !montage}
+                reelTitle={reelTitle.trim()}
+                reelTitleFont={reelTitleFont}
+                reelTitleSize={reelTitleSize}
+                reelTitleColor={reelTitleColor}
+                overlayTexts={selectedOverlayTexts}
+                overlayFonts={overlayFonts}
+                overlaySizes={overlaySizes}
+                overlayColors={overlayColors}
+                introDurationSeconds={routeIntroClip?.durationSeconds ?? 0}
+                outroDurationSeconds={gearSummaryClip?.durationSeconds ?? 0}
+                montageInfo={montage ? { clipCount: montage.clipCount, durationSeconds: montage.durationSeconds } : undefined}
+              />
+
+              <Section title="Export">
+                <ExportPanel videoUrl={previewUrl} videoName={combinedName} onLockedClick={() => setPricingOpen(true)} />
+              </Section>
+
+              <button
+                onClick={resetAll}
+                className="flex w-full items-center justify-center gap-2 rounded-2xl border border-white/15 bg-white/[0.04] py-3.5 text-sm font-semibold text-white transition hover:border-white/25 hover:bg-white/[0.08] active:scale-[0.99]"
+              >
+                <RotateCcw className="h-4 w-4" />
+                Start a new Reel
+              </button>
+            </>
           )}
-        </div>
-      )}
-
-      {step === "preview" && analysis && videos.length > 0 && (
-        <div className="space-y-6">
-          <StepBar step={step} />
-
-          <div className="flex items-center gap-2 rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.06] px-4 py-2.5 text-xs text-emerald-300">
-            <Check className="h-3.5 w-3.5" />
-            {montage ? "Montage rendered — real cuts, zoom & transitions applied" : "Analysis complete — your Reel is ready to preview"}
-          </div>
-
-          <ReelPreview
-            videoUrl={previewUrl}
-            videoBlob={montage?.blob}
-            style={analysis.style}
-            hookText={selectedHookText}
-            bestMoments={analysis.bestMoments}
-            watermark={isFree && !montage}
-            reelTitle={reelTitle.trim()}
-            reelTitleFont={reelTitleFont}
-            reelTitleSize={reelTitleSize}
-            reelTitleColor={reelTitleColor}
-            overlayTexts={selectedOverlayTexts}
-            overlayFonts={overlayFonts}
-            overlaySizes={overlaySizes}
-            overlayColors={overlayColors}
-            introDurationSeconds={routeIntroClip?.durationSeconds ?? 0}
-            outroDurationSeconds={gearSummaryClip?.durationSeconds ?? 0}
-            montageInfo={montage ? { clipCount: montage.clipCount, durationSeconds: montage.durationSeconds } : undefined}
-          />
-
-          <Section title="Export">
-            <ExportPanel videoUrl={previewUrl} videoName={combinedName} onLockedClick={() => setPricingOpen(true)} />
-          </Section>
-
-          <button
-            onClick={resetAll}
-            className="flex w-full items-center justify-center gap-2 rounded-2xl border border-white/15 bg-white/[0.04] py-3.5 text-sm font-semibold text-white transition hover:border-white/25 hover:bg-white/[0.08] active:scale-[0.99]"
-          >
-            <RotateCcw className="h-4 w-4" />
-            Start a new Reel
-          </button>
-        </div>
-      )}
+      </StepContent>
 
       <PricingModal open={pricingOpen} onClose={() => setPricingOpen(false)} />
       {routeIntroPoints && routeIntroPoints.length > 1 && (
@@ -609,6 +615,25 @@ function Section({ title, children }: { title: string; children: React.ReactNode
         <h2 className="mb-2 text-sm font-semibold text-white/85">{title}</h2>
         {children}
       </motion.div>
+    </AnimatePresence>
+  );
+}
+
+function StepContent({ isVisible, children }: { isVisible: boolean; children: React.ReactNode }) {
+  return (
+    <AnimatePresence mode="wait">
+      {isVisible && (
+        <motion.div
+          key="step-content"
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -8 }}
+          transition={{ duration: 0.35, ease: "easeInOut" }}
+          className="space-y-5"
+        >
+          {children}
+        </motion.div>
+      )}
     </AnimatePresence>
   );
 }
