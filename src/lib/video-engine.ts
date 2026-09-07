@@ -8,14 +8,17 @@ import { pickTransitionName, randomTransitionDuration, STYLE_TRANSITIONS } from 
 import { detectHardwareAcceleration, buildEncoderArgs, HardwareCodec } from "@/lib/hw-acceleration";
 import { buildRenderCacheKey, fingerprintFile, getCachedBinaryAsset, putCachedBinaryAsset } from "@/lib/render-asset-cache";
 
-/** Clone file data to prevent ArrayBuffer detachment issues with FFmpeg worker */
+/** Clone file data to prevent ArrayBuffer detachment issues with FFmpeg worker. */
 async function getFileDataForFFmpeg(file: File | Blob): Promise<Uint8Array> {
   const data = await fetchFile(file);
-  // Clone the Uint8Array to avoid "already detached" errors when the same file is used multiple times
-  if (data instanceof Uint8Array) {
-    return new Uint8Array(data);
-  }
-  return data;
+  const source = ArrayBuffer.isView(data)
+    ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+    : new Uint8Array(data as ArrayBuffer);
+  return new Uint8Array(source);
+}
+
+function cloneFFmpegData(data: Uint8Array): Uint8Array {
+  return new Uint8Array(data);
 }
 
 /**
@@ -67,6 +70,40 @@ export function isRenderInProgress(): boolean {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+export async function detectVideoHasAudio(file: File | Blob): Promise<boolean> {
+  const url = URL.createObjectURL(file);
+  const video = document.createElement("video");
+  video.preload = "metadata";
+  video.playsInline = true;
+  video.muted = false;
+  video.volume = 1;
+  video.src = url;
+
+  return await new Promise<boolean>((resolve) => {
+    const cleanup = () => URL.revokeObjectURL(url);
+    const finalize = () => {
+      const audioTracks = (video as HTMLVideoElement & { audioTracks?: { length: number } }).audioTracks;
+      const mozHasAudio = (video as HTMLVideoElement & { mozHasAudio?: boolean }).mozHasAudio;
+      const webkitAudioDecodedByteCount = (video as HTMLVideoElement & { webkitAudioDecodedByteCount?: number }).webkitAudioDecodedByteCount;
+      const hasAudio = Boolean(
+        mozHasAudio ||
+        webkitAudioDecodedByteCount ||
+        (audioTracks && audioTracks.length > 0)
+      );
+      cleanup();
+      resolve(hasAudio);
+    };
+
+    video.onloadedmetadata = finalize;
+    video.oncanplay = finalize;
+    video.onerror = () => {
+      cleanup();
+      resolve(false);
+    };
+    video.load();
+  });
 }
 
 /** Lazily loads & caches a single ffmpeg.wasm instance (core files are self-hosted in /public/ffmpeg). */
@@ -173,8 +210,38 @@ function pickDistinctMoments(moments: BestMoment[], clipDuration: number): BestM
   return chosen.sort((a, b) => a.startSeconds - b.startSeconds);
 }
 
-/** Picks up to `recipe.reelClipCount` of the AI-detected best moments, fairly distributed across every source video (round-robin by per-video confidence) so a multi-video upload doesn't get dominated by whichever video happened to produce its moments first in the list. */
-function planReelSegments(bestMoments: BestMoment[], recipe: StyleRecipe, videoDurations: number[]): Segment[] {
+function buildSegmentFromMoment(
+  moment: BestMoment,
+  recipe: StyleRecipe,
+  videoDurations: number[],
+  centerShiftSeconds = 0
+): Segment | null {
+  const videoDuration = videoDurations[moment.sourceIndex] ?? 0;
+  const targetLength = Math.max(3.2, recipe.clipDuration);
+  const momentCenter = (moment.startSeconds + moment.endSeconds) / 2 + centerShiftSeconds;
+  const start = Math.min(
+    Math.max(0, momentCenter - targetLength / 2),
+    Math.max(0, videoDuration - 0.3)
+  );
+  const available = Math.max(0, videoDuration - start);
+  const length = Math.max(3.0, Math.min(targetLength, available));
+  if (length <= 2.9) return null;
+  return { sourceIndex: moment.sourceIndex, start, length };
+}
+
+function estimatedMontageDuration(segments: Segment[], recipe: StyleRecipe): number {
+  const raw = segments.reduce((sum, seg) => sum + seg.length / effectiveSpeed(seg, recipe), 0);
+  const transitionPenalty = Math.max(0, segments.length - 1) * 0.2;
+  return Math.max(0, raw - transitionPenalty);
+}
+
+/** Picks clips for a Reel up to `targetDurationSeconds`, allowing non-consecutive reuse when needed. */
+function planReelSegments(
+  bestMoments: BestMoment[],
+  recipe: StyleRecipe,
+  videoDurations: number[],
+  targetDurationSeconds: number
+): Segment[] {
   const byVideo = new Map<number, BestMoment[]>();
   for (const m of bestMoments) {
     const list = byVideo.get(m.sourceIndex);
@@ -200,22 +267,46 @@ function planReelSegments(bestMoments: BestMoment[], recipe: StyleRecipe, videoD
     if (!addedThisRound) break;
   }
 
-  const segments = selected
-    .map((m) => {
-      const videoDuration = videoDurations[m.sourceIndex] ?? 0;
-      const targetLength = Math.max(3.4, recipe.clipDuration);
-      const momentCenter = (m.startSeconds + m.endSeconds) / 2;
-      const start = Math.min(
-        Math.max(0, momentCenter - targetLength / 2),
-        Math.max(0, videoDuration - 0.3)
-      );
-      const available = Math.max(0, videoDuration - start);
-      const length = Math.max(3.0, Math.min(targetLength, available));
-      return { sourceIndex: m.sourceIndex, start, length };
-    })
-    .filter((s) => s.length > 2.9);
+  const baseMoments =
+    selected.length > 0
+      ? selected
+      : [...byVideo.values()].flat().sort((a, b) => b.confidence - a.confidence);
+  const segments = baseMoments
+    .map((m) => buildSegmentFromMoment(m, recipe, videoDurations, 0))
+    .filter((s): s is Segment => s !== null);
 
-  return applySlowMoToStandoutMoments(segments, selected);
+  if (segments.length === 0) return [];
+
+  const sourceDiversity = new Set(baseMoments.map((m) => m.sourceIndex)).size;
+  const jitterPattern = [-1.4, 1.1, -0.8, 1.6, -2.0, 2.2, -1.1, 0.9];
+  const maxSegments = 20;
+  let cursor = 0;
+  let guard = 0;
+  while (
+    estimatedMontageDuration(segments, recipe) < targetDurationSeconds &&
+    segments.length < maxSegments &&
+    guard < 240
+  ) {
+    guard += 1;
+    const sourceMoment = baseMoments[cursor % baseMoments.length];
+    const shiftBase = jitterPattern[cursor % jitterPattern.length];
+    const shift = shiftBase + Math.floor(cursor / jitterPattern.length) * 0.35 * (cursor % 2 === 0 ? 1 : -1);
+    cursor += 1;
+
+    const candidate = buildSegmentFromMoment(sourceMoment, recipe, videoDurations, shift);
+    if (!candidate) continue;
+    const previous = segments[segments.length - 1];
+    if (previous) {
+      const sameSourceConsecutive = sourceDiversity > 1 && previous.sourceIndex === candidate.sourceIndex;
+      const tooSimilarConsecutive =
+        previous.sourceIndex === candidate.sourceIndex &&
+        Math.abs(previous.start - candidate.start) < Math.max(1.2, recipe.clipDuration * 0.38);
+      if (sameSourceConsecutive || tooSimilarConsecutive) continue;
+    }
+    segments.push(candidate);
+  }
+
+  return applySlowMoToStandoutMoments(segments, baseMoments);
 }
 
 /** Samples evenly-spaced segments across all uploaded videos (proportional to each one's length) so a Story can tell the full arc, capped at `maxDurationSeconds`. */
@@ -260,14 +351,15 @@ const COLOR_CORRECTION_FILTER = "eq=contrast=1.08:saturation=1.28:gamma=1.03:bri
  * performance bottleneck at 1080p (≈ 80 frames × 2 MB/frame per segment).
  * Removing it cuts Phase 1 time by roughly 3–5× on a mid-range laptop.
  */
-function buildSegmentFilter(seg: Segment, index: number, recipe: StyleRecipe, w: number, h: number, fps: number, fastMode = false) {
+function buildSegmentFilter(seg: Segment, index: number, recipe: StyleRecipe, w: number, h: number, fps: number, fastMode = false, style: ReelStyle = "viral") {
   const speed = effectiveSpeed(seg, recipe);
+  const sportBoost = style === "sport" ? "eq=contrast=1.18:saturation=1.45:gamma=1.08:brightness=0.02" : COLOR_CORRECTION_FILTER;
 
   if (fastMode) {
     // Fast mode: scale/crop + color correction, no zoompan.
     return (
       `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},` +
-      `${COLOR_CORRECTION_FILTER},` +
+      `${sportBoost},` +
       `setpts=(PTS-STARTPTS)/${speed}`
     );
   }
@@ -283,12 +375,13 @@ function buildSegmentFilter(seg: Segment, index: number, recipe: StyleRecipe, w:
   // `segmentDurations` (seg.length / speed) used for the Phase 2 xfade math.
   const frames = Math.max(1, Math.round(seg.length * fps));
   const dir = zoom === "alternate" ? (index % 2 === 0 ? "in" : "out") : zoom;
-  const inc = (zoomIntensity - 1) / frames;
-  const zExpr = dir === "in" ? `min(1+on*${inc.toFixed(6)},${zoomIntensity})` : `max(${zoomIntensity}-on*${inc.toFixed(6)},1)`;
+  const effectiveZoomIntensity = style === "sport" ? Math.max(zoomIntensity, 1.2) : zoomIntensity;
+  const inc = (effectiveZoomIntensity - 1) / frames;
+  const zExpr = dir === "in" ? `min(1+on*${inc.toFixed(6)},${effectiveZoomIntensity})` : `max(${effectiveZoomIntensity}-on*${inc.toFixed(6)},1)`;
 
   return (
     `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},` +
-    `${COLOR_CORRECTION_FILTER},` +
+    `${sportBoost},` +
     `zoompan=z='${zExpr}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${w}x${h}:fps=${fps},` +
     `setpts=(PTS-STARTPTS)/${speed}`
   );
@@ -307,10 +400,8 @@ const QUALITY_DIMENSIONS: Record<RenderQuality, { w: number; h: number }> = {
 
 /** Maps the demo plan tier to a render resolution — Pro plans render sharper (and, being fewer pixels for Free, faster too). */
 export function qualityForPlan(): RenderQuality {
-  return "1080p";
+  return "720p";
 }
-
-const RENDER_FPS = 24;
 
 /** Draws a rounded rectangle path (used by the watermark canvas generator below). */
 function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
@@ -416,33 +507,23 @@ async function generateOverlayTextPng(frameWidth: number, frameHeight: number, t
   const ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
   ctx.clearRect(0, 0, frameWidth, frameHeight);
 
-  const cardWidth = Math.round(frameWidth * 0.82);
-  const paddingX = Math.round(frameWidth * 0.06);
-  const y = Math.round(frameHeight * 0.64);
-  const x = Math.round((frameWidth - cardWidth) / 2);
-  const maxTextWidth = cardWidth - paddingX * 2;
+  const centerX = frameWidth / 2;
+  const maxTextWidth = Math.round(frameWidth * 0.78);
+  const y = Math.round(frameHeight * 0.34);
 
   ctx.font = `700 ${Math.round(frameWidth * 0.058)}px system-ui, -apple-system, "Segoe UI", sans-serif`;
   const lines = wrapCanvasText(ctx, text, maxTextWidth);
   const lineHeight = Math.round(frameWidth * 0.072);
-  const cardHeight = Math.max(Math.round(frameHeight * 0.1), paddingX * 2 + lines.length * lineHeight);
-
-  ctx.fillStyle = "rgba(0,0,0,0.46)";
-  roundRectPath(ctx, x, y, cardWidth, cardHeight, Math.round(cardHeight / 2));
-  ctx.fill();
-
-  ctx.strokeStyle = "rgba(255,255,255,0.16)";
-  ctx.lineWidth = 2;
-  ctx.stroke();
 
   ctx.fillStyle = "rgba(255,255,255,0.98)";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  const centerX = frameWidth / 2;
-  const startY = y + cardHeight / 2 - ((lines.length - 1) * lineHeight) / 2;
+  ctx.shadowColor = "rgba(0,0,0,0.2)";
+  ctx.shadowBlur = 12;
   lines.forEach((line, index) => {
-    ctx.fillText(line, centerX, startY + index * lineHeight);
+    ctx.fillText(line, centerX, y + index * lineHeight);
   });
+  ctx.shadowBlur = 0;
 
   const blob = await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Overlay text canvas export failed"))), "image/png");
@@ -503,17 +584,33 @@ async function generateReelTitlePng(frameWidth: number, frameHeight: number, tit
   ctx.font = `700 ${fontSize}px ${canvasFontFamilyForTitle(title.font)}`;
   const lines = wrapCanvasText(ctx, title.text, frameWidth * 0.84).slice(0, 2);
   const lineHeight = Math.round(fontSize * 1.14);
+  const paddingX = Math.round(frameWidth * 0.07);
+  const paddingY = Math.round(fontSize * 0.45);
+  const maxLineWidth = Math.max(...lines.map((line) => ctx.measureText(line).width));
+  const boxWidth = Math.max(frameWidth * 0.58, maxLineWidth + paddingX * 2);
+  const boxHeight = lines.length * lineHeight + paddingY * 2;
   const centerX = frameWidth / 2;
-  const startY = Math.round(frameHeight * 0.16);
+  const boxX = centerX - boxWidth / 2;
+  const boxY = Math.round(frameHeight * 0.12);
+  const titleColor = titleColorForCanvas(title.color);
+
+  ctx.clearRect(0, 0, frameWidth, frameHeight);
+  ctx.beginPath();
+  roundRectPath(ctx, boxX, boxY, boxWidth, boxHeight, Math.max(18, Math.round(fontSize * 0.28)));
+  ctx.fillStyle = "rgba(0,0,0,0)";
+  ctx.fill();
+  ctx.strokeStyle = titleColor;
+  ctx.lineWidth = Math.max(1.5, Math.round(fontSize * 0.05));
+  ctx.stroke();
 
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
   lines.forEach((line, index) => {
-    const y = startY + index * lineHeight;
-    ctx.strokeStyle = "rgba(0,0,0,0.52)";
-    ctx.lineWidth = Math.max(2, Math.round(fontSize * 0.11));
+    const y = boxY + paddingY + index * lineHeight;
+    ctx.strokeStyle = "rgba(0,0,0,0.46)";
+    ctx.lineWidth = Math.max(2, Math.round(fontSize * 0.1));
     ctx.strokeText(line, centerX, y);
-    ctx.fillStyle = titleColorForCanvas(title.color);
+    ctx.fillStyle = titleColor;
     ctx.fillText(line, centerX, y);
   });
 
@@ -549,7 +646,9 @@ function planOverlayTextWindows(
 
   const gap = texts.length > 1 ? 0.45 : 0;
   const rawDuration = (available - gap * Math.max(0, texts.length - 1)) / texts.length;
-  const overlayDuration = clamp(rawDuration, 1.8, 4.2);
+  // Keep the hook lines visible long enough to be read comfortably without
+  // covering the middle of the frame or rushing the first readable beat.
+  const overlayDuration = clamp(rawDuration, 2.8, 5.2);
   const totalNeeded = overlayDuration * texts.length + gap * Math.max(0, texts.length - 1);
   const offset = Math.max(0, (available - totalNeeded) / 2);
 
@@ -576,6 +675,8 @@ export interface BuildMontageParams {
   bestMoments: BestMoment[];
   /** Instagram Story hard cap — defaults to 60s (current IG limit). */
   maxStorySeconds?: number;
+  /** Reel hard cap target (including intro/outro) — defaults to 60s. */
+  maxReelSeconds?: number;
   /** Working resolution — lower = faster render. Defaults to "720p". */
   quality?: RenderQuality;
   /** Burns a small "ClipsyReel" badge into the bottom-right corner of the exported MP4 (Free plan). */
@@ -632,19 +733,32 @@ export async function buildMontage(params: BuildMontageParams): Promise<BuildMon
   if (prev) {
     try { await prev; } catch { /* previous render failed; safe to continue */ }
   }
-  try {
-    try {
-      return await _buildMontage(params);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      const audioRelated = /audio|stream specifier|stream map|acrossfade|amix|anullsrc|aac/i.test(message);
-      const audioRequested = params.videoAudioEnabled ? params.videoAudioEnabled.some(Boolean) : (params.keepOriginalAudio ?? true);
-      if (!audioRequested || !audioRelated) {
-        throw err;
-      }
 
-      console.warn("[video-engine] Original-audio export failed; retrying without audio:", message);
-      return await _buildMontage({ ...params, keepOriginalAudio: false });
+  let attempt = 0;
+  try {
+    while (true) {
+      try {
+        return await _buildMontage(params);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const audioRelated = /audio|stream specifier|stream map|acrossfade|amix|anullsrc|aac/i.test(message);
+        const audioRequested = params.videoAudioEnabled ? params.videoAudioEnabled.some(Boolean) : (params.keepOriginalAudio ?? true);
+
+        const isFsError = message.includes("FS error") || message.includes("ErrnoError") || message.includes("errno");
+        if (isFsError && attempt === 0) {
+          attempt += 1;
+          console.warn("[video-engine] FS error detected — retrying render with a fresh ffmpeg instance");
+          resetFFmpegSingleton();
+          continue;
+        }
+
+        if (!audioRequested || !audioRelated) {
+          throw err;
+        }
+
+        console.warn("[video-engine] Original-audio export failed; retrying without audio:", message);
+        return await _buildMontage({ ...params, keepOriginalAudio: false });
+      }
     }
   } catch (err) {
     // ErrnoError from Emscripten FS usually means the singleton is
@@ -663,6 +777,7 @@ export async function buildMontage(params: BuildMontageParams): Promise<BuildMon
 }
 
 async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageResult> {
+  resetFFmpegSingleton();
   const {
     files,
     videoDurations,
@@ -673,10 +788,11 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     mode,
     bestMoments,
     maxStorySeconds = 60,
+    maxReelSeconds = 60,
     quality = "720p",
     watermark = false,
-    keepOriginalAudio = false,
-    renderSpeedProfile = "standard",
+    keepOriginalAudio = true,
+    renderSpeedProfile = "fast",
     kenBurnsTier = "standard",
     reelTitle,
     overlayTexts = [],
@@ -691,6 +807,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
   const recipe = STYLE_RECIPES[style];
   const transitionPool = STYLE_TRANSITIONS[style];
   const { w, h } = QUALITY_DIMENSIONS[quality];
+  const RENDER_FPS = renderSpeedProfile === "fast" ? 18 : 24;
   
   // Detect hardware acceleration and select optimal codec
   const hwAccelResult = await detectHardwareAcceleration();
@@ -704,9 +821,18 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
   const phase1EncoderArgs = buildEncoderArgs(selectedCodec, "fast", 27);
   const renderCodecProfile = encoderArgs.join(" ");
   const phase1CodecProfile = phase1EncoderArgs.join(" ");
+  const effectiveRenderFps = renderSpeedProfile === "fast" ? 18 : 24;
   
   const audioSampleRate = 48000;
-  const sourceAudioEnabled = videoAudioEnabled ?? files.map(() => true);
+  const sourceAudioEnabled = await Promise.all(
+    files.map(async (file, index) => {
+      const explicit = videoAudioEnabled?.[index];
+      if (typeof explicit === "boolean") {
+        return explicit && (await detectVideoHasAudio(file));
+      }
+      return keepOriginalAudio && (await detectVideoHasAudio(file));
+    })
+  );
   const watermarkLeft = Math.round(w * 0.04);
   const watermarkTop = Math.round(h * 0.07);
   const cleanedReelTitle = reelTitle?.text.trim()
@@ -714,7 +840,12 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     : null;
   const cleanedOverlayTexts = overlayTexts.map((text) => text.trim()).filter(Boolean).slice(0, 3);
 
-  const segments = mode === "reel" ? planReelSegments(bestMoments, recipe, videoDurations) : planStorySegments(videoDurations, recipe, maxStorySeconds);
+  const introDuration = introClip?.durationSeconds ?? 0;
+  const outroDuration = outroClip?.durationSeconds ?? 0;
+  const reelContentTarget = Math.max(12, Math.min(60, maxReelSeconds) - introDuration - outroDuration);
+  const segments = mode === "reel"
+    ? planReelSegments(bestMoments, recipe, videoDurations, reelContentTarget)
+    : planStorySegments(videoDurations, recipe, maxStorySeconds);
 
   if (segments.length === 0) {
     throw new Error("Video is too short to build a montage.");
@@ -739,7 +870,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
   onPhaseChange?.(hasAnyAudioEnabled ? "Loading video files with audio…" : "Loading video files…");
   onProgress?.(0.01);
 
-  const stamp = Date.now();
+  const stamp = `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
 
   // Write all source files to ffmpeg FS upfront.
   // Serialised (not parallel) to keep peak FS memory predictable.
@@ -770,13 +901,15 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     watermarkName = `wm_${stamp}.png`;
     const watermarkCacheKey = await buildRenderCacheKey("watermark-v1", [w]);
     const cachedWatermark = getCachedBinaryAsset(watermarkCacheKey);
+    console.log("[video-engine] checkpoint: before watermark write");
     if (cachedWatermark) {
-      await ffmpeg.writeFile(watermarkName, cachedWatermark);
+      await ffmpeg.writeFile(watermarkName, cloneFFmpegData(cachedWatermark));
     } else {
       const data = await generateWatermarkPng(w);
       putCachedBinaryAsset(watermarkCacheKey, data, "image/png");
-      await ffmpeg.writeFile(watermarkName, data);
+      await ffmpeg.writeFile(watermarkName, cloneFFmpegData(data));
     }
+    console.log("[video-engine] checkpoint: after watermark write");
   }
   let reelTitleName: string | null = null;
   if (cleanedReelTitle) {
@@ -791,11 +924,11 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     ]);
     const cachedTitle = getCachedBinaryAsset(reelTitleCacheKey);
     if (cachedTitle) {
-      await ffmpeg.writeFile(reelTitleName, cachedTitle);
+      await ffmpeg.writeFile(reelTitleName, cloneFFmpegData(cachedTitle));
     } else {
       const data = await generateReelTitlePng(w, h, cleanedReelTitle);
       putCachedBinaryAsset(reelTitleCacheKey, data, "image/png");
-      await ffmpeg.writeFile(reelTitleName, data);
+      await ffmpeg.writeFile(reelTitleName, cloneFFmpegData(data));
     }
   }
 
@@ -822,6 +955,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
 
   const progressHandler = ({ progress }: { progress: number }) => reportUnitProgress(progress);
   ffmpeg.on("progress", progressHandler);
+  console.log("[video-engine] checkpoint: before overlay generation");
 
   const segmentClipNames: string[] = [];
   const segmentDurations: number[] = [];
@@ -843,13 +977,15 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         cleanedOverlayTexts[i],
       ]);
       const cachedOverlay = getCachedBinaryAsset(overlayCacheKey);
+      console.log(`[video-engine] checkpoint: overlay ${i} start`);
       if (cachedOverlay) {
-        await ffmpeg.writeFile(name, cachedOverlay);
+        await ffmpeg.writeFile(name, cloneFFmpegData(cachedOverlay));
       } else {
         const data = await generateOverlayTextPng(w, h, cleanedOverlayTexts[i]);
         putCachedBinaryAsset(overlayCacheKey, data, "image/png");
-        await ffmpeg.writeFile(name, data);
+        await ffmpeg.writeFile(name, cloneFFmpegData(data));
       }
+      console.log(`[video-engine] checkpoint: overlay ${i} done`);
       overlayTextNames.push(name);
       tempFiles.push(name);
     }
@@ -897,7 +1033,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         const outLabel = `${labelPrefix}_txt_${index}`;
         filterParts.push(`[${inputIndex}:v]format=rgba[${textLabel}]`);
         filterParts.push(
-          `[${currentLabel}][${textLabel}]overlay=(W-w)/2:H*0.64:enable='between(t,${overlay.start.toFixed(3)},${overlay.end.toFixed(3)})'[${outLabel}]`
+          `[${currentLabel}][${textLabel}]overlay=(W-w)/2:H*0.32:enable='between(t,${overlay.start.toFixed(3)},${overlay.end.toFixed(3)})'[${outLabel}]`
         );
         currentLabel = outLabel;
       });
@@ -956,7 +1092,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       ]);
       const cachedIntro = getCachedBinaryAsset(introCacheKey);
       if (cachedIntro) {
-        await ffmpeg.writeFile(introName, cachedIntro);
+        await ffmpeg.writeFile(introName, cloneFFmpegData(cachedIntro));
         console.log("[video-engine] Map intro cache hit");
       } else {
         await ffmpeg.exec([
@@ -994,7 +1130,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       ]);
       const cachedOutro = getCachedBinaryAsset(outroCacheKey);
       if (cachedOutro) {
-        await ffmpeg.writeFile(outroName, cachedOutro);
+        await ffmpeg.writeFile(outroName, cloneFFmpegData(cachedOutro));
         console.log("[video-engine] Outro card cache hit");
       } else {
         await ffmpeg.exec([
@@ -1021,8 +1157,9 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     for (let i = 0; i < segments.length; i++) {
       const seg = segments[i];
       const clipName = `seg_${stamp}_${i}.mp4`;
+      console.log(`[video-engine] checkpoint: segment ${i} start`);
       // Pass fastMode to skip zoompan (the main per-frame bottleneck)
-      const filter = buildSegmentFilter(seg, i, recipe, w, h, RENDER_FPS, fastMode);
+      const filter = buildSegmentFilter(seg, i, recipe, w, h, RENDER_FPS, fastMode, style);
       const segmentAudioEnabled = sourceAudioEnabled[seg.sourceIndex] ?? true;
       const segmentCacheKey = await buildRenderCacheKey("segment-v1", [
         fingerprintFile(files[seg.sourceIndex]),
@@ -1049,10 +1186,10 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       const cachedSegment = getCachedBinaryAsset(segmentCacheKey);
 
       if (cachedSegment) {
-        await ffmpeg.writeFile(clipName, cachedSegment);
+        await ffmpeg.writeFile(clipName, cloneFFmpegData(cachedSegment));
         console.log(`[video-engine] Segment cache hit: ${i + 1}/${segments.length}`);
       } else {
-        await ffmpeg.exec([
+        const segmentExecArgs = [
           // NOTE: -ss and -t must both come *before* -i. When -t is placed
           // after -i (with no further -i afterwards) ffmpeg treats it as an
           // OUTPUT duration limit applied *after* the filtergraph instead of
@@ -1072,9 +1209,16 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
           ...(segmentAudioEnabled ? ["-c:a", "aac", "-b:a", "128k"] : ["-an"]),
           "-pix_fmt", "yuv420p",
           clipName,
-        ]);
-        const data = await ffmpeg.readFile(clipName);
-        putCachedBinaryAsset(segmentCacheKey, data as Uint8Array, "video/mp4");
+        ];
+        console.log("[video-engine] segment exec args", segmentExecArgs.slice(0, 16));
+        try {
+          await ffmpeg.exec(segmentExecArgs);
+          const data = await ffmpeg.readFile(clipName);
+          putCachedBinaryAsset(segmentCacheKey, data as Uint8Array, "video/mp4");
+        } catch (err) {
+          console.error("[video-engine] segment exec/read failed", err);
+          throw err;
+        }
       }
 
       segmentClipNames.push(clipName);
@@ -1265,5 +1409,6 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
   } finally {
     ffmpeg.off("progress", progressHandler);
     await Promise.all(tempFiles.map((name) => ffmpeg.deleteFile(name).catch(() => {})));
+    resetFFmpegSingleton();
   }
 }

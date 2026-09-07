@@ -144,13 +144,38 @@ export default function ReelPreview({
                       : reelTitleColor === "silver"
                         ? "text-slate-300"
             : "text-white";
+  const titleFrameColor = reelTitleColor === "gold"
+    ? "#fbbf24"
+    : reelTitleColor === "coral"
+      ? "#fdba74"
+      : reelTitleColor === "cyan"
+        ? "#67e8f9"
+        : reelTitleColor === "lime"
+          ? "#bef264"
+          : reelTitleColor === "violet"
+            ? "#c4b5fd"
+            : reelTitleColor === "pink"
+              ? "#f9a8d4"
+              : reelTitleColor === "red"
+                ? "#f87171"
+                : reelTitleColor === "blue"
+                  ? "#60a5fa"
+                  : reelTitleColor === "emerald"
+                    ? "#6ee7b7"
+                    : reelTitleColor === "peach"
+                      ? "#fed7aa"
+                      : reelTitleColor === "silver"
+                        ? "#cbd5e1"
+                        : "#ffffff";
   const trimmedHookText = hookText.trim();
   const hookTextLength = trimmedHookText.length;
-  const hookTextSizeClass = hookTextLength <= 28
-    ? "text-[22px] leading-[1.16]"
-    : hookTextLength <= 52
-      ? "text-[19px] leading-[1.2]"
-      : "text-[17px] leading-[1.26]";
+  const hookTextSizeClass = hookTextLength <= 20
+    ? "text-[26px] leading-[1.08]"
+    : hookTextLength <= 36
+      ? "text-[22px] leading-[1.14]"
+      : hookTextLength <= 52
+        ? "text-[18px] leading-[1.18]"
+        : "text-[16px] leading-[1.2]";
   const easeInOut = (value: number) => value * value * (3 - 2 * value);
   const hookTimeline = useMemo(() => {
     if (!showPreviewChrome || hookTextLength === 0) {
@@ -303,8 +328,8 @@ export default function ReelPreview({
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/70 via-black/5 to-black/20" />
 
         {/* Overlay texts with cinematic animations and styling */}
-        {showPreviewChrome && overlayWindows.length > 0 && activeOverlayIndex !== null && (
-          <div className="absolute inset-x-3 top-1/4 flex justify-center pointer-events-none">
+        {showPreviewChrome && !montageInfo && overlayWindows.length > 0 && activeOverlayIndex !== null && (
+          <div className="pointer-events-none absolute inset-x-4 bottom-[18%] flex justify-start">
             {(() => {
               const overlay = overlayWindows[activeOverlayIndex];
               const overlayFont = overlayFonts[activeOverlayIndex];
@@ -376,10 +401,10 @@ export default function ReelPreview({
               return (
                 <motion.div
                   key={`${activeOverlayIndex}-${overlay.text}`}
-                  initial={{ opacity: 0, scale: 0.95, y: 20 }}
-                  animate={{ opacity, scale: 1, y: 0 }}
-                  transition={{ type: "spring", stiffness: 100, damping: 20 }}
-                  className={`max-w-[80%] px-5 py-3.5 rounded-[20px] bg-gradient-to-br from-black/45 to-black/25 backdrop-blur-md border border-white/10 shadow-[0_20px_40px_rgba(0,0,0,0.5)] text-center ${fontClass} ${sizeClass} ${colorClass} font-semibold drop-shadow-[0_2px_8px_rgba(0,0,0,0.6)]`}
+                  initial={{ opacity: 0, scale: 0.95, x: -10 }}
+                  animate={{ opacity, scale: 1, x: 0 }}
+                  transition={{ type: "spring", stiffness: 120, damping: 20 }}
+                  className={`max-w-[82%] text-left ${fontClass} ${sizeClass} ${colorClass} font-semibold drop-shadow-[0_2px_10px_rgba(0,0,0,0.75)]`}
                 >
                   {overlay.text}
                 </motion.div>
@@ -393,27 +418,25 @@ export default function ReelPreview({
           titleWindow &&
           currentTimeSeconds >= titleWindow.start &&
           currentTimeSeconds < titleWindow.end && (
-          <div className="absolute inset-x-3 top-20">
-            <motion.p
+          <div className="absolute inset-x-3 top-20 flex justify-center">
+            <motion.div
               initial={{ opacity: 0, y: -6 }}
               animate={{ opacity: 1, y: 0 }}
-              className={`text-center leading-tight drop-shadow-[0_2px_6px_rgba(0,0,0,0.8)] ${titleColorClass} ${titleFontClass} ${titleSizeClass}`}
+              className="inline-flex items-center justify-center rounded-xl border border-[1.5px] bg-transparent px-3 py-1.5 shadow-[0_0_0_1px_rgba(255,255,255,0.04)]"
+              style={{ borderColor: titleFrameColor }}
             >
-              {reelTitle}
-            </motion.p>
+              <p className={`text-center leading-tight drop-shadow-[0_2px_6px_rgba(0,0,0,0.8)] ${titleColorClass} ${titleFontClass} ${titleSizeClass}`}>
+                {reelTitle}
+              </p>
+            </motion.div>
           </div>
         )}
-        {showPreviewChrome && hookTextLength > 0 && (
-          <div className="pointer-events-none absolute inset-x-4 top-[30%] flex justify-center">
-            <div
-              className="w-fit max-w-[90%] rounded-[20px] border border-white/14 bg-black/48 px-5 py-4 shadow-[0_12px_32px_rgba(0,0,0,0.38)] backdrop-blur-md"
-              style={{ opacity: hookTimeline.opacity, transition: "opacity 120ms linear" }}
-            >
-              <p className={`relative text-center font-extrabold tracking-[0.01em] text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.9)] ${hookTextSizeClass}`}>
-                <span className="invisible">{trimmedHookText}</span>
-                <span className="absolute inset-0">{typedHookText}</span>
-              </p>
-            </div>
+        {showPreviewChrome && !montageInfo && hookTextLength > 0 && overlayWindows.length === 0 && (
+          <div className="pointer-events-none absolute inset-x-4 top-[30%] flex justify-center" style={{ opacity: hookTimeline.opacity, transition: "opacity 120ms linear" }}>
+            <p className={`relative max-w-[82%] text-center font-extrabold tracking-[0.01em] text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.9)] ${hookTextSizeClass}`}>
+              <span className="invisible">{trimmedHookText}</span>
+              <span className="absolute inset-0">{typedHookText}</span>
+            </p>
           </div>
         )}
 

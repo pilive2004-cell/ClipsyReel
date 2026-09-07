@@ -32,7 +32,7 @@ const STEP_ORDER: AppStep[] = ["upload", "style", "analyze", "render", "preview"
 
 export default function Home() {
   const { isFree, reelsUsedThisWeek, weeklyFreeLimit, consumeReelCredit } = usePlan();
-  const { copy } = useLocale();
+  const { copy, locale } = useLocale();
 
   const [step, setStep] = useState<AppStep>("upload");
   const [videos, setVideos] = useState<UploadedVideo[]>([]);
@@ -65,9 +65,25 @@ export default function Home() {
 
   const [pricingOpen, setPricingOpen] = useState(false);
   const [upgradePrompt, setUpgradePrompt] = useState<{ title: string; message: string } | null>(null);
+  const [isCompactMobile, setIsCompactMobile] = useState(false);
+  const [mobileSectionOpen, setMobileSectionOpen] = useState<Record<string, boolean>>({
+    reelName: true,
+    route: false,
+    hook: true,
+    gear: true,
+  });
   const renderPipelineWarmedRef = useRef(false);
 
   const showUpgrade = (title: string, message: string) => setUpgradePrompt({ title, message });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const handleResize = () => setIsCompactMobile(window.innerWidth < 640);
+    handleResize();
+    window.addEventListener("resize", handleResize);
+
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
 
   useEffect(() => {
     if (videos.length === 0 || renderPipelineWarmedRef.current) return;
@@ -140,7 +156,7 @@ export default function Home() {
     queueMicrotask(() => {
       if (cancelled) return;
 
-      void generateGearSummaryClip({ selections: gearSelections, portrait: gearPortraitFile ?? undefined })
+      void generateGearSummaryClip({ selections: gearSelections, portrait: gearPortraitFile ?? undefined, locale })
         .then((clip) => {
           if (cancelled) {
             if (clip?.url) URL.revokeObjectURL(clip.url);
@@ -162,7 +178,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [equipmentSummary.length, gearSelections, gearPortraitFile]);
+  }, [equipmentSummary.length, gearSelections, gearPortraitFile, locale]);
 
   useEffect(() => {
     return () => {
@@ -188,7 +204,7 @@ export default function Home() {
         : generateMockAnalysisMulti(videos, style);
     setAnalysis(result);
     setSelectedHookId("");
-    setStep("style");
+    setStep("render");
   };
 
   // Runs the real ffmpeg.wasm montage (cuts + Ken Burns zoom + randomized,
@@ -196,18 +212,13 @@ export default function Home() {
   // analysis has produced best-moment timestamps to cut from.
   useEffect(() => {
     if (step !== "render" || videos.length === 0 || !analysis || !style) return;
-    if (hasRouteIntro && routeIntroStatus === "rendering" && routeIntroClip === null) {
+    const introReady = !hasRouteIntro || routeIntroStatus === "ready" || routeIntroStatus === "error";
+    const gearReady = equipmentSummary.length === 0 || gearSummaryStatus === "ready" || gearSummaryStatus === "error" || gearSummaryStatus === "idle";
+
+    if (!introReady || !gearReady) {
       return;
     }
-    if (hasRouteIntro && (!routeIntroClip || routeIntroStatus === "error")) {
-      queueMicrotask(() =>
-        setRenderError("The map intro could not be rendered, so the reel export has been stopped instead of producing a reel without the map.")
-      );
-      return;
-    }
-    if (equipmentSummary.length > 0 && gearSummaryStatus === "rendering" && gearSummaryClip === null) {
-      return;
-    }
+
     let cancelled = false;
 
     (async () => {
@@ -220,6 +231,7 @@ export default function Home() {
           videoDurations: videos.map((v) => v.durationSeconds),
           style,
           mode: "reel",
+          maxReelSeconds: 60,
           bestMoments: analysis.bestMoments,
           // The final reel must start with the generated route-map intro when a
           // valid GPX track exists. We stop export earlier if this clip could
@@ -298,6 +310,59 @@ export default function Home() {
     setStep("upload");
   };
 
+  const handleGearPortraitChange = (file: File | null) => {
+    setGearPortraitFile(file);
+    const nextSummary = buildGearSummaryEntries(gearSelections);
+    clearGearSummaryClip(nextSummary.length > 0 || !!file ? "rendering" : "idle");
+  };
+
+  const handleGearBrandChange = (key: keyof typeof gearSelections, brand: string) => {
+    setGearSelections((current) => {
+      const next = {
+        ...current,
+        [key]: {
+          brand,
+          model: "",
+          customModel: "",
+        },
+      };
+      const nextSummary = buildGearSummaryEntries(next);
+      clearGearSummaryClip(nextSummary.length > 0 || !!gearPortraitFile ? "rendering" : "idle");
+      return next;
+    });
+  };
+
+  const handleGearModelChange = (key: keyof typeof gearSelections, model: string) => {
+    setGearSelections((current) => {
+      const next = {
+        ...current,
+        [key]: {
+          ...current[key],
+          model: current[key].model === model ? "" : model,
+          customModel: "",
+        },
+      };
+      const nextSummary = buildGearSummaryEntries(next);
+      clearGearSummaryClip(nextSummary.length > 0 || !!gearPortraitFile ? "rendering" : "idle");
+      return next;
+    });
+  };
+
+  const handleCustomGearModelChange = (key: keyof typeof gearSelections, value: string) => {
+    setGearSelections((current) => {
+      const next = {
+        ...current,
+        [key]: {
+          ...current[key],
+          customModel: value,
+        },
+      };
+      const nextSummary = buildGearSummaryEntries(next);
+      clearGearSummaryClip(nextSummary.length > 0 || !!gearPortraitFile ? "rendering" : "idle");
+      return next;
+    });
+  };
+
   const selectedHookText = analysis?.hooks.find((h) => h.id === selectedHookId)?.text ?? "";
   const previewUrl = montage?.url ?? videos[0]?.previewUrl ?? "";
   const combinedName = videos.length > 1 ? `${videos.length}-clips-montage` : videos[0]?.name ?? "reel";
@@ -319,100 +384,130 @@ export default function Home() {
           <StepBar step={step} />
           <HeroSection />
 
-          <div>
-            <h2 className="mb-2 text-sm font-semibold text-white/85">{copy.reelName.title}</h2>
-            <p className="mb-2 text-xs text-white/45">{copy.reelName.description}</p>
-            <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
-              <ReelNamePanel
-                reelTitle={reelTitle}
-                reelTitleFont={reelTitleFont}
-                reelTitleSize={reelTitleSize}
-                reelTitleColor={reelTitleColor}
-                onChangeReelTitle={setReelTitle}
-                onChangeReelTitleFont={setReelTitleFont}
-                onChangeReelTitleSize={setReelTitleSize}
-                onChangeReelTitleColor={setReelTitleColor}
-              />
-            </div>
-          </div>
-
-          <div>
-            <h2 className="mb-2 text-sm font-semibold text-white/85">{copy.upload.title}</h2>
-            <p className="mb-2 text-xs text-white/45">{copy.upload.description}</p>
-            <VideoUploader
-              videos={videos}
-              onChange={setVideos}
-              maxVideos={3}
-            />
-          </div>
-
-          {/* Route source: GPX import OR location-based route planner. */}
-          <div>
-            <h2 className="mb-2 text-sm font-semibold text-white/85">{copy.route.title}</h2>
-            <p className="mb-2 text-xs text-white/45">{copy.route.description}</p>
-            <RouteSourceSelector
-              videos={videos}
-              onRouteDataChange={({ points, stats, labels }) => {
-                setRouteIntroPoints(points);
-                setRouteIntroStats(stats);
-                setRouteIntroLabels(labels);
-                const available = !!points && points.length > 1;
-                setHasRouteIntro(available);
-                setRouteIntroClip(null);
-                setRouteIntroStatus(available ? "rendering" : "idle");
-              }}
-              onLockedClick={() =>
-                showUpgrade(copy.route.lockedTitle, copy.route.lockedMessage)
-              }
-            />
-          </div>
-
+        <MobileAccordionSection
+          title={copy.reelName.title}
+          description={copy.reelName.description}
+          open={mobileSectionOpen.reelName}
+          onToggle={() => setMobileSectionOpen((current) => ({ ...current, reelName: !current.reelName }))}
+          compact={isCompactMobile}
+         >
           <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
-            <h2 className="mb-2 text-sm font-semibold text-white/85">{copy.hook.title}</h2>
-            <p className="mb-3 text-xs text-white/45">{copy.hook.description}</p>
-            <HookCaptionPanel
-              overlayTexts={overlayTexts}
-              overlayFonts={overlayFonts}
-              overlaySizes={overlaySizes}
-              overlayColors={overlayColors}
-              onChangeOverlayText={(index, value) =>
-                setOverlayTexts((current) => {
-                  const next = [...current] as [string, string, string];
-                  next[index] = value;
-                  return next;
-                })
-              }
-              onChangeOverlayFont={(index, value) =>
-                setOverlayFonts((current) => {
-                  const next = [...current] as [ReelTitleFont, ReelTitleFont, ReelTitleFont];
-                  next[index] = value;
-                  return next;
-                })
-              }
-              onChangeOverlaySize={(index, value) =>
-                setOverlaySizes((current) => {
-                  const next = [...current] as [ReelTitleSize, ReelTitleSize, ReelTitleSize];
-                  next[index] = value;
-                  return next;
-                })
-              }
-              onChangeOverlayColor={(index, value) =>
-                setOverlayColors((current) => {
-                  const next = [...current] as [ReelTitleColor, ReelTitleColor, ReelTitleColor];
-                  next[index] = value;
-                  return next;
-                })
-              }
+            <ReelNamePanel
+              reelTitle={reelTitle}
+              reelTitleFont={reelTitleFont}
+              reelTitleSize={reelTitleSize}
+              reelTitleColor={reelTitleColor}
+              onChangeReelTitle={setReelTitle}
+              onChangeReelTitleFont={setReelTitleFont}
+              onChangeReelTitleSize={setReelTitleSize}
+              onChangeReelTitleColor={setReelTitleColor}
             />
           </div>
+        </MobileAccordionSection>
 
-          <button
-            onClick={goToStyle}
-            disabled={videos.length === 0}
-            className="flex w-full items-center justify-center gap-2 rounded-2xl brand-gradient py-3.5 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(0,0,0,0.28)] transition disabled:cursor-not-allowed disabled:opacity-30"
-          >
-            {copy.common.chooseStyle} <ArrowRight className="h-4 w-4" />
-          </button>
+        <div>
+          <h2 className="mb-2 text-sm font-semibold text-white/85">{copy.upload.title}</h2>
+          <p className="mb-2 text-xs text-white/45">{copy.upload.description}</p>
+          <VideoUploader
+            videos={videos}
+            onChange={setVideos}
+            maxVideos={3}
+          />
+        </div>
+
+        {/* Route source: GPX import OR location-based route planner. */}
+        <MobileAccordionSection
+          title={copy.route.title}
+          description={copy.route.description}
+          open={mobileSectionOpen.route}
+          onToggle={() => setMobileSectionOpen((current) => ({ ...current, route: !current.route }))}
+          compact={isCompactMobile}
+        >
+          <RouteSourceSelector
+            videos={videos}
+            onRouteDataChange={({ points, stats, labels }) => {
+              setRouteIntroPoints(points);
+              setRouteIntroStats(stats);
+              setRouteIntroLabels(labels);
+              const available = !!points && points.length > 1;
+              setHasRouteIntro(available);
+              setRouteIntroClip(null);
+              setRouteIntroStatus(available ? "rendering" : "idle");
+            }}
+            onLockedClick={() =>
+              showUpgrade(copy.route.lockedTitle, copy.route.lockedMessage)
+            }
+          />
+        </MobileAccordionSection>
+
+        <MobileAccordionSection
+          title={copy.hook.title}
+          description={copy.hook.description}
+          open={mobileSectionOpen.hook}
+          onToggle={() => setMobileSectionOpen((current) => ({ ...current, hook: !current.hook }))}
+          compact={isCompactMobile}
+          className="rounded-2xl border border-white/10 bg-white/[0.02] p-4"
+        >
+          <HookCaptionPanel
+            overlayTexts={overlayTexts}
+            overlayFonts={overlayFonts}
+            overlaySizes={overlaySizes}
+            overlayColors={overlayColors}
+            onChangeOverlayText={(index, value) =>
+              setOverlayTexts((current) => {
+                const next = [...current] as [string, string, string];
+                next[index] = value;
+                return next;
+              })
+            }
+            onChangeOverlayFont={(index, value) =>
+              setOverlayFonts((current) => {
+                const next = [...current] as [ReelTitleFont, ReelTitleFont, ReelTitleFont];
+                next[index] = value;
+                return next;
+              })
+            }
+            onChangeOverlaySize={(index, value) =>
+              setOverlaySizes((current) => {
+                const next = [...current] as [ReelTitleSize, ReelTitleSize, ReelTitleSize];
+                next[index] = value;
+                return next;
+              })
+            }
+            onChangeOverlayColor={(index, value) =>
+              setOverlayColors((current) => {
+                const next = [...current] as [ReelTitleColor, ReelTitleColor, ReelTitleColor];
+                next[index] = value;
+                return next;
+              })
+            }
+          />
+        </MobileAccordionSection>
+
+        <MobileAccordionSection
+          title={copy.gear.title}
+          description={copy.gear.photoDescription}
+          open={mobileSectionOpen.gear}
+          onToggle={() => setMobileSectionOpen((current) => ({ ...current, gear: !current.gear }))}
+          compact={isCompactMobile}
+        >
+          <CreationExtrasPanel
+            selections={gearSelections}
+            portraitFile={gearPortraitFile}
+            onChangePortraitFile={handleGearPortraitChange}
+            onSelectGearBrand={handleGearBrandChange}
+            onSelectGearModel={handleGearModelChange}
+            onChangeCustomGearModel={handleCustomGearModelChange}
+          />
+        </MobileAccordionSection>
+
+        <button
+          onClick={goToStyle}
+          disabled={videos.length === 0}
+          className="flex w-full items-center justify-center gap-2 rounded-2xl brand-gradient py-3.5 text-sm font-semibold text-white shadow-[0_12px_30px_rgba(0,0,0,0.28)] transition disabled:cursor-not-allowed disabled:opacity-30"
+        >
+          {copy.common.chooseStyle} <ArrowRight className="h-4 w-4" />
+        </button>
       </StepContent>
 
       <StepContent isVisible={step === "style"}>
@@ -423,80 +518,29 @@ export default function Home() {
               <p className="mb-3 text-xs text-white/45">{copy.styleText.pickDescription}</p>
               <StyleSelector
                 selected={style}
-                onSelect={setStyle}
+                onSelect={(nextStyle) => {
+                  if (weeklyLimitReached) {
+                    showUpgrade(
+                      copy.pricing.title,
+                      copy.pricing.subtitle
+                    );
+                    return;
+                  }
+                  setStyle(nextStyle);
+                  setStep("analyze");
+                }}
                 onLockedClick={() =>
                   showUpgrade(copy.styleText.pickTitle, copy.styleText.pickDescription)
                 }
               />
             </div>
           ) : (
-            <div className="space-y-3 rounded-2xl border border-white/10 bg-white/[0.02] p-4">
-              <div>
-                <h2 className="mb-1 text-sm font-semibold text-white/85">{copy.styleText.equipmentTitle}</h2>
-                <p className="text-xs text-white/45">{copy.styleText.equipmentDescription}</p>
-              </div>
-              <div className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/75">
-                <span className="text-white/45">{copy.styleText.selectedStyle}</span>
-                <span className="font-semibold text-white/90">{style ? copy.style(style).label : ""}</span>
-              </div>
+            <div className="rounded-[28px] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.06),transparent_32%),linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01))] p-5 shadow-[0_16px_40px_rgba(0,0,0,0.16)]">
+              <h2 className="mb-2 text-[clamp(1.6rem,3vw,2.2rem)] font-semibold tracking-[-0.05em] text-white/90">{copy.styleText.equipmentTitle}</h2>
+              <p className="max-w-[62ch] text-base leading-relaxed text-white/60">{copy.styleText.equipmentDescription}</p>
             </div>
           )}
 
-          {analysis && (
-            <CreationExtrasPanel
-            selections={gearSelections}
-            portraitFile={gearPortraitFile}
-            onChangePortraitFile={(file) => {
-            setGearPortraitFile(file);
-            const nextSummary = buildGearSummaryEntries(gearSelections);
-            clearGearSummaryClip(nextSummary.length > 0 || !!file ? "rendering" : "idle");
-            }}
-            onSelectGearBrand={(key, brand) =>
-            setGearSelections((current) => {
-              const next = {
-                ...current,
-                [key]: {
-                  brand,
-                  model: "",
-                  customModel: "",
-                },
-              };
-              const nextSummary = buildGearSummaryEntries(next);
-              clearGearSummaryClip(nextSummary.length > 0 || !!gearPortraitFile ? "rendering" : "idle");
-              return next;
-            })
-            }
-            onSelectGearModel={(key, model) =>
-              setGearSelections((current) => {
-                const next = {
-                 ...current,
-                 [key]: {
-                   ...current[key],
-                   model: current[key].model === model ? "" : model,
-                   customModel: "",
-                 },
-                };
-                const nextSummary = buildGearSummaryEntries(next);
-                clearGearSummaryClip(nextSummary.length > 0 || !!gearPortraitFile ? "rendering" : "idle");
-                return next;
-              })
-            }
-            onChangeCustomGearModel={(key, value) =>
-              setGearSelections((current) => {
-                const next = {
-                 ...current,
-                 [key]: {
-                   ...current[key],
-                   customModel: value,
-                 },
-                };
-                const nextSummary = buildGearSummaryEntries(next);
-                clearGearSummaryClip(nextSummary.length > 0 || !!gearPortraitFile ? "rendering" : "idle");
-                return next;
-              })
-            }
-            />
-          )}
 
           <div className="flex gap-2">
             <BackButton onClick={() => setStep("upload")} />
@@ -526,7 +570,25 @@ export default function Home() {
       <StepContent isVisible={step === "render" && style !== null}>
         {style && (
           <>
-            <RenderPanel progress={renderProgress} phaseLabel={renderPhaseLabel} styleLabel={style ? copy.style(style).label : ""} />
+            <RenderPanel
+              progress={renderProgress}
+              phaseLabel={renderPhaseLabel}
+              styleLabel={style ? copy.style(style).label : ""}
+              style={style}
+              videoNames={videos.map((video) => video.name)}
+              gearSelections={gearSelections}
+            />
+            {hasRouteIntro && (
+              <div className="space-y-2 rounded-2xl border border-cyan-300/20 bg-cyan-400/[0.06] px-4 py-3 text-xs text-cyan-100/90">
+                <p className="font-semibold uppercase tracking-[0.12em] text-cyan-100/85">Map intro</p>
+                <p>
+                  {routeIntroStatus === "rendering" && "Generating route map clip…"}
+                  {routeIntroStatus === "ready" && "Route map clip is ready and will be included at the beginning of the reel."}
+                  {routeIntroStatus === "error" && "Route map clip failed to render."}
+                  {routeIntroStatus === "idle" && "Waiting for route map generation."}
+                </p>
+              </div>
+            )}
             {renderError && (
               <div className="space-y-2 rounded-2xl border border-rose-400/20 bg-rose-400/[0.06] px-4 py-3 text-xs text-rose-300">
                 <p>{renderError}</p>
@@ -616,6 +678,84 @@ export default function Home() {
   );
 }
 
+function MobileAccordionSection({
+  title,
+  description,
+  open,
+  onToggle,
+  compact,
+  className,
+  children,
+}: {
+  title: string;
+  description?: string;
+  open: boolean;
+  onToggle: () => void;
+  compact: boolean;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  const content = (
+    <div className={className ?? ""}>
+      {children}
+    </div>
+  );
+
+  if (!compact) {
+    return (
+      <div>
+        <h2 className="mb-2 text-sm font-semibold text-white/85">{title}</h2>
+        {description && <p className="mb-2 text-xs text-white/45">{description}</p>}
+        {content}
+      </div>
+    );
+  }
+
+  if (open) {
+    return (
+      <div className="overflow-hidden rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01))] p-3 shadow-[0_12px_28px_rgba(0,0,0,0.16)]">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-[clamp(1.5rem,5vw,2.2rem)] font-semibold tracking-[-0.05em] text-white/90">{title}</div>
+            {description && <div className="mt-1 text-sm leading-relaxed text-white/60">{description}</div>}
+          </div>
+          <button
+            type="button"
+            onClick={onToggle}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-white/70 transition hover:bg-white/[0.06]"
+            aria-label={title}
+          >
+            <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5 rotate-180" aria-hidden="true">
+              <path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        </div>
+        <div>{content}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0.01))] shadow-[0_10px_24px_rgba(0,0,0,0.14)]">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center justify-between gap-2.5 px-3 py-2.5 text-left transition hover:bg-white/[0.02] active:bg-white/[0.03]"
+      >
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-semibold text-white/90">{title}</div>
+          {description && <div className="mt-0.5 line-clamp-1 text-[10px] text-white/45">{description}</div>}
+        </div>
+        <div className="flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-white/70 transition-all duration-220">
+          <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5" aria-hidden="true">
+            <path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
+      </button>
+    </div>
+  );
+}
+
 function StepBar({ step }: { step: AppStep }) {
   const { copy } = useLocale();
   const currentIndex = STEP_ORDER.indexOf(step);
@@ -665,7 +805,7 @@ function StepContent({ isVisible, children }: { isVisible: boolean; children: Re
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -8 }}
           transition={{ duration: 0.35, ease: "easeInOut" }}
-          className="space-y-5"
+          className="space-y-4 sm:space-y-5"
         >
           {children}
         </motion.div>

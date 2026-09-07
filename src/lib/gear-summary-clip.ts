@@ -1,4 +1,4 @@
-import { buildGearSummaryEntries, GEAR_LABELS, GearCategoryKey, GearItemSelection, GearSelections } from "@/data/gearCatalog";
+import { GEAR_CATEGORY_KEYS, GearCategoryKey, GearItemSelection, GearSelections, resolveGearSelection } from "@/data/gearCatalog";
 
 export interface GearSummaryClip {
   file: File;
@@ -8,23 +8,167 @@ export interface GearSummaryClip {
 
 type AdventureCardSlot = {
   keys: GearCategoryKey[];
-  label: string;
+  labelKey: "motorcycle" | "tires" | "jacketPants" | "helmetLuggage" | "cameraDrone" | "navigation";
   column: 0 | 1;
   row: number;
   colSpan?: 1 | 2;
 };
 
+type GearSummaryLocale = "fr" | "de" | "en" | "es" | "it" | "zh";
+
+interface GearSummaryCopy {
+  badge: string;
+  heroTitle: string;
+  heroSubtitle: string;
+  setupTitle: string;
+  selectedEquipment: string;
+  noEquipment: string;
+  modelNotSet: string;
+  labels: Record<AdventureCardSlot["labelKey"], string>;
+  gearLabels: Record<GearCategoryKey, string>;
+}
+
 const CANVAS_WIDTH = 720;
 const CANVAS_HEIGHT = 1280;
 const CLIP_DURATION_SECONDS = 4;
 const CARD_LAYOUT: AdventureCardSlot[] = [
-  { keys: ["motorcycle"], label: "Moto", column: 0, row: 0 },
-  { keys: ["tires"], label: "Pneu", column: 1, row: 0 },
-  { keys: ["jacket", "pants"], label: "Veste / Pantalon", column: 0, row: 1, colSpan: 2 },
-  { keys: ["helmet", "luggage"], label: "Casque / Bagages", column: 0, row: 2, colSpan: 2 },
-  { keys: ["camera", "drone"], label: "Camera / Drone", column: 0, row: 3, colSpan: 2 },
-  { keys: ["navigation"], label: "Navigation", column: 0, row: 4, colSpan: 2 },
+  { keys: ["motorcycle"], labelKey: "motorcycle", column: 0, row: 0 },
+  { keys: ["tires"], labelKey: "tires", column: 1, row: 0 },
+  { keys: ["jacket", "pants"], labelKey: "jacketPants", column: 0, row: 1, colSpan: 2 },
+  { keys: ["helmet", "luggage"], labelKey: "helmetLuggage", column: 0, row: 2, colSpan: 2 },
+  { keys: ["camera", "drone"], labelKey: "cameraDrone", column: 0, row: 3, colSpan: 2 },
+  { keys: ["navigation"], labelKey: "navigation", column: 0, row: 4, colSpan: 2 },
 ];
+
+const GEAR_LABELS_BY_LOCALE: Record<GearSummaryLocale, Record<GearCategoryKey, string>> = {
+  fr: { motorcycle: "Moto", tires: "Pneu", helmet: "Casque", jacket: "Veste", pants: "Pantalon", luggage: "Bagages", camera: "Camera", drone: "Drone", navigation: "Navigation" },
+  de: { motorcycle: "Motorrad", tires: "Reifen", helmet: "Helm", jacket: "Jacke", pants: "Hose", luggage: "Gepäck", camera: "Kamera", drone: "Drohne", navigation: "Navigation" },
+  en: { motorcycle: "Motorcycle", tires: "Tires", helmet: "Helmet", jacket: "Jacket", pants: "Pants", luggage: "Luggage", camera: "Camera", drone: "Drone", navigation: "Navigation" },
+  es: { motorcycle: "Moto", tires: "Neumáticos", helmet: "Casco", jacket: "Chaqueta", pants: "Pantalón", luggage: "Equipaje", camera: "Cámara", drone: "Drone", navigation: "Navegación" },
+  it: { motorcycle: "Moto", tires: "Pneumatici", helmet: "Casco", jacket: "Giacca", pants: "Pantaloni", luggage: "Bagagli", camera: "Camera", drone: "Drone", navigation: "Navigazione" },
+  zh: { motorcycle: "摩托车", tires: "轮胎", helmet: "头盔", jacket: "外套", pants: "裤子", luggage: "行李", camera: "相机", drone: "无人机", navigation: "导航" },
+};
+
+const GEAR_SUMMARY_COPY: Record<GearSummaryLocale, Omit<GearSummaryCopy, "gearLabels">> = {
+  fr: {
+    badge: "⚡ MOTO + ÉQUIPEMENT",
+    heroTitle: "My Bike & Kit",
+    heroSubtitle: "Moto + équipement sélectionné",
+    setupTitle: "Ma configuration Adventure",
+    selectedEquipment: "ÉQUIPEMENT SÉLECTIONNÉ",
+    noEquipment: "Aucun équipement sélectionné",
+    modelNotSet: "Modèle non défini",
+    labels: {
+      motorcycle: "Moto",
+      tires: "Pneu",
+      jacketPants: "Veste / Pantalon",
+      helmetLuggage: "Casque / Bagages",
+      cameraDrone: "Camera / Drone",
+      navigation: "Navigation",
+    },
+  },
+  de: {
+    badge: "⚡ BIKE + GEAR",
+    heroTitle: "My Bike & Kit",
+    heroSubtitle: "Motorrad + ausgewählte Ausrüstung",
+    setupTitle: "Mein Adventure-Setup",
+    selectedEquipment: "AUSGEWÄHLTE AUSRÜSTUNG",
+    noEquipment: "Keine Ausrüstung ausgewählt",
+    modelNotSet: "Modell nicht festgelegt",
+    labels: {
+      motorcycle: "Motorrad",
+      tires: "Reifen",
+      jacketPants: "Jacke / Hose",
+      helmetLuggage: "Helm / Gepäck",
+      cameraDrone: "Kamera / Drohne",
+      navigation: "Navigation",
+    },
+  },
+  en: {
+    badge: "⚡ BIKE + GEAR",
+    heroTitle: "My Bike & Kit",
+    heroSubtitle: "Motorcycle + selected gear",
+    setupTitle: "My Adventure setup",
+    selectedEquipment: "SELECTED GEAR",
+    noEquipment: "No gear selected",
+    modelNotSet: "Model not set",
+    labels: {
+      motorcycle: "Motorcycle",
+      tires: "Tires",
+      jacketPants: "Jacket / Pants",
+      helmetLuggage: "Helmet / Luggage",
+      cameraDrone: "Camera / Drone",
+      navigation: "Navigation",
+    },
+  },
+  es: {
+    badge: "⚡ MOTO + EQUIPO",
+    heroTitle: "My Bike & Kit",
+    heroSubtitle: "Moto + equipamiento seleccionado",
+    setupTitle: "Mi configuración Adventure",
+    selectedEquipment: "EQUIPO SELECCIONADO",
+    noEquipment: "Ningún equipo seleccionado",
+    modelNotSet: "Modelo no definido",
+    labels: {
+      motorcycle: "Moto",
+      tires: "Neumáticos",
+      jacketPants: "Chaqueta / Pantalón",
+      helmetLuggage: "Casco / Equipaje",
+      cameraDrone: "Cámara / Drone",
+      navigation: "Navegación",
+    },
+  },
+  it: {
+    badge: "⚡ MOTO + GEAR",
+    heroTitle: "My Bike & Kit",
+    heroSubtitle: "Moto + equipaggiamento selezionato",
+    setupTitle: "Il mio setup Adventure",
+    selectedEquipment: "EQUIPAGGIAMENTO SELEZIONATO",
+    noEquipment: "Nessun equipaggiamento selezionato",
+    modelNotSet: "Modello non definito",
+    labels: {
+      motorcycle: "Moto",
+      tires: "Pneumatici",
+      jacketPants: "Giacca / Pantaloni",
+      helmetLuggage: "Casco / Bagagli",
+      cameraDrone: "Camera / Drone",
+      navigation: "Navigazione",
+    },
+  },
+  zh: {
+    badge: "⚡ 摩托 + 装备",
+    heroTitle: "My Bike & Kit",
+    heroSubtitle: "摩托车 + 已选装备",
+    setupTitle: "我的 Adventure 配置",
+    selectedEquipment: "已选装备",
+    noEquipment: "尚未选择装备",
+    modelNotSet: "未设置型号",
+    labels: {
+      motorcycle: "摩托车",
+      tires: "轮胎",
+      jacketPants: "夹克 / 裤子",
+      helmetLuggage: "头盔 / 行李",
+      cameraDrone: "相机 / 无人机",
+      navigation: "导航",
+    },
+  },
+};
+
+function getGearSummaryCopy(locale: GearSummaryLocale): GearSummaryCopy {
+  return {
+    ...GEAR_SUMMARY_COPY[locale],
+    gearLabels: GEAR_LABELS_BY_LOCALE[locale],
+  };
+}
+
+function buildLocalizedGearSummaryEntries(selections: GearSelections, copy: GearSummaryCopy) {
+  return GEAR_CATEGORY_KEYS
+    .map((key) => ({
+      label: copy.gearLabels[key],
+      value: resolveGearSelection(selections[key]),
+    }))
+    .filter((entry) => entry.value.length > 0);
+}
 
 function readBlobDuration(blob: Blob, fallbackSeconds: number) {
   return new Promise<number>((resolve) => {
@@ -107,12 +251,18 @@ async function loadImageFromFile(file: File): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const image = new Image();
+    const timeout = window.setTimeout(() => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Portrait image loading timed out"));
+    }, 8000);
     image.decoding = "async";
     image.onload = () => {
+      window.clearTimeout(timeout);
       // Image loaded successfully — keep URL valid
       resolve(image);
     };
     image.onerror = () => {
+      window.clearTimeout(timeout);
       URL.revokeObjectURL(url);
       reject(new Error("Failed to load portrait image"));
     };
@@ -159,13 +309,13 @@ function drawSelectedEntry(
 
   // Premium label
   ctx.fillStyle = "rgba(255, 200, 70, 0.85)";
-  ctx.font = "800 11px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  ctx.font = "800 12px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
   ctx.fillText(label.toUpperCase(), x + 16, y + 20);
 
   // Premium value
   ctx.fillStyle = "rgba(248,250,252,0.95)";
-  ctx.font = "700 18px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
-  fillTextBlock(ctx, value, x + 16, y + 44, w - 32, 20, 2);
+  ctx.font = "700 20px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  fillTextBlock(ctx, value, x + 16, y + 46, w - 32, 22, 2);
 }
 
 function drawSingleSelection(
@@ -173,21 +323,23 @@ function drawSingleSelection(
   selection: GearItemSelection,
   x: number,
   y: number,
-  w: number
+  w: number,
+  modelFallback: string
 ) {
   const { brand, model } = resolveSelectionLines(selection);
   ctx.fillStyle = brand === "—" ? "rgba(248,250,252,0.4)" : "rgba(248,250,252,0.98)";
-  ctx.font = "800 27px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
-  fillTextBlock(ctx, brand, x, y, w, 28, 1);
+  ctx.font = "800 30px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  fillTextBlock(ctx, brand, x, y, w, 31, 1);
 
   ctx.fillStyle = model ? "rgba(226,232,240,0.82)" : "rgba(226,232,240,0.28)";
-  ctx.font = "600 19px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
-  fillTextBlock(ctx, model || "Model not set", x, y + 30, w, 22, 2);
+  ctx.font = "600 22px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  fillTextBlock(ctx, model || modelFallback, x, y + 33, w, 24, 2);
 }
 
 function drawSlot(
   ctx: CanvasRenderingContext2D,
   slot: AdventureCardSlot,
+  copy: GearSummaryCopy,
   selections: GearSelections,
   x: number,
   y: number,
@@ -204,8 +356,9 @@ function drawSlot(
   ctx.lineWidth = 1;
   ctx.stroke();
 
-  ctx.font = "800 15px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
-  const pillW = Math.max(slot.colSpan === 2 ? 164 : 112, ctx.measureText(slot.label).width + 32);
+  const slotLabel = copy.labels[slot.labelKey];
+  ctx.font = "800 17px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  const pillW = Math.max(slot.colSpan === 2 ? 172 : 120, ctx.measureText(slotLabel).width + 34);
   roundRectPath(ctx, x + 18, y + 14, pillW, 34, 17);
   const pillFill = ctx.createLinearGradient(x + 18, y + 14, x + 18 + pillW, y + 48);
   pillFill.addColorStop(0, "#f6b519");
@@ -214,10 +367,10 @@ function drawSlot(
   ctx.fill();
 
   ctx.fillStyle = "#111827";
-  ctx.fillText(slot.label, x + 34, y + 36);
+  ctx.fillText(slotLabel, x + 34, y + 36);
 
   if (slot.keys.length === 1) {
-    drawSingleSelection(ctx, selections[slot.keys[0]], x + 24, y + 82, w - 48);
+    drawSingleSelection(ctx, selections[slot.keys[0]], x + 24, y + 82, w - 48, copy.modelNotSet);
     return;
   }
 
@@ -227,13 +380,18 @@ function drawSlot(
     const offsetX = x + 24 + index * (innerWidth + innerGap);
     const selection = selections[key];
     ctx.fillStyle = "rgba(248,250,252,0.42)";
-    ctx.font = "700 12px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
-    ctx.fillText(GEAR_LABELS[key], offsetX, y + 82);
-    drawSingleSelection(ctx, selection, offsetX, y + 110, innerWidth);
+    ctx.font = "700 14px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+    ctx.fillText(copy.gearLabels[key], offsetX, y + 82);
+    drawSingleSelection(ctx, selection, offsetX, y + 110, innerWidth, copy.modelNotSet);
   });
 }
 
-function drawFrame(ctx: CanvasRenderingContext2D, selections: GearSelections, portraitImage: HTMLImageElement | null) {
+function drawFrame(
+  ctx: CanvasRenderingContext2D,
+  selections: GearSelections,
+  portraitImage: HTMLImageElement | null,
+  copy: GearSummaryCopy
+) {
   const { width, height } = ctx.canvas;
   ctx.clearRect(0, 0, width, height);
 
@@ -291,20 +449,20 @@ function drawFrame(ctx: CanvasRenderingContext2D, selections: GearSelections, po
     ctx.fillStyle = "#0a0f1c";
     ctx.font = "900 14px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText("⚡ MOTO + GEAR", heroX + 28 + badgeW / 2, heroY + 52);
+    ctx.fillText(copy.badge, heroX + 28 + badgeW / 2, heroY + 52);
     ctx.textAlign = "left";
 
     // Premium title
     ctx.fillStyle = "rgba(255,255,255,0.98)";
-    ctx.font = "900 52px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
-    ctx.fillText("My Bike & Kit", heroX + 28, heroY + heroH - 86);
+    ctx.font = "900 56px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+    ctx.fillText(copy.heroTitle, heroX + 28, heroY + heroH - 86);
     
     // Premium subtitle
     ctx.fillStyle = "rgba(226,232,240,0.88)";
-    ctx.font = "500 16px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
-    ctx.fillText("Moto + équipement sélectionné", heroX + 28, heroY + heroH - 54);
+    ctx.font = "500 18px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+    ctx.fillText(copy.heroSubtitle, heroX + 28, heroY + heroH - 54);
 
-    const entries = buildGearSummaryEntries(selections);
+    const entries = buildLocalizedGearSummaryEntries(selections, copy);
     const listX = heroX;
     const listY = heroY + heroH + 28;
     const listW = heroW;
@@ -328,13 +486,13 @@ function drawFrame(ctx: CanvasRenderingContext2D, selections: GearSelections, po
 
     // Equipment title
     ctx.fillStyle = "rgba(248,250,252,0.92)";
-    ctx.font = "700 14px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
-    ctx.fillText("ÉQUIPEMENT SÉLECTIONNÉ", listX + 18, listY + 24);
+    ctx.font = "700 16px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+    ctx.fillText(copy.selectedEquipment, listX + 18, listY + 24);
 
     if (entries.length === 0) {
       ctx.fillStyle = "rgba(248,250,252,0.62)";
-      ctx.font = "600 16px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
-      ctx.fillText("Aucun équipement sélectionné", listX + 28, listY + 54);
+      ctx.font = "600 18px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+      ctx.fillText(copy.noEquipment, listX + 28, listY + 54);
     } else {
       entries.forEach((entry, index) => {
         const col = index % 2;
@@ -349,8 +507,8 @@ function drawFrame(ctx: CanvasRenderingContext2D, selections: GearSelections, po
 
   const headerY = cardY + 4;
   ctx.fillStyle = "rgba(248,250,252,0.98)";
-  ctx.font = "800 52px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
-  ctx.fillText("My Adventure setup", cardX + 34, headerY + 38);
+  ctx.font = "800 58px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+  ctx.fillText(copy.setupTitle, cardX + 34, headerY + 38);
 
   const gridX = cardX + 24;
   const gridY = cardY + 116;
@@ -365,7 +523,7 @@ function drawFrame(ctx: CanvasRenderingContext2D, selections: GearSelections, po
     const y = gridY + rowHeights.slice(0, slot.row).reduce((sum, value) => sum + value, 0) + rowGap * slot.row;
     const w = slot.colSpan === 2 ? gridW : columnWidth;
     const h = rowHeights[slot.row];
-    drawSlot(ctx, slot, selections, x, y, w, h);
+    drawSlot(ctx, slot, copy, selections, x, y, w, h);
   });
 }
 
@@ -377,9 +535,11 @@ function hasAnySelection(selections: GearSelections, portrait: File | null) {
 export async function generateGearSummaryClip({
   selections,
   portrait,
+  locale = "en",
 }: {
   selections: GearSelections;
   portrait?: File | null;
+  locale?: GearSummaryLocale;
 }): Promise<GearSummaryClip | null> {
   if (!hasAnySelection(selections, portrait ?? null)) return Promise.resolve(null);
   if (typeof document === "undefined") {
@@ -392,6 +552,7 @@ export async function generateGearSummaryClip({
   }
 
   return new Promise<GearSummaryClip>((resolve, reject) => {
+    const copy = getGearSummaryCopy(locale);
     const canvas = document.createElement("canvas");
     canvas.width = CANVAS_WIDTH;
     canvas.height = CANVAS_HEIGHT;
@@ -407,8 +568,13 @@ export async function generateGearSummaryClip({
     let animationFrame = 0;
     const startedAt = performance.now();
     let portraitImage: HTMLImageElement | null = null;
+    let stopFallbackTimeout = 0;
+    let settled = false;
 
     const stop = () => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(stopFallbackTimeout);
       stream.getTracks().forEach((track) => track.stop());
       cancelAnimationFrame(animationFrame);
     };
@@ -423,6 +589,10 @@ export async function generateGearSummaryClip({
     recorder.onstop = () => {
       stop();
       const blob = new Blob(chunks, { type: mimeType });
+      if (blob.size === 0) {
+        reject(new Error("Gear summary recording produced an empty clip."));
+        return;
+      }
       void readBlobDuration(blob, CLIP_DURATION_SECONDS).then((durationSeconds) => {
         const url = URL.createObjectURL(blob);
         const file = new File([blob], "gear-summary.webm", { type: mimeType });
@@ -434,10 +604,13 @@ export async function generateGearSummaryClip({
       if (portrait) {
         portraitImage = await loadImageFromFile(portrait);
       }
-      drawFrame(context, selections, portraitImage);
+      drawFrame(context, selections, portraitImage, copy);
       recorder.start();
+      stopFallbackTimeout = window.setTimeout(() => {
+        if (recorder.state !== "inactive") recorder.stop();
+      }, (CLIP_DURATION_SECONDS + 1.2) * 1000);
       animationFrame = requestAnimationFrame(function tick(now: number) {
-        drawFrame(context, selections, portraitImage);
+        drawFrame(context, selections, portraitImage, copy);
         if ((now - startedAt) / 1000 < CLIP_DURATION_SECONDS) {
           animationFrame = requestAnimationFrame(tick);
           return;

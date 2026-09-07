@@ -37,8 +37,8 @@ export const STYLE_TRANSITIONS: Record<ReelStyle, TransitionPool> = {
   // three defined styles (fast/punchy vs. slow/premium) so every style has a
   // sensible transition pool.
   sport: {
-    names: ["fade"],
-    durationRange: [0.2, 0.3],
+    names: ["wipeleft", "wiperight", "slideleft", "slideright", "zoomin", "fadeblack", "radial"],
+    durationRange: [0.12, 0.24],
   },
   travel: {
     names: ["fade"],

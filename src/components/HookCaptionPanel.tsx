@@ -1,8 +1,8 @@
 "use client";
 
 import type { CSSProperties } from "react";
-import { useState } from "react";
-import { Type } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ChevronDown, Type } from "lucide-react";
 import { ReelTitleColor, ReelTitleFont, ReelTitleSize } from "@/types";
 import { useLocale } from "@/lib/i18n";
 
@@ -101,10 +101,19 @@ export default function HookCaptionPanel({
   onChangeOverlayText,
 }: HookCaptionPanelProps) {
   const [colorMenuOpen, setColorMenuOpen] = useState<number | null>(null);
+  const [isCompact, setIsCompact] = useState(false);
+  const [openIndex, setOpenIndex] = useState<number | null>(0);
   const { copy } = useLocale();
 
+  useEffect(() => {
+    const updateCompactMode = () => setIsCompact(window.innerWidth < 640);
+    updateCompactMode();
+    window.addEventListener("resize", updateCompactMode);
+    return () => window.removeEventListener("resize", updateCompactMode);
+  }, []);
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-3 sm:space-y-4">
       {overlayTexts.map((text, index) => {
         const typedIndex = index as 0 | 1 | 2;
         const font = overlayFonts[index];
@@ -119,106 +128,127 @@ export default function HookCaptionPanel({
         const previewLetterSpacing = font === "impact" ? "-0.03em" : font === "mono" ? "0.06em" : font === "minimal" ? "0.12em" : "0.02em";
         const previewTextTransform = font === "impact" ? "uppercase" : "none";
         const previewFontSize = size === "sm" ? "1rem" : size === "lg" ? "1.45rem" : "1.2rem";
+        const isExpanded = !isCompact || openIndex === index;
 
         return (
-          <div key={index} className="space-y-3 rounded-xl border border-white/10 bg-white/[0.02] p-3">
-            <div className="grid grid-cols-3 gap-2">
-              <label className="space-y-1 text-[11px] text-white/45">
-                <span>{copy.reelName.typography}</span>
-                <select
-                  value={font}
-                  onChange={(e) => onChangeOverlayFont(typedIndex, e.target.value as ReelTitleFont)}
-                  className="w-full rounded-lg border border-white/10 bg-black/30 px-2 py-1.5 text-xs text-white/85"
-                >
-                  {FONT_OPTIONS.map((option) => (
-                    <option key={option} value={option}>
-                    {copy.reelName.fontOptions[option]}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="space-y-1 text-[11px] text-white/45">
-                <span>{copy.reelName.letterSize}</span>
-                <select
-                  value={size}
-                  onChange={(e) => onChangeOverlaySize(typedIndex, e.target.value as ReelTitleSize)}
-                  className="w-full rounded-lg border border-white/10 bg-black/30 px-2 py-1.5 text-xs text-white/85"
-                >
-                  <option value="sm">{copy.reelName.sizeOptions.sm}</option>
-                  <option value="md">{copy.reelName.sizeOptions.md}</option>
-                  <option value="lg">{copy.reelName.sizeOptions.lg}</option>
-                </select>
-              </label>
-
-              <div className="relative space-y-1 text-[11px] text-white/45">
-                <span>{copy.reelName.color}</span>
-                <button
-                  type="button"
-                  onClick={() => setColorMenuOpen((current) => (current === index ? null : index))}
-                  className="flex w-full items-center justify-between rounded-lg border border-white/10 bg-black/30 px-2 py-1.5 text-xs text-white/85"
-                  aria-haspopup="listbox"
-                  aria-expanded={colorMenuOpen === index}
-                  aria-label={copy.reelName.color}
-                >
-                  <span className="inline-flex items-center gap-2">
-                    <span className={`h-3.5 w-3.5 rounded-full border border-white/30 ${selectedColorSwatch}`} />
-                  </span>
-                  <span className="text-white/60">▾</span>
-                </button>
-
-                {colorMenuOpen === index && (
-                  <div className="absolute left-0 right-0 z-20 mt-1 rounded-lg border border-white/10 bg-[#0b0d13] p-2 shadow-xl">
-                    <div className="grid grid-cols-4 gap-2" role="listbox" aria-label="Liste de couleurs">
-                      {COLOR_OPTIONS.map((option) => {
-                        const isActive = option.value === color;
-                        return (
-                          <button
-                            key={option.value}
-                            type="button"
-                            onClick={() => {
-                              onChangeOverlayColor(typedIndex, option.value);
-                              setColorMenuOpen(null);
-                            }}
-                            className={`h-6 w-6 rounded-full border transition ${option.swatchClass} ${
-                              isActive ? "border-white ring-2 ring-white/60" : "border-white/20 hover:border-white/40"
-                            }`}
-                            title={option.value}
-                            aria-label={`${copy.reelName.color} ${option.value}`}
-                            aria-pressed={isActive}
-                          />
-                        );
-                      })}
-                    </div>
+          <div key={index} className="rounded-2xl border border-white/10 bg-white/[0.02] p-2.5 sm:p-3.5">
+            {isCompact ? (
+              <button
+                type="button"
+                onClick={() => setOpenIndex((current) => (current === index ? null : index))}
+                className="flex w-full items-center justify-between gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2.5 text-left"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-white/40">Hook {index + 1}</div>
+                  <div className="mt-1 truncate text-sm font-medium text-white/85">
+                    {text.trim() || copy.reelName.placeholder}
                   </div>
-                )}
-              </div>
-            </div>
+                </div>
+                <ChevronDown className={`h-4 w-4 text-white/55 transition ${isExpanded ? "rotate-180" : ""}`} />
+              </button>
+            ) : null}
 
-            <div className="rounded-xl border border-white/10 bg-black/30 px-4 py-4">
-              <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-white/40">
-                <Type className="h-3 w-3" />
-                {copy.reelName.livePreview}
+            {(isExpanded || !isCompact) && (
+              <div className={`space-y-3 ${isCompact ? "mt-3" : ""}`}>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  <label className="space-y-1 text-[11px] text-white/45">
+                    <span>{copy.reelName.typography}</span>
+                    <select
+                      value={font}
+                      onChange={(e) => onChangeOverlayFont(typedIndex, e.target.value as ReelTitleFont)}
+                      className="min-h-[42px] w-full rounded-xl border border-white/10 bg-black/30 px-2.5 py-2 text-xs text-white/85"
+                    >
+                      {FONT_OPTIONS.map((option) => (
+                        <option key={option} value={option}>
+                        {copy.reelName.fontOptions[option]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="space-y-1 text-[11px] text-white/45">
+                    <span>{copy.reelName.letterSize}</span>
+                    <select
+                      value={size}
+                      onChange={(e) => onChangeOverlaySize(typedIndex, e.target.value as ReelTitleSize)}
+                      className="min-h-[42px] w-full rounded-xl border border-white/10 bg-black/30 px-2.5 py-2 text-xs text-white/85"
+                    >
+                      <option value="sm">{copy.reelName.sizeOptions.sm}</option>
+                      <option value="md">{copy.reelName.sizeOptions.md}</option>
+                      <option value="lg">{copy.reelName.sizeOptions.lg}</option>
+                    </select>
+                  </label>
+
+                  <div className="relative space-y-1 text-[11px] text-white/45">
+                    <span>{copy.reelName.color}</span>
+                    <button
+                      type="button"
+                      onClick={() => setColorMenuOpen((current) => (current === index ? null : index))}
+                      className="flex min-h-[42px] w-full items-center justify-between rounded-xl border border-white/10 bg-black/30 px-2.5 py-2 text-xs text-white/85"
+                      aria-haspopup="listbox"
+                      aria-expanded={colorMenuOpen === index}
+                      aria-label={copy.reelName.color}
+                    >
+                      <span className="inline-flex items-center gap-2">
+                        <span className={`h-3.5 w-3.5 rounded-full border border-white/30 ${selectedColorSwatch}`} />
+                      </span>
+                      <span className="text-white/60">▾</span>
+                    </button>
+
+                    {colorMenuOpen === index && (
+                      <div className="absolute left-0 right-0 z-20 mt-1 rounded-xl border border-white/10 bg-[#0b0d13] p-2 shadow-xl">
+                        <div className="grid grid-cols-4 gap-2" role="listbox" aria-label="Liste de couleurs">
+                          {COLOR_OPTIONS.map((option) => {
+                            const isActive = option.value === color;
+                            return (
+                              <button
+                                key={option.value}
+                                type="button"
+                                onClick={() => {
+                                  onChangeOverlayColor(typedIndex, option.value);
+                                  setColorMenuOpen(null);
+                                }}
+                                className={`h-7 w-7 rounded-full border transition ${option.swatchClass} ${
+                                  isActive ? "border-white ring-2 ring-white/60" : "border-white/20 hover:border-white/40"
+                                }`}
+                                title={option.value}
+                                aria-label={`${copy.reelName.color} ${option.value}`}
+                                aria-pressed={isActive}
+                              />
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-black/30 px-3 py-3 sm:px-4 sm:py-4">
+                  <div className="mb-2 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-white/40 sm:text-[11px]">
+                    <Type className="h-3 w-3" />
+                    {copy.reelName.livePreview}
+                  </div>
+                  <input
+                    value={text}
+                    onChange={(e) => onChangeOverlayText(typedIndex, e.target.value)}
+                    maxLength={60}
+                    placeholder={copy.reelName.placeholder}
+                    className="w-full min-h-[52px] rounded-xl border border-white/10 bg-black/20 px-3 py-3 text-center leading-tight placeholder:text-white/30 focus:border-white/20 focus:outline-none sm:px-4 sm:py-4"
+                    style={{
+                      fontFamily: previewFontFamily,
+                      fontStyle: previewFontStyle,
+                      fontWeight: previewFontWeight,
+                      letterSpacing: previewLetterSpacing,
+                      textTransform: previewTextTransform as CSSProperties["textTransform"],
+                      fontSize: previewFontSize,
+                      color: previewTextColor,
+                      WebkitTextFillColor: previewTextColor,
+                    }}
+                    aria-label={`${copy.hook.title} ${index + 1}`}
+                  />
+                </div>
               </div>
-              <input
-                value={text}
-                onChange={(e) => onChangeOverlayText(typedIndex, e.target.value)}
-                maxLength={60}
-                placeholder={copy.reelName.placeholder}
-                className="w-full rounded-lg border border-white/10 bg-black/20 px-4 py-5 text-center leading-tight placeholder:text-white/30 focus:border-white/20 focus:outline-none"
-                style={{
-                  fontFamily: previewFontFamily,
-                  fontStyle: previewFontStyle,
-                  fontWeight: previewFontWeight,
-                  letterSpacing: previewLetterSpacing,
-                  textTransform: previewTextTransform as CSSProperties["textTransform"],
-                  fontSize: previewFontSize,
-                  color: previewTextColor,
-                  WebkitTextFillColor: previewTextColor,
-                }}
-                aria-label={`${copy.hook.title} ${index + 1}`}
-              />
-            </div>
+            )}
           </div>
         );
       })}

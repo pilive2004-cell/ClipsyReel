@@ -49,11 +49,11 @@ export const STYLE_RECIPES: Record<ReelStyle, StyleRecipe> = {
     reelClipCount: 5,
   },
   sport: {
-    clipDuration: 4.0,
-    zoom: "in",
-    zoomIntensity: 1.12,
+    clipDuration: 2.8,
+    zoom: "alternate",
+    zoomIntensity: 1.22,
     speed: 1.0,
-    reelClipCount: 5,
+    reelClipCount: 6,
   },
   cinematic: {
     clipDuration: 5.4,

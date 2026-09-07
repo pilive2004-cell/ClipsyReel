@@ -65,6 +65,7 @@ export const GEAR_CATALOG = {
       "SW-Motech": ["Trax ADV", "SysBag WP", "Pro Rackpack"],
       "Mosko Moto": ["Backcountry 35", "Reckless 80", "Nomad Tank Bag"],
       "Lone Rider": ["MotoBags", "Overlander", "MotoArmor"],
+      Touratech: ["Zega Evo", "Aventuro Pro", "Travel Pro panniers"],
     },
   },
   camera: {

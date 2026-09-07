@@ -63,11 +63,18 @@ const RECORD_FPS = 24;
  *                                pitch flattens.
  *   Phase 4 (T_HOLD → end)       Smooth zoom-out back to full-route overview.
  */
-const T_OVERVIEW  = 5;    // s — end of regional hold (extended for title readability)
-const T_ZOOMIN    = 10.5; // s — end of zoom-in to start
-const T_DRAW      = 23.5; // s — end of route-draw phase (slower to keep tiles loaded)
-const T_HOLD      = 25.2; // s — end of completion hold
+const T_OVERVIEW  = 6.2;  // s — establishing shot, region/world context
+const T_ZOOMIN    = 12.1; // s — transition from overview to poetic detail
+const T_DRAW      = 23.0; // s — route draw & scenic tracking
+const T_HOLD      = 24.7; // s — rise / arrival hold
 // Phase 4: T_HOLD → CLIP_DURATION_SECONDS
+
+const CINEMATIC_ROUTE_TONE = {
+  accent: "#F9B778",
+  route: "#F59E6C",
+  glow: "#FDE7C1",
+  track: "rgba(249, 183, 120, 0.25)",
+};
 
 /**
  * Fixed close-up zoom used during route exploration.
@@ -100,9 +107,11 @@ const ROUTE_RESAMPLE_COUNT = 280;
  * Position and zoom use different constants so the viewer's eye naturally
  * tracks the movement without the horizon bouncing.
  */
-const K_POS  = 5.5;   // lat/lng convergence speed
-const K_ZOOM = 3.5;   // zoom convergence speed (slower = no zoom jitter)
-const K_PITCH = 4.0;  // pitch convergence speed
+const K_POS  = 2.8;   // lat/lng convergence speed
+const K_ZOOM = 1.8;   // zoom convergence speed (slower = no zoom jitter)
+const K_PITCH = 1.9;  // pitch convergence speed
+const K_BEARING = 1.6; // bearing convergence speed (slow to avoid heading jitter)
+const SOFT_3D_MAX_PITCH = 18;
 
 /**
  * Dynamic place-name zoom — Phase 2 only.
@@ -119,9 +128,19 @@ const K_PITCH = 4.0;  // pitch convergence speed
  *
  * Adjust these two constants to tune the feel:
  */
-const LABEL_ZOOM_IN_LEVEL   = 12.5;  // target zoom when near a place (bounded for tile stability)
-const LABEL_ZOOM_TRIGGER_KM = 1.0;   // km — approach distance that triggers zoom-in
-const MIN_DYNAMIC_ZOOM      = 10.7;  // temporary safety zoom in fast/unloaded-risk sections
+const LABEL_ZOOM_IN_LEVEL   = 11.9;  // target zoom when near a place (bounded for tile stability)
+const LABEL_ZOOM_TRIGGER_KM = 0.8;   // km — approach distance that triggers zoom-in
+const MIN_DYNAMIC_ZOOM      = 11.25; // temporary safety zoom in fast/unloaded-risk sections
+
+interface RenderRouteLabel {
+  lng: number;
+  lat: number;
+  name: string;
+  progress: number;
+  isStart: boolean;
+  isEnd: boolean;
+  priority: "major" | "minor";
+}
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
@@ -173,6 +192,18 @@ function expSmooth(current: number, target: number, k: number, dt: number): numb
   return target + (current - target) * Math.exp(-k * dt);
 }
 
+function normalizeDeg(angle: number): number {
+  let a = angle;
+  while (a > 180) a -= 360;
+  while (a < -180) a += 360;
+  return a;
+}
+
+function expSmoothAngle(current: number, target: number, k: number, dt: number): number {
+  const delta = normalizeDeg(target - current);
+  return normalizeDeg(expSmooth(0, delta, k, dt) + current);
+}
+
 /**
  * Represents the smoothed camera state that drives every `jumpTo` call.
  * All values are floating-point; the smoothing functions converge them toward
@@ -183,6 +214,7 @@ interface CamState {
   lng: number;
   zoom: number;
   pitch: number;
+  bearing: number;
 }
 
 /** Haversine distance between two GPX points in metres. */
@@ -370,16 +402,31 @@ function buildLineGeoJSON(points: GpxTrackPoint[], count: number): GeoJSON.Featu
 
 /** Build a GeoJSON FeatureCollection of labelled waypoints. */
 function buildLabelsGeoJSON(
-  labels: Array<{ lng: number; lat: number; name: string; isStart?: boolean; isEnd?: boolean }>,
+  labels: Array<{ lng: number; lat: number; name: string; isStart?: boolean; isEnd?: boolean; priority?: "major" | "minor" }>,
 ): GeoJSON.FeatureCollection {
   return {
     type: "FeatureCollection",
     features: labels.map((l) => ({
       type: "Feature" as const,
       geometry: { type: "Point" as const, coordinates: [l.lng, l.lat] },
-      properties: { name: l.name, isStart: l.isStart ?? false, isEnd: l.isEnd ?? false },
+      properties: { name: l.name, isStart: l.isStart ?? false, isEnd: l.isEnd ?? false, priority: l.priority ?? "minor" },
     })),
   };
+}
+
+function pickMajorLabels(labels: RenderRouteLabel[], maxCount: number): RenderRouteLabel[] {
+  if (labels.length <= maxCount) return labels;
+  const start = labels.find((l) => l.isStart);
+  const end = labels.find((l) => l.isEnd);
+  const middle = labels.filter((l) => !l.isStart && !l.isEnd);
+  const ranked = [...middle].sort((a, b) => {
+    const aScore = (a.priority === "major" ? 2 : 1) + (1 - Math.abs(a.progress - 0.5));
+    const bScore = (b.priority === "major" ? 2 : 1) + (1 - Math.abs(b.progress - 0.5));
+    return bScore - aScore;
+  });
+  const slots = Math.max(0, maxCount - (start ? 1 : 0) - (end ? 1 : 0));
+  const sampled = ranked.slice(0, slots).sort((a, b) => a.progress - b.progress);
+  return [start, ...sampled, end].filter((x): x is RenderRouteLabel => Boolean(x));
 }
 
 function computeWindowCamera(
@@ -392,6 +439,77 @@ function computeWindowCamera(
   const safeStart = clamp(startIndex, 0, Math.max(0, points.length - 1));
   const safeEnd = clamp(endIndex, safeStart + 1, points.length);
   return computeOverviewCamera(points.slice(safeStart, safeEnd), MAP_WIDTH, MAP_HEIGHT, paddingPx, maxZoom);
+}
+
+function sampleRoutePoint(points: GpxTrackPoint[], progress: number): GpxTrackPoint {
+  if (points.length === 0) return { lat: 0, lng: 0, ele: null, time: null };
+  if (points.length === 1) return points[0];
+  const p = clamp(progress, 0, 1) * (points.length - 1);
+  const i = Math.floor(p);
+  const t = p - i;
+  const a = points[i];
+  const b = points[Math.min(points.length - 1, i + 1)];
+  return {
+    lat: lerp(a.lat, b.lat, t),
+    lng: lerp(a.lng, b.lng, t),
+    ele: null,
+    time: null,
+  };
+}
+
+function metersToLat(meters: number): number {
+  return meters / 111_320;
+}
+
+function metersToLng(meters: number, lat: number): number {
+  const cos = Math.cos((lat * Math.PI) / 180);
+  if (Math.abs(cos) < 1e-6) return 0;
+  return meters / (111_320 * cos);
+}
+
+function offsetPointMeters(point: { lat: number; lng: number }, eastMeters: number, northMeters: number) {
+  return {
+    lat: point.lat + metersToLat(northMeters),
+    lng: point.lng + metersToLng(eastMeters, point.lat),
+  };
+}
+
+function routeHeadingRad(points: GpxTrackPoint[], progress: number, sampleDelta = 0.02): number {
+  const a = sampleRoutePoint(points, clamp(progress - sampleDelta, 0, 1));
+  const b = sampleRoutePoint(points, clamp(progress + sampleDelta, 0, 1));
+  return Math.atan2(b.lat - a.lat, b.lng - a.lng);
+}
+
+function buildStableTrackingTarget(
+  routePoints: GpxTrackPoint[],
+  localCamera: { centerLat: number; centerLng: number; zoom: number },
+  headProgress: number,
+  upcomingTurn: number,
+  labelZoomActive: boolean,
+  tilesLoaded: boolean,
+): { lat: number; lng: number; zoom: number; pitch: number; head: GpxTrackPoint } {
+  const head = sampleRoutePoint(routePoints, headProgress);
+  const lead = sampleRoutePoint(routePoints, clamp(headProgress + 0.042 + upcomingTurn * 0.01, 0, 1));
+  const heading = routeHeadingRad(routePoints, headProgress);
+
+  const focus = {
+    lat: lerp(head.lat, lead.lat, 0.52),
+    lng: lerp(head.lng, lead.lng, 0.52),
+  };
+
+  const sideMeters = 58 + upcomingTurn * 10 + (labelZoomActive ? 4 : 0);
+  const driftMeters = Math.sin(headProgress * Math.PI * 1.2) * 4;
+  const offsetMeters = sideMeters + driftMeters;
+  const eastMeters = Math.cos(heading + Math.PI / 2) * offsetMeters;
+  const northMeters = Math.sin(heading + Math.PI / 2) * offsetMeters;
+  const framed = offsetPointMeters(focus, eastMeters, northMeters);
+
+  const targetLat = lerp(localCamera.centerLat, framed.lat, 0.64);
+  const targetLng = lerp(localCamera.centerLng, framed.lng, 0.64);
+  const targetZoom = clamp(localCamera.zoom + (labelZoomActive ? 0.1 : 0.02) - (tilesLoaded ? 0 : 0.12), MIN_DYNAMIC_ZOOM, LABEL_ZOOM_IN_LEVEL);
+  const targetPitch = clamp(18 - upcomingTurn * 2.4 + (labelZoomActive ? 0.8 : 0), 12, SOFT_3D_MAX_PITCH);
+
+  return { lat: targetLat, lng: targetLng, zoom: targetZoom, pitch: targetPitch, head };
 }
 
 async function readBlobDuration(blob: Blob, fallback: number): Promise<number> {
@@ -454,6 +572,27 @@ function fitFontSize(
     ctx.font = `${weight} ${size}px ${fontStack}`;
   }
   return size;
+}
+
+function drawCinematicTone(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  elapsed: number,
+) {
+  const vignette = ctx.createRadialGradient(w / 2, h * 0.4, w * 0.15, w / 2, h * 0.7, w * 0.9);
+  vignette.addColorStop(0, "rgba(8, 16, 28, 0)");
+  vignette.addColorStop(0.55, "rgba(8, 16, 28, 0.12)");
+  vignette.addColorStop(1, "rgba(4, 8, 16, 0.52)");
+  ctx.fillStyle = vignette;
+  ctx.fillRect(0, 0, w, h);
+
+  const warm = ctx.createLinearGradient(0, 0, w, 0);
+  warm.addColorStop(0, `rgba(249, 183, 120, ${0.05 + Math.sin(elapsed * 0.8) * 0.015})`);
+  warm.addColorStop(0.5, "rgba(255,255,255,0)");
+  warm.addColorStop(1, "rgba(118, 134, 255, 0.09)");
+  ctx.fillStyle = warm;
+  ctx.fillRect(0, 0, w, h);
 }
 
 function drawTitleCard(
@@ -546,6 +685,85 @@ function drawTitleCard(
   ctx.restore();
 }
 
+function drawCityHighlight(
+  ctx: CanvasRenderingContext2D,
+  name: string,
+  alpha: number,
+  w: number,
+  h: number,
+) {
+  if (!name || alpha <= 0.01) return;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  const fontStack = `-apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif`;
+  ctx.textAlign = "center";
+  const y = Math.round(h * 0.14);
+  const chipW = Math.min(w - 68, Math.max(260, name.length * 19));
+  const chipX = (w - chipW) / 2;
+  ctx.fillStyle = "rgba(5,10,22,0.58)";
+  ctx.strokeStyle = "rgba(255,255,255,0.28)";
+  ctx.lineWidth = 2;
+  const chipH = 72;
+  const r = 24;
+  ctx.beginPath();
+  ctx.moveTo(chipX + r, y);
+  ctx.lineTo(chipX + chipW - r, y);
+  ctx.quadraticCurveTo(chipX + chipW, y, chipX + chipW, y + r);
+  ctx.lineTo(chipX + chipW, y + chipH - r);
+  ctx.quadraticCurveTo(chipX + chipW, y + chipH, chipX + chipW - r, y + chipH);
+  ctx.lineTo(chipX + r, y + chipH);
+  ctx.quadraticCurveTo(chipX, y + chipH, chipX, y + chipH - r);
+  ctx.lineTo(chipX, y + r);
+  ctx.quadraticCurveTo(chipX, y, chipX + r, y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.shadowColor = "rgba(0,0,0,0.6)";
+  ctx.shadowBlur = 14;
+  ctx.fillStyle = "#ffffff";
+  const citySize = fitFontSize(ctx, name.toUpperCase(), "800", 38, 24, chipW - 44, fontStack);
+  ctx.font = `800 ${citySize}px ${fontStack}`;
+  ctx.textBaseline = "middle";
+  ctx.fillText(name.toUpperCase(), w / 2, y + chipH / 2 + 3);
+  ctx.restore();
+}
+
+function drawJourneyRecap(
+  ctx: CanvasRenderingContext2D,
+  alpha: number,
+  routeStats: GpxRouteStats | null | undefined,
+  visited: string,
+  w: number,
+  h: number,
+) {
+  if (alpha <= 0.01) return;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  const fontStack = `-apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif`;
+  const x = 44;
+  const y = Math.round(h * 0.08);
+  const boxW = w - 88;
+  const boxH = 172;
+  ctx.fillStyle = "rgba(3,8,20,0.62)";
+  ctx.strokeStyle = "rgba(255,255,255,0.24)";
+  ctx.lineWidth = 2;
+  ctx.fillRect(x, y, boxW, boxH);
+  ctx.strokeRect(x, y, boxW, boxH);
+  ctx.fillStyle = "rgba(199,225,255,0.88)";
+  ctx.font = `600 20px ${fontStack}`;
+  ctx.fillText("JOURNEY RECAP", x + 24, y + 34);
+  const distanceText = routeStats ? `${routeStats.distanceKm.toFixed(1)} km` : "Distance unavailable";
+  ctx.fillStyle = "#ffffff";
+  ctx.font = `800 42px ${fontStack}`;
+  ctx.fillText(distanceText, x + 24, y + 88);
+  ctx.fillStyle = "rgba(244,248,255,0.8)";
+  const visitLine = visited.length > 70 ? `${visited.slice(0, 67).trimEnd()}…` : visited;
+  const visitedSize = fitFontSize(ctx, visitLine, "500", 24, 16, boxW - 46, fontStack);
+  ctx.font = `500 ${visitedSize}px ${fontStack}`;
+  ctx.fillText(visitLine, x + 24, y + 136);
+  ctx.restore();
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 /**
@@ -621,7 +839,7 @@ export default function RouteMapIntro({
       //    detector, use them directly — no network calls needed, no delay.
       //    Otherwise fall back to the internal Nominatim reverse-geocoding
       //    (legacy path for callers that don't supply labels yet).
-      let labelData: Array<{ lng: number; lat: number; name: string; progress: number; isStart: boolean; isEnd: boolean }>;
+      let labelData: RenderRouteLabel[];
 
       if (initialLabels && initialLabels.length >= 2) {
         // Map RouteLabel[] (external) → internal labelData shape
@@ -632,6 +850,7 @@ export default function RouteMapIntro({
           progress: l.progress,
           isStart: i === 0,
           isEnd: i === initialLabels.length - 1,
+          priority: l.priority ?? "major",
         }));
       } else {
         // Fallback: geocode N evenly-spaced waypoints via Nominatim
@@ -643,10 +862,23 @@ export default function RouteMapIntro({
             const name = await reverseGeocode(wp.lat, wp.lng);
             const ptIdx = points.findIndex((p) => p.lat === wp.lat && p.lng === wp.lng);
             const progress = ptIdx >= 0 ? pointProgress[ptIdx] : i / (waypoints.length - 1);
-            return { lng: wp.lng, lat: wp.lat, name, progress, isStart: i === 0, isEnd: i === waypoints.length - 1 };
+            return {
+              lng: wp.lng,
+              lat: wp.lat,
+              name,
+              progress,
+              isStart: i === 0,
+              isEnd: i === waypoints.length - 1,
+              priority: i === 0 || i === waypoints.length - 1 || i % 2 === 0 ? "major" : "minor",
+            };
           }),
         );
       }
+
+      const majorLabelData = pickMajorLabels(
+        labelData.filter((l) => l.isStart || l.isEnd || l.priority === "major"),
+        7,
+      );
 
       if (cancelled) return;
 
@@ -703,32 +935,32 @@ export default function RouteMapIntro({
           id: "route-ghost-casing",
           type: "line",
           source: "route-ghost",
-          paint: { "line-color": "#ffffff", "line-width": 9, "line-opacity": 0.30 },
+          paint: { "line-color": "rgba(255,255,255,0.82)", "line-width": 10, "line-opacity": 0.24 },
           layout: { "line-cap": "round", "line-join": "round" },
         });
         map.addLayer({
           id: "route-ghost-line",
           type: "line",
           source: "route-ghost",
-          paint: { "line-color": "#FF3B30", "line-width": 5, "line-opacity": 0.55 },
+          paint: { "line-color": CINEMATIC_ROUTE_TONE.track, "line-width": 5, "line-opacity": 0.75 },
           layout: { "line-cap": "round", "line-join": "round" },
         });
 
-        // Progressively revealed route — bright red, thick, premium travel appearance.
-        // 16px white casing beneath 10px #FF3B30 line gives strong contrast on all map styles.
+        // Progressively revealed route — warm amber, filmic and premium rather than GPS-like.
+        // The white casing is subtle and the accent line reads as a cinematic travel highlight.
         map.addSource("route-revealed", { type: "geojson", data: buildLineGeoJSON(resampled, 2) });
         map.addLayer({
           id: "route-revealed-casing",
           type: "line",
           source: "route-revealed",
-          paint: { "line-color": "#ffffff", "line-width": 16, "line-opacity": 0.92 },
+          paint: { "line-color": "rgba(255,255,255,0.85)", "line-width": 14, "line-opacity": 0.74 },
           layout: { "line-cap": "round", "line-join": "round" },
         });
         map.addLayer({
           id: "route-revealed-line",
           type: "line",
           source: "route-revealed",
-          paint: { "line-color": "#FF3B30", "line-width": 10, "line-opacity": 1 },
+          paint: { "line-color": CINEMATIC_ROUTE_TONE.route, "line-width": 9, "line-opacity": 1 },
           layout: { "line-cap": "round", "line-join": "round" },
         });
 
@@ -782,20 +1014,27 @@ export default function RouteMapIntro({
           12, ["case", ["any", ["get", "isStart"], ["get", "isEnd"]] as maplibregl.ExpressionSpecification, 32, 22],
           14, ["case", ["any", ["get", "isStart"], ["get", "isEnd"]] as maplibregl.ExpressionSpecification, 42, 30],
         ];
+        const LABEL_VARIABLE_ANCHOR = ["top", "bottom", "left", "right"] as Array<"top" | "bottom" | "left" | "right">;
         const LABEL_LAYOUT_COMMON = {
           "text-field": ["get", "name"] as maplibregl.ExpressionSpecification,
           "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
           "text-size": LABEL_SIZE_EXPR,
-          "text-anchor": "bottom" as const,
-          "text-offset": [0, -1.6] as [number, number],
+          "text-variable-anchor": LABEL_VARIABLE_ANCHOR,
+          "text-radial-offset": 1.1,
           "text-max-width": 10,
-          "text-allow-overlap": true,
-          "text-ignore-placement": true,
+          "text-allow-overlap": false,
+          "text-ignore-placement": false,
           "text-transform": "uppercase" as const,
           "text-letter-spacing": 0.04,
           // Lower value = higher z-order: start/end labels always render on top
           "symbol-sort-key": ["case", ["any", ["get", "isStart"], ["get", "isEnd"]] as maplibregl.ExpressionSpecification, 0, 1] as maplibregl.ExpressionSpecification,
         };
+        const MAJOR_LABEL_SIZE_EXPR: maplibregl.ExpressionSpecification = [
+          "interpolate", ["linear"], ["zoom"],
+          8, 28,
+          11, 40,
+          13, 52,
+        ];
 
         map.addSource("place-labels", { type: "geojson", data: buildLabelsGeoJSON([]) });
 
@@ -830,14 +1069,90 @@ export default function RouteMapIntro({
           },
         });
 
+        map.addSource("major-place-labels", { type: "geojson", data: buildLabelsGeoJSON(majorLabelData) });
+        map.addLayer({
+          id: "major-place-labels",
+          type: "symbol",
+          source: "major-place-labels",
+          layout: {
+            "text-field": ["get", "name"] as maplibregl.ExpressionSpecification,
+            "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
+            "text-size": MAJOR_LABEL_SIZE_EXPR,
+            "text-variable-anchor": LABEL_VARIABLE_ANCHOR,
+            "text-radial-offset": 1.3,
+            "text-max-width": 10,
+            "text-allow-overlap": false,
+            "text-ignore-placement": false,
+            "text-transform": "uppercase" as const,
+            "text-letter-spacing": 0.05,
+          },
+          paint: {
+            "text-color": "#ffffff",
+            "text-halo-color": "rgba(2,6,23,0.9)",
+            "text-halo-width": 3.2,
+            "text-halo-blur": 0.4,
+          },
+        });
+
+        map.addSource("journey-endpoints", {
+          type: "geojson",
+          data: {
+            type: "FeatureCollection",
+            features: [
+              {
+                type: "Feature",
+                geometry: { type: "Point", coordinates: [resampled[0].lng, resampled[0].lat] },
+                properties: { kind: "start" },
+              },
+              {
+                type: "Feature",
+                geometry: { type: "Point", coordinates: [resampled[resampled.length - 1].lng, resampled[resampled.length - 1].lat] },
+                properties: { kind: "end" },
+              },
+            ],
+          },
+        });
+        map.addLayer({
+          id: "journey-endpoints",
+          type: "circle",
+          source: "journey-endpoints",
+          paint: {
+            "circle-radius": ["case", ["==", ["get", "kind"], "start"], 10, 12] as maplibregl.ExpressionSpecification,
+            "circle-color": ["case", ["==", ["get", "kind"], "start"], "#22c55e", "#ef4444"] as maplibregl.ExpressionSpecification,
+            "circle-stroke-color": "#ffffff",
+            "circle-stroke-width": 2.5,
+          },
+        });
+        let terrain3dEnabled = false;
+        try {
+          map.addSource("terrain-dem", {
+            type: "raster-dem",
+            tiles: ["https://demotiles.maplibre.org/terrain-tiles/tiles/{z}/{x}/{y}.png"],
+            tileSize: 256,
+            maxzoom: 13,
+            encoding: "mapbox",
+          });
+          map.setTerrain({ source: "terrain-dem", exaggeration: 0.9 });
+          map.addLayer({
+            id: "terrain-hillshade",
+            type: "hillshade",
+            source: "terrain-dem",
+            paint: {
+              "hillshade-exaggeration": 0.42,
+              "hillshade-highlight-color": "rgba(255,255,255,0.22)",
+              "hillshade-shadow-color": "rgba(8,16,28,0.44)",
+            },
+          });
+          terrain3dEnabled = true;
+        } catch (error) {
+          console.warn("[RouteMapIntro] Terrain mode unavailable, fallback to 2D map.", error);
+        }
+
         // Pre-show the START label immediately (Phase 0 / overview hold) so the
         // viewer can read the departure location while the title card is visible.
-        const startLabelFeature = labelData.find((l) => l.isStart);
-        if (startLabelFeature) {
-          (map.getSource("place-labels") as GeoJSONSource | undefined)?.setData(
-            buildLabelsGeoJSON([startLabelFeature]),
-          );
-        }
+        (map.getSource("place-labels") as GeoJSONSource | undefined)?.setData(
+          buildLabelsGeoJSON(majorLabelData),
+        );
 
         // 4. Recording setup — compositing canvas approach
         //
@@ -890,6 +1205,7 @@ export default function RouteMapIntro({
           lng: overviewCenter.lng,
           zoom: overviewZoom,
           pitch: 0,
+          bearing: 0,
         };
 
         // Route-end position (updated during Phase 2, used in Phase 4 zoom-out)
@@ -902,13 +1218,15 @@ export default function RouteMapIntro({
         let startTime: number | null = null;
         let prevFrameTime: number | null = null;
         let warmupFrames = 0;
-        let lastRevealedIdx = 1;
-        let shownLabels: typeof labelData = startLabelFeature ? [startLabelFeature] : [];
+        let lastRevealedIdx = 2;
+        let shownLabels: typeof labelData = majorLabelData.filter((l) => l.isStart);
         let lastLabelsLen = shownLabels.length;
-        let lastGeoJSONUpdateMs = 0;
         let endLabelShown = false;
         // Dynamic zoom-in state — true while the head is close to a place name
         let labelZoomActive = false;
+        let cityOverlay = { name: "", alpha: 0 };
+        let recapAlpha = 0;
+        const recapLocations = majorLabelData.map((l) => l.name).slice(0, 4).join(" · ");
 
         // After each MapLibre WebGL render, composite the map onto the recording
         // canvas and draw the 2D title card overlay on top.
@@ -926,6 +1244,9 @@ export default function RouteMapIntro({
           compositeCtx.drawImage(mapCanvas, 0, 0, MAP_WIDTH, MAP_HEIGHT);
           if (startTime !== null) {
             const elapsedSec = (performance.now() - startTime) / 1000;
+            drawCinematicTone(compositeCtx, MAP_WIDTH, MAP_HEIGHT, elapsedSec);
+            drawCityHighlight(compositeCtx, cityOverlay.name, cityOverlay.alpha, MAP_WIDTH, MAP_HEIGHT);
+            drawJourneyRecap(compositeCtx, recapAlpha, routeStats, recapLocations, MAP_WIDTH, MAP_HEIGHT);
             drawTitleCard(compositeCtx, elapsedSec, startLabelName, endLabelName, MAP_WIDTH, MAP_HEIGHT);
           }
         });
@@ -968,6 +1289,7 @@ export default function RouteMapIntro({
           let targetLng: number;
           let targetZoom: number;
           let targetPitch: number;
+          let targetBearing: number;
 
           // ── Phase 0 (0 – T_OVERVIEW): Regional context hold ──────────────
           // Camera stationary at capped overview zoom (≤ z8).
@@ -978,6 +1300,9 @@ export default function RouteMapIntro({
             targetLng   = overviewCenter.lng + drift;
             targetZoom  = overviewZoom;
             targetPitch = 0;
+            targetBearing = 0;
+            cityOverlay = { name: "", alpha: 0 };
+            recapAlpha = 0;
           }
 
           // ── Phase 1 (T_OVERVIEW – T_ZOOMIN): Zoom-in to start ────────────
@@ -989,7 +1314,10 @@ export default function RouteMapIntro({
             targetLat   = lerp(overviewCenter.lat, resampled[0].lat, t);
             targetLng   = lerp(overviewCenter.lng, resampled[0].lng, t);
             targetZoom  = lerp(overviewZoom, DETAIL_ZOOM, t);
-            targetPitch = lerp(0, 18, t);
+            targetPitch = lerp(0, terrain3dEnabled ? 16 : 8, t);
+            targetBearing = lerp(0, normalizeDeg((routeHeadingRad(resampled, 0.04) * 180) / Math.PI - 90), t);
+            cityOverlay = { name: startLabelName, alpha: easeInOut(clamp(t * 1.4, 0, 1)) * 0.55 };
+            recapAlpha = 0;
           }
 
           // ── Phase 2 (T_ZOOMIN – T_DRAW): Route discovery ─────────────────
@@ -999,43 +1327,40 @@ export default function RouteMapIntro({
           // waypoint, then smoothly returns when the head moves away.
           else if (elapsed < T_DRAW) {
             const phaseT = clamp((elapsed - T_ZOOMIN) / (T_DRAW - T_ZOOMIN), 0, 1);
-            const headIdx = Math.min(
-              Math.floor(phaseT * (resampled.length - 1)),
-              resampled.length - 1,
-            );
-            const head = resampled[headIdx];
+            const headProgress = phaseT;
+            const headContinuousIndex = headProgress * (resampled.length - 1);
+            const headIdx = clamp(Math.floor(headContinuousIndex), 0, resampled.length - 1);
             const upcomingTurn = normalizedTurn(resampled, headIdx);
             const tilesLoaded = map.areTilesLoaded();
             const lookAheadCount = clamp(
-              Math.round(12 + upcomingTurn * 10 + (tilesLoaded ? 0 : 6)),
+              Math.round(11 + upcomingTurn * 2 + (tilesLoaded ? 0 : 1)),
               10,
-              28,
+              16,
             );
+            const head = sampleRoutePoint(resampled, headProgress);
             const lookAheadIdx = clamp(headIdx + lookAheadCount, headIdx, resampled.length - 1);
             const trailIdx = clamp(headIdx - 8, 0, headIdx);
-            const lookAheadPoint = resampled[lookAheadIdx];
+            const lookAheadPoint = sampleRoutePoint(resampled, clamp(headProgress + lookAheadCount / (resampled.length - 1), 0, 1));
             const localCamera = computeWindowCamera(
               resampled,
               trailIdx,
               Math.min(resampled.length, lookAheadIdx + 5),
-              Math.round(150 + upcomingTurn * 65 + (tilesLoaded ? 0 : 90)),
-              DETAIL_ZOOM + 0.35,
+              Math.round(176 + upcomingTurn * 16 + (tilesLoaded ? 0 : 30)),
+              DETAIL_ZOOM + 0.3,
             );
-            const anticipationWeight = tilesLoaded ? 0.52 : 0.68;
-            const anticipatedLat = lerp(head.lat, lookAheadPoint.lat, anticipationWeight);
-            const anticipatedLng = lerp(head.lng, lookAheadPoint.lng, anticipationWeight);
             const upcomingDistanceKm = haversineM(head, lookAheadPoint) / 1_000;
 
-            // Advance revealed GeoJSON (throttled to ≤ 1 update per 80ms)
-            if (headIdx !== lastRevealedIdx && now - lastGeoJSONUpdateMs > 110) {
-              lastRevealedIdx = headIdx;
-              lastGeoJSONUpdateMs = now;
+            // Advance revealed route in lock-step with timeline progress.
+            const revealCount = clamp(Math.floor(headContinuousIndex) + 1, 2, resampled.length);
+            if (revealCount !== lastRevealedIdx) {
+              lastRevealedIdx = revealCount;
               (map.getSource("route-revealed") as GeoJSONSource | undefined)?.setData(
-                buildLineGeoJSON(resampled, headIdx + 1),
+                buildLineGeoJSON(resampled, revealCount),
               );
+              const headPoint = sampleRoutePoint(resampled, headProgress);
               (map.getSource("vehicle-head") as GeoJSONSource | undefined)?.setData({
                 type: "FeatureCollection",
-                features: [{ type: "Feature", geometry: { type: "Point", coordinates: [head.lng, head.lat] }, properties: {} }],
+                features: [{ type: "Feature", geometry: { type: "Point", coordinates: [headPoint.lng, headPoint.lat] }, properties: {} }],
               });
             }
 
@@ -1052,39 +1377,61 @@ export default function RouteMapIntro({
               );
             }
 
-            targetLat = lerp(localCamera.centerLat, anticipatedLat, 0.78);
-            targetLng = lerp(localCamera.centerLng, anticipatedLng, 0.78);
-            targetPitch = lerp(16, 10, upcomingTurn * 0.85);
-
-            // ── Dynamic zoom near place-name labels ───────────────────
-            // Find the nearest non-start / non-end label.
-            // Intermediate labels are geocoded waypoints that appear as
-            // the route draws; zooming in makes their names readable.
+            // Dynamic zoom near place-name labels.
             let nearestLabelKm = Infinity;
             for (const label of labelData) {
               if (label.isStart || label.isEnd) continue;
               const km = haversineM(head, label) / 1_000;
               if (km < nearestLabelKm) nearestLabelKm = km;
             }
-
-            // Hysteresis: enter zoom-in at 1× threshold, exit at 1.5×.
-            // This prevents oscillation when the head lingers at the boundary.
             if (!labelZoomActive && nearestLabelKm < LABEL_ZOOM_TRIGGER_KM) {
               labelZoomActive = true;
             } else if (labelZoomActive && nearestLabelKm > LABEL_ZOOM_TRIGGER_KM * 1.5) {
               labelZoomActive = false;
             }
 
-            const desiredDetailZoom = labelZoomActive && tilesLoaded ? LABEL_ZOOM_IN_LEVEL : DETAIL_ZOOM;
-            const dynamicCeiling = Math.min(desiredDetailZoom, localCamera.zoom + (labelZoomActive ? 0.45 : 0.2));
-            const safetyZoomPenalty =
-              (tilesLoaded ? 0 : 0.75) +
-              clamp((upcomingDistanceKm - 2.5) * 0.1, 0, 0.65) +
-              upcomingTurn * 0.4;
-            targetZoom = clamp(dynamicCeiling - safetyZoomPenalty, MIN_DYNAMIC_ZOOM, desiredDetailZoom);
+            const cinematicTarget = buildStableTrackingTarget(
+              resampled,
+              localCamera,
+              headProgress,
+              upcomingTurn,
+              labelZoomActive,
+              tilesLoaded,
+            );
+            targetLat = cinematicTarget.lat;
+            targetLng = cinematicTarget.lng;
+            targetPitch = terrain3dEnabled ? cinematicTarget.pitch : clamp(cinematicTarget.pitch - 8, 8, 14);
+            targetBearing = normalizeDeg((routeHeadingRad(resampled, headProgress) * 180) / Math.PI - 90);
 
-            routeEndLat = head.lat;
-            routeEndLng = head.lng;
+            const roadContext = clamp((upcomingDistanceKm - 0.8) / 2.4, 0, 1);
+            const highwayZoom = DETAIL_ZOOM - 0.55;
+            const scenicZoom = LABEL_ZOOM_IN_LEVEL;
+            const contextZoom = lerp(scenicZoom, highwayZoom, roadContext * (1 - upcomingTurn));
+            const desiredDetailZoom = labelZoomActive && tilesLoaded ? LABEL_ZOOM_IN_LEVEL : contextZoom;
+            const turnPenalty = clamp(upcomingTurn * 0.08, 0, 0.08);
+            const distancePenalty = clamp((upcomingDistanceKm - 2.2) * 0.02, 0, 0.08);
+            targetZoom = clamp(cinematicTarget.zoom - turnPenalty - distancePenalty, MIN_DYNAMIC_ZOOM, desiredDetailZoom);
+            targetPitch = clamp(targetPitch, 12, SOFT_3D_MAX_PITCH);
+
+            const nearestMajor = majorLabelData
+              .filter((l) => !l.isStart && !l.isEnd)
+              .reduce<{ label: RenderRouteLabel | null; delta: number }>(
+                (best, label) => {
+                  const delta = Math.abs(label.progress - headProgress);
+                  return delta < best.delta ? { label, delta } : best;
+                },
+                { label: null, delta: Infinity },
+              );
+            if (nearestMajor.label) {
+              const fade = clamp(1 - nearestMajor.delta / 0.09, 0, 1);
+              cityOverlay = { name: nearestMajor.label.name, alpha: easeInOut(fade) * 0.9 };
+            } else {
+              cityOverlay = { name: "", alpha: 0 };
+            }
+            recapAlpha = 0;
+
+            routeEndLat = cinematicTarget.head.lat;
+            routeEndLng = cinematicTarget.head.lng;
           }
 
           // ── Phase 3 (T_DRAW – T_HOLD): Completion hold ───────────────────
@@ -1107,7 +1454,10 @@ export default function RouteMapIntro({
             targetLat   = routeEndLat;
             targetLng   = routeEndLng;
             targetZoom  = DETAIL_ZOOM;
-            targetPitch = lerp(18, 4, t);
+            targetPitch = terrain3dEnabled ? lerp(16, 12, t) : lerp(8, 6, t);
+            targetBearing = normalizeDeg((routeHeadingRad(resampled, 0.99) * 180) / Math.PI - 90);
+            cityOverlay = { name: endLabelName, alpha: easeInOut(clamp(t * 1.2, 0, 1)) * 0.92 };
+            recapAlpha = 0;
           }
 
           // ── Phase 4 (T_HOLD – end): Final zoom-out overview ───────────────
@@ -1117,7 +1467,10 @@ export default function RouteMapIntro({
             targetLat   = lerp(routeEndLat, overviewCenter.lat, t);
             targetLng   = lerp(routeEndLng, overviewCenter.lng, t);
             targetZoom  = lerp(DETAIL_ZOOM, overviewZoom, t);
-            targetPitch = lerp(4, 0, t);
+            targetPitch = lerp(terrain3dEnabled ? 16 : 7, 0, t);
+            targetBearing = lerp(cam.bearing, 0, t);
+            cityOverlay = { name: "", alpha: 0 };
+            recapAlpha = easeInOut(clamp((t - 0.05) / 0.9, 0, 1));
           }
 
           // ── Exponential smoothing — the anti-jitter core ─────────────────
@@ -1128,13 +1481,25 @@ export default function RouteMapIntro({
           cam.lng   = expSmooth(cam.lng,   targetLng,   K_POS,   dt);
           cam.zoom  = expSmooth(cam.zoom,  targetZoom,  K_ZOOM,  dt);
           cam.pitch = expSmooth(cam.pitch, targetPitch, K_PITCH, dt);
+          cam.bearing = expSmoothAngle(cam.bearing, targetBearing, K_BEARING, dt);
 
-          map.jumpTo({
-            center: [cam.lng, cam.lat],
-            zoom: cam.zoom,
-            pitch: cam.pitch,
-            bearing: 0,
-          });
+          if (elapsed < 0.5) {
+            map.jumpTo({
+              center: [cam.lng, cam.lat],
+              zoom: cam.zoom,
+              pitch: cam.pitch,
+              bearing: cam.bearing,
+            });
+          } else {
+            map.easeTo({
+              center: [cam.lng, cam.lat],
+              zoom: cam.zoom,
+              pitch: cam.pitch,
+              bearing: cam.bearing,
+              duration: 140,
+              essential: true,
+            });
+          }
 
           map.triggerRepaint();
           raf = requestAnimationFrame(renderFrame);

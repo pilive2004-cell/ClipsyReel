@@ -42,6 +42,16 @@ export async function detectHardwareAcceleration(): Promise<HardwareDetectionRes
     notes: 'Fallback: CPU encoding (libx264)',
   };
 
+  // ffmpeg.wasm is a browser-side WebAssembly build, not a native desktop FFmpeg
+  // binary. Vendor-specific encoders such as videotoolbox/nvenc/qsv/amf are not
+  // available in the bundled core and trigger opaque browser FS errors when used.
+  // Keep the client render path fully compatible by forcing the portable libx264
+  // encoder, while preserving the native codec detection logic for future server-side
+  // deployments that use a full FFmpeg binary.
+  if (typeof window !== 'undefined') {
+    return result;
+  }
+
   try {
     // Attempt to detect GPU via WebGL
     const gpuInfo = detectGPU();
@@ -164,9 +174,10 @@ export function buildEncoderArgs(
   preset: 'ultrafast' | 'fast' | 'medium' | 'slow' = 'fast',
   crf: number = 23
 ): string[] {
-  const args: string[] = ['-c:v', codec];
+  const effectiveCodec: HardwareCodec = typeof window !== 'undefined' ? 'libx264' : codec;
+  const args: string[] = ['-c:v', effectiveCodec];
 
-  switch (codec) {
+  switch (effectiveCodec) {
     case 'hevc_nvenc':
     case 'h264_nvenc':
       // NVIDIA NVENC

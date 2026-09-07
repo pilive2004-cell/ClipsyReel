@@ -98,9 +98,9 @@ export const STYLES: StyleDefinition[] = [
   {
     id: "sport",
     label: "Sport",
-    description: "Punchy rhythm built around action peaks.",
+    description: "High-speed, action-first cuts with explosive momentum.",
     emoji: "🏁",
-    gradient: "from-lime-400 to-cyan-500",
+    gradient: "from-lime-400 via-cyan-400 to-blue-500",
     proOnly: true,
   },
   {
@@ -138,9 +138,12 @@ const HOOKS_BY_STYLE: Record<ReelStyle, string[]> = {
     "The moment fear turned into pure adrenaline.",
   ],
   sport: [
-    "Every second of training led to this moment.",
-    "This is what it feels like to push your limit.",
-    "Watch what happens at full speed.",
+    "FULL THROTTLE",
+    "ATTACK MODE",
+    "NO LIMITS",
+    "PUSH HARDER",
+    "MAXIMUM GRIP",
+    "PURE ADRENALINE",
   ],
   cinematic: [
     "Some moments deserve to be remembered like this.",
@@ -194,7 +197,7 @@ const MUSIC_BY_STYLE: Record<ReelStyle, MusicSuggestion> = {
   viral: { genre: "Hyperpop / Trap", mood: "Energetic, punchy", bpm: 140, reference: "Similar to: viral TikTok trap edits" },
   travel: { genre: "Chill / Indie Pop", mood: "Dreamy, warm", bpm: 96, reference: "Similar to: lo-fi road trip beats" },
   adventure: { genre: "Cinematic Percussion", mood: "Epic, driving", bpm: 128, reference: "Similar to: expedition trailer scores" },
-  sport: { genre: "Drum & Bass / EDM", mood: "Intense, fast", bpm: 150, reference: "Similar to: training montage anthems" },
+  sport: { genre: "Drum & Bass / EDM", mood: "Fast, aggressive, performance-driven", bpm: 150, reference: "Similar to: MotoGP / rally montage anthems" },
   cinematic: { genre: "Ambient Orchestral", mood: "Emotional, slow-building", bpm: 72, reference: "Similar to: A24 film scores" },
   luxury: { genre: "Deep House / Minimal", mood: "Sleek, confident", bpm: 118, reference: "Similar to: fashion runway sets" },
 };

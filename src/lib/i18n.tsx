@@ -321,8 +321,8 @@ const COPY = {
     style: {
       pickTitle: "2. Choisis un style de Reel",
       pickDescription: "Cela influence les coupes, les transitions, le rythme du zoom, le ton du hook et l’ambiance musicale.",
-      equipmentTitle: "3. Équipements",
-      equipmentDescription: "L’analyse est terminée. Continue directement avec la configuration des équipements.",
+      equipmentTitle: "5. Équipements",
+      equipmentDescription: "Tu peux encore ajuster tes équipements avant d’analyser les vidéos.",
       selectedStyle: "Style sélectionné :",
     },
     analysis: {
@@ -528,12 +528,12 @@ function buildCopy(locale: Locale) {
     analysisSteps: ANALYSIS_STEPS[locale],
     gear: {
       title: {
-        fr: "Équipements",
-        de: "Ausrüstung",
-        en: "Gear",
-        es: "Equipo",
-        it: "Equipaggiamento",
-        zh: "装备",
+        fr: "5. Équipements",
+        de: "5. Ausrüstung",
+        en: "5. Gear",
+        es: "5. Equipo",
+        it: "5. Equipaggiamento",
+        zh: "5. 装备",
       }[locale],
       photoTitle: {
         fr: "Ajouter une photo moto",
@@ -643,20 +643,30 @@ interface LocaleContextValue {
 const LocaleContext = createContext<LocaleContextValue | null>(null);
 
 export function LocaleProvider({ children }: { children: React.ReactNode }) {
-  const [locale, setLocale] = useState<Locale>(() => {
-    if (typeof window === "undefined") return "fr";
-    const stored = window.localStorage.getItem("clipsyreel-locale");
-    if (stored && ["fr", "de", "en", "es", "it", "zh"].includes(stored)) {
-      return stored as Locale;
-    }
-    const browser = window.navigator.language.slice(0, 2).toLowerCase();
-    if (browser === "de" || browser === "en" || browser === "es" || browser === "it" || browser === "zh") {
-      return browser as Locale;
-    }
-    return "fr";
-  });
+  const [locale, setLocale] = useState<Locale>("fr");
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const stored = window.localStorage.getItem("clipsyreel-locale");
+    let resolved: Locale = "fr";
+
+    if (stored && ["fr", "de", "en", "es", "it", "zh"].includes(stored)) {
+      resolved = stored as Locale;
+    } else {
+      const browser = window.navigator.language.slice(0, 2).toLowerCase();
+      if (browser === "de" || browser === "en" || browser === "es" || browser === "it" || browser === "zh") {
+        resolved = browser as Locale;
+      }
+    }
+
+    setLocale(resolved);
+    window.localStorage.setItem("clipsyreel-locale", resolved);
+    document.documentElement.lang = localeToHtmlLang[resolved];
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
     window.localStorage.setItem("clipsyreel-locale", locale);
     document.documentElement.lang = localeToHtmlLang[locale];
   }, [locale]);

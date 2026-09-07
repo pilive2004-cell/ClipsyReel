@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { UploadCloud, FileVideo, CheckCircle2, X, Plus, Volume2, VolumeX } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getVideoDuration } from "@/lib/video-engine";
+import { detectVideoHasAudio, getVideoDuration } from "@/lib/video-engine";
 import { readVideoMetadata } from "@/lib/video-metadata";
 import { UploadedVideo } from "@/types";
 import { useLocale } from "@/lib/i18n";
@@ -78,6 +78,7 @@ export default function VideoUploader({
       const previewUrl = URL.createObjectURL(file);
       const durationSeconds = await getVideoDuration(file);
       const metadata = await readVideoMetadata(file);
+      const hasAudio = await detectVideoHasAudio(file);
       if (cancelled) return;
       setIsUploading(false);
       setPendingFile(null);
@@ -90,7 +91,7 @@ export default function VideoUploader({
           file,
           durationSeconds,
           metadata,
-          keepAudio: true,
+          keepAudio: hasAudio,
         },
       ]);
     })();
