@@ -1,0 +1,12 @@
+{
+  "id": "adventure",
+  "label": "Adventure",
+  "pacing": { "averageClipSeconds": 3.6, "minClipSeconds": 1.6, "maxClipSeconds": 5.8, "curve": "rising", "calmIntervalSeconds": [10, 13] },
+  "transitions": { "preferred": ["hard_cut", "whip_pan", "crossfade"], "avoidRepeats": true, "mode": "mixed", "beatAligned": true },
+  "cameraSelection": { "preferredAngles": ["pov", "wide", "side"], "preferredSources": ["gopro", "helmet_cam", "drone"], "alternateAngles": true, "prioritizeLandscape": true, "prioritizeAction": true },
+  "clipDuration": { "hookSeconds": 2, "standardSeconds": 3.4, "buildUpSeconds": 3.6, "climaxSeconds": 2.8, "breathingSeconds": 3.8, "endingSeconds": 3.2, "slowMotionRate": 0.72, "accelerationRate": 1.18 },
+  "overlays": { "map": true, "speed": true, "altitude": true, "location": true, "text": true },
+  "colorGrading": { "profile": "sunlit-contrast", "saturation": 1.08, "contrast": 1.12, "temperature": 0.1, "shadows": -0.05, "highlights": 0.08 },
+  "musicSync": { "mode": "beats", "preferredBpmRange": [118, 145], "cutNudgeSeconds": 0.1, "emphasizeDrops": true },
+  "storytellingStyle": { "arc": "adventure", "openingStrategy": "action_first", "climaxStrategy": "late_peak", "endingStrategy": "hero_landscape", "breathingMomentRequired": true, "prioritizeEmotion": false, "prioritizeLandscape": true }
+}

@@ -1,0 +1,11 @@
+# Required for SharedArrayBuffer (multi-threaded ffmpeg.wasm) to work in the
+# browser: the page must be "cross-origin isolated". Netlify serves this repo
+# as a static export, so response headers are configured here rather than in
+# next.config.ts (which `output: "export"` doesn't apply at the hosting
+# layer). See src/lib/video-engine.ts's loadFFmpeg() for the matching
+# crossOriginIsolated feature-detection + graceful single-thread fallback
+# (older browsers / any host that can't set these headers still work, just
+# without the multi-thread speedup).
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp

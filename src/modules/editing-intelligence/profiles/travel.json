@@ -1,0 +1,12 @@
+{
+  "id": "travel",
+  "label": "Travel",
+  "pacing": { "averageClipSeconds": 3.8, "minClipSeconds": 1.8, "maxClipSeconds": 6, "curve": "steady", "calmIntervalSeconds": [11, 14] },
+  "transitions": { "preferred": ["crossfade", "hard_cut", "dissolve"], "avoidRepeats": true, "mode": "mixed", "beatAligned": false },
+  "cameraSelection": { "preferredAngles": ["wide", "close_up", "drone"], "preferredSources": ["mirrorless", "phone", "drone"], "alternateAngles": true, "prioritizeLandscape": true, "prioritizeAction": false },
+  "clipDuration": { "hookSeconds": 2.2, "standardSeconds": 3.6, "buildUpSeconds": 3.8, "climaxSeconds": 3, "breathingSeconds": 4.2, "endingSeconds": 3.8, "slowMotionRate": 0.8, "accelerationRate": 1.1 },
+  "overlays": { "map": true, "speed": false, "altitude": true, "location": true, "text": true },
+  "colorGrading": { "profile": "warm-travel-glow", "saturation": 1.08, "contrast": 1.02, "temperature": 0.1, "shadows": -0.02, "highlights": 0.06 },
+  "musicSync": { "mode": "interval", "preferredBpmRange": [90, 118], "cutNudgeSeconds": 0.12, "emphasizeDrops": false },
+  "storytellingStyle": { "arc": "documentary", "openingStrategy": "calm_reveal", "climaxStrategy": "late_peak", "endingStrategy": "emotional_resolve", "breathingMomentRequired": true, "prioritizeEmotion": true, "prioritizeLandscape": true }
+}

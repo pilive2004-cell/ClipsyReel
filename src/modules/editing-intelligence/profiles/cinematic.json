@@ -1,0 +1,12 @@
+{
+  "id": "cinematic",
+  "label": "Cinematic",
+  "pacing": { "averageClipSeconds": 4.8, "minClipSeconds": 2, "maxClipSeconds": 7.2, "curve": "slow_burn", "calmIntervalSeconds": [11, 15] },
+  "transitions": { "preferred": ["crossfade", "dissolve", "hard_cut"], "avoidRepeats": true, "mode": "cinematic", "beatAligned": false },
+  "cameraSelection": { "preferredAngles": ["wide", "drone", "close_up"], "preferredSources": ["mirrorless", "drone", "phone"], "alternateAngles": true, "prioritizeLandscape": true, "prioritizeAction": false },
+  "clipDuration": { "hookSeconds": 2.4, "standardSeconds": 4.6, "buildUpSeconds": 4.8, "climaxSeconds": 3.8, "breathingSeconds": 5.2, "endingSeconds": 4.4, "slowMotionRate": 0.78, "accelerationRate": 1.08 },
+  "overlays": { "map": false, "speed": false, "altitude": false, "location": true, "text": true },
+  "colorGrading": { "profile": "moody-film", "saturation": 0.94, "contrast": 1.08, "temperature": -0.04, "shadows": -0.1, "highlights": 0.02 },
+  "musicSync": { "mode": "loose", "preferredBpmRange": [78, 108], "cutNudgeSeconds": 0.08, "emphasizeDrops": false },
+  "storytellingStyle": { "arc": "cinematic", "openingStrategy": "calm_reveal", "climaxStrategy": "late_peak", "endingStrategy": "emotional_resolve", "breathingMomentRequired": true, "prioritizeEmotion": true, "prioritizeLandscape": true }
+}

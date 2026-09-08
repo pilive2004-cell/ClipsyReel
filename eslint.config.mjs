@@ -1,0 +1,23 @@
+import { defineConfig, globalIgnores } from "eslint/config";
+import nextVitals from "eslint-config-next/core-web-vitals";
+import nextTs from "eslint-config-next/typescript";
+
+const eslintConfig = defineConfig([
+  ...nextVitals,
+  ...nextTs,
+  // Override default ignores of eslint-config-next.
+  globalIgnores([
+    // Default ignores of eslint-config-next:
+    ".next/**",
+    "out/**",
+    "build/**",
+    "next-env.d.ts",
+    // Self-hosted, third-party ffmpeg.wasm core build — not our source.
+    "public/ffmpeg/**",
+    "public/ffmpeg-mt/**",
+    // Netlify CLI's local build/deploy cache.
+    ".netlify/**",
+  ]),
+]);
+
+export default eslintConfig;

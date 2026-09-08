@@ -1,0 +1,12 @@
+{
+  "id": "sport",
+  "label": "Sport",
+  "pacing": { "averageClipSeconds": 2.6, "minClipSeconds": 1.1, "maxClipSeconds": 4, "curve": "rising", "calmIntervalSeconds": [10, 12] },
+  "transitions": { "preferred": ["hard_cut", "flash_cut", "whip_pan"], "avoidRepeats": true, "mode": "kinetic", "beatAligned": true },
+  "cameraSelection": { "preferredAngles": ["pov", "side", "drone"], "preferredSources": ["gopro", "drone", "helmet_cam"], "alternateAngles": true, "prioritizeLandscape": false, "prioritizeAction": true },
+  "clipDuration": { "hookSeconds": 1.6, "standardSeconds": 2.5, "buildUpSeconds": 2.7, "climaxSeconds": 2.1, "breathingSeconds": 2.9, "endingSeconds": 2.6, "slowMotionRate": 0.68, "accelerationRate": 1.22 },
+  "overlays": { "map": false, "speed": true, "altitude": true, "location": false, "text": true },
+  "colorGrading": { "profile": "high-energy-punch", "saturation": 1.14, "contrast": 1.18, "temperature": 0.02, "shadows": -0.05, "highlights": 0.12 },
+  "musicSync": { "mode": "beats", "preferredBpmRange": [128, 155], "cutNudgeSeconds": 0.08, "emphasizeDrops": true },
+  "storytellingStyle": { "arc": "brand", "openingStrategy": "action_first", "climaxStrategy": "rolling", "endingStrategy": "loopable", "breathingMomentRequired": false, "prioritizeEmotion": false, "prioritizeLandscape": false }
+}

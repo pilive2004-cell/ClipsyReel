@@ -1,0 +1,12 @@
+{
+  "id": "viral",
+  "label": "Viral",
+  "pacing": { "averageClipSeconds": 2.4, "minClipSeconds": 1, "maxClipSeconds": 3.8, "curve": "pulse", "calmIntervalSeconds": [10, 12] },
+  "transitions": { "preferred": ["hard_cut", "zoom_transition", "flash_cut"], "avoidRepeats": true, "mode": "kinetic", "beatAligned": true },
+  "cameraSelection": { "preferredAngles": ["close_up", "pov", "wide"], "preferredSources": ["phone", "gopro", "mirrorless"], "alternateAngles": true, "prioritizeLandscape": false, "prioritizeAction": true },
+  "clipDuration": { "hookSeconds": 1.6, "standardSeconds": 2.3, "buildUpSeconds": 2.4, "climaxSeconds": 1.9, "breathingSeconds": 2.6, "endingSeconds": 2.4, "slowMotionRate": 0.7, "accelerationRate": 1.24 },
+  "overlays": { "map": false, "speed": false, "altitude": false, "location": false, "text": true },
+  "colorGrading": { "profile": "stop-scroll-pop", "saturation": 1.18, "contrast": 1.18, "temperature": 0.06, "shadows": -0.03, "highlights": 0.12 },
+  "musicSync": { "mode": "beats", "preferredBpmRange": [120, 150], "cutNudgeSeconds": 0.08, "emphasizeDrops": true },
+  "storytellingStyle": { "arc": "viral", "openingStrategy": "best_shot", "climaxStrategy": "mid_peak", "endingStrategy": "loopable", "breathingMomentRequired": false, "prioritizeEmotion": true, "prioritizeLandscape": false }
+}
