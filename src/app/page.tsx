@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowLeft, ArrowRight, Check, Lock, RotateCcw, Type } from "lucide-react";
 
@@ -18,7 +18,7 @@ import PricingModal from "@/components/PricingModal";
 import UpgradePrompt from "@/components/UpgradePrompt";
 import ExportPanel from "@/components/ExportPanel";
 import CreationExtrasPanel from "@/components/CreationExtrasPanel";
-import RouteMapIntro, { RouteIntroClip } from "@/components/gpx/RouteMapIntro";
+import RouteMapIntro, { RouteIntroClip, type RouteCinematicProfile } from "@/components/gpx/RouteMapIntro";
 
 import { usePlan } from "@/lib/plan-context";
 import { useLocale } from "@/lib/i18n";
@@ -27,6 +27,7 @@ import { loadAdventureSetupDraft, saveAdventureSetupDraft } from "@/lib/adventur
 import { computeRouteMetrics } from "@/modules/route3d/routeMetrics";
 import RouteStoryPlayer from "@/modules/route3d/RouteStoryPlayer";
 import { generateGearSummaryClip, GearSummaryClip } from "@/lib/gear-summary-clip";
+import { filterCoherentDisplayTexts, isCoherentDisplayText } from "@/lib/display-text";
 import { buildAnalysisResult, generateMockAnalysisMulti } from "@/data/mock";
 import { buildMontage, preloadRenderPipeline, qualityForPlan } from "@/lib/video-engine";
 import { buildGearSummaryEntries, DEFAULT_GEAR_SELECTIONS } from "@/data/gearCatalog";
@@ -36,6 +37,42 @@ const STEP_ORDER: AppStep[] = ["upload", "style", "analyze", "render", "preview"
 const NO_HOOK_ID = "__no_hook__";
 const CUSTOM_HOOK_ID = "__custom_hook__";
 const CUSTOM_CAPTION_ID = "__custom_caption__";
+
+function cinematicProfileForStyle(style: ReelStyle | null): RouteCinematicProfile {
+  if (style === "luxury" || style === "cinematic") return "earth-studio";
+  if (style === "sport" || style === "viral") return "dji-fly";
+  return "relive";
+}
+
+function safeMaxSpeedKmh(points: GpxTrackPoint[] | null | undefined): number | null {
+  if (!points || points.length < 2) return null;
+  let max = 0;
+  for (let i = 1; i < points.length; i++) {
+    const prev = points[i - 1];
+    const curr = points[i];
+    if (!prev.time || !curr.time) continue;
+    const deltaSeconds = (curr.time.getTime() - prev.time.getTime()) / 1000;
+    if (!Number.isFinite(deltaSeconds) || deltaSeconds < 3) continue;
+    const distKm = haversineKm(prev.lat, prev.lng, curr.lat, curr.lng);
+    const speedKmh = (distKm / deltaSeconds) * 3600;
+    if (!Number.isFinite(speedKmh) || speedKmh <= 0 || speedKmh > 180) continue;
+    max = Math.max(max, speedKmh);
+  }
+  return max > 0 ? Math.round(max) : null;
+}
+
+function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLng / 2) *
+      Math.sin(dLng / 2);
+  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
 
 export default function Home() {
   const { isFree, reelsUsedThisWeek, weeklyFreeLimit, consumeReelCredit } = usePlan();
@@ -73,11 +110,13 @@ export default function Home() {
   const [routeIntroClip, setRouteIntroClip] = useState<RouteIntroClip | null>(null);
   const [hasRouteIntro, setHasRouteIntro] = useState(false);
   const [routeIntroStatus, setRouteIntroStatus] = useState<"idle" | "rendering" | "ready" | "error">("idle");
+  const [routeIntroGeneration, setRouteIntroGeneration] = useState(0);
   const [routeIntroPoints, setRouteIntroPoints] = useState<GpxTrackPoint[] | null>(null);
   const [routeIntroStats, setRouteIntroStats] = useState<GpxRouteStats | null>(null);
   const [routeIntroLabels, setRouteIntroLabels] = useState<RouteLabel[] | null>(null);
   const [gearSummaryClip, setGearSummaryClip] = useState<GearSummaryClip | null>(null);
   const [gearSummaryStatus, setGearSummaryStatus] = useState<"idle" | "rendering" | "ready" | "error">("idle");
+  const [renderGateTimedOut, setRenderGateTimedOut] = useState(false);
 
   const [montage, setMontage] = useState<MontageResult | null>(null);
   const [renderProgress, setRenderProgress] = useState<number | null>(null);
@@ -105,10 +144,25 @@ export default function Home() {
   const [mobileSectionOpen, setMobileSectionOpen] = useState<Record<string, boolean>>({
     reelName: true,
     route: false,
-    hook: true,
-    gear: true,
+    hook: false,
+    gear: false,
   });
   const renderPipelineWarmedRef = useRef(false);
+  const routeIntroCinematicProfile = cinematicProfileForStyle(style);
+  const sportTelemetry = useMemo(() => {
+    if (!routeIntroPoints || routeIntroPoints.length < 2) return null;
+    const metrics = computeRouteMetrics(routeIntroPoints, Math.min(routeIntroPoints.length, 240));
+    return {
+      distanceKm: Math.round((metrics.totalDistanceMeters / 1000) * 10) / 10,
+      durationLabel: routeIntroStats?.durationLabel ?? gpxStats?.durationLabel ?? "—",
+      elevationGainM: Math.round(metrics.elevationGainM),
+      highestPointM:
+        metrics.highestAltitudeM !== null
+          ? Math.round(metrics.highestAltitudeM)
+          : routeIntroStats?.highestPointM ?? gpxStats?.highestPointM ?? null,
+      maxSpeedKmh: safeMaxSpeedKmh(routeIntroPoints),
+    };
+  }, [routeIntroPoints, routeIntroStats, gpxStats]);
 
   const showUpgrade = (title: string, message: string) => setUpgradePrompt({ title, message });
 
@@ -159,7 +213,8 @@ export default function Home() {
     if (videos.length === 0) return;
     const clipCount = videos.length;
     const totalSeconds = Math.round(videos.reduce((sum, video) => sum + video.durationSeconds, 0));
-    const routePart = routeLabel ? ` · ${routeLabel}` : "";
+    const trimmedRouteLabel = routeLabel?.trim() ?? "";
+    const routePart = isCoherentDisplayText(trimmedRouteLabel) ? ` · ${trimmedRouteLabel}` : "";
     const caption = `Adventure recap${routePart}\n${clipCount} clip${clipCount > 1 ? "s" : ""} · ${totalSeconds}s of ride moments.\nBuilt with ClipsyReel.`;
     setCustomCaptionText(caption);
     setSelectedCaptionId(CUSTOM_CAPTION_ID);
@@ -178,11 +233,17 @@ export default function Home() {
 
   const startRender = () => {
     if (!analysis || !style) return;
+    if (hasRouteIntro && routeIntroPoints && routeIntroPoints.length > 1) {
+      setRouteIntroClip(null);
+      setRouteIntroStatus("rendering");
+      setRouteIntroGeneration((current) => current + 1);
+    }
     setStep("render");
   };
 
   const equipmentSummary = buildGearSummaryEntries(gearSelections);
-  const selectedOverlayTexts = overlayTexts.filter((text) => text.trim().length > 0);
+  const selectedOverlayTexts = filterCoherentDisplayTexts(overlayTexts);
+  const sportOverlayTexts = style === "sport" ? [] : selectedOverlayTexts;
   const selectedOverlayTextKey = selectedOverlayTexts.join("\n");
   const reelTitleKey = `${reelTitle.trim()}|${reelTitleFont}|${reelTitleSize}|${reelTitleColor}`;
   const adventureOverlay = buildAdventureReelOverlay(adventureSetup);
@@ -235,6 +296,27 @@ export default function Home() {
   }, [gearSummaryClip]);
 
   useEffect(() => {
+    if (step !== "render") {
+      setRenderGateTimedOut(false);
+      return;
+    }
+
+    const introPending = hasRouteIntro && routeIntroStatus === "rendering";
+    const gearPending = equipmentSummary.length > 0 && gearSummaryStatus === "rendering";
+    if (!introPending && !gearPending) {
+      setRenderGateTimedOut(false);
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setRenderGateTimedOut(true);
+      setRenderPhase("Optional assets are taking too long — starting export without them…");
+    }, 15000);
+
+    return () => window.clearTimeout(timeout);
+  }, [step, hasRouteIntro, routeIntroStatus, gearSummaryStatus, equipmentSummary.length]);
+
+  useEffect(() => {
     return () => {
       if (routeIntroClip?.url) URL.revokeObjectURL(routeIntroClip.url);
     };
@@ -260,8 +342,8 @@ export default function Home() {
   // analysis has produced best-moment timestamps to cut from.
   useEffect(() => {
     if (step !== "render" || videos.length === 0 || !analysis || !style) return;
-    const introReady = !hasRouteIntro || routeIntroStatus === "ready" || routeIntroStatus === "error";
-    const gearReady = equipmentSummary.length === 0 || gearSummaryStatus === "ready" || gearSummaryStatus === "error" || gearSummaryStatus === "idle";
+    const introReady = !hasRouteIntro || routeIntroStatus === "ready" || routeIntroStatus === "error" || renderGateTimedOut;
+    const gearReady = equipmentSummary.length === 0 || gearSummaryStatus === "ready" || gearSummaryStatus === "error" || gearSummaryStatus === "idle" || renderGateTimedOut;
 
     if (!introReady || !gearReady) {
       return;
@@ -289,11 +371,12 @@ export default function Home() {
         size: reelTitleSize,
         color: reelTitleColor,
       },
-      overlayTexts: selectedOverlayTexts,
+      overlayTexts: sportOverlayTexts,
       gpxStats,
       gpxPoints,
       routeFocusPoints,
       routeLabel,
+      sportTelemetry,
       preserveRouteIntro: true,
       openerHookText: hookTextForThisRender,
       customTextOverlays: storyTextsForThisRender,
@@ -337,6 +420,8 @@ export default function Home() {
           setRenderProgress(0.05);
           const lightResult = await buildMontage({
             ...baseParams,
+            introClip: undefined,
+            preserveRouteIntro: false,
             quality: "720p",
             maxReelSeconds: 45,
             reelTitle: undefined,
@@ -365,6 +450,8 @@ export default function Home() {
             setRenderProgress(0.1);
             const ultraLightResult = await buildMontage({
               ...baseParams,
+              introClip: undefined,
+              preserveRouteIntro: false,
               quality: "720p",
               maxReelSeconds: 32,
               reelTitle: undefined,
@@ -401,7 +488,7 @@ export default function Home() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, videos, analysis, style, routeIntroClip, hasRouteIntro, routeIntroStatus, gearSummaryClip, isFree, equipmentSummary.length, gearSummaryStatus, selectedOverlayTextKey, reelTitleKey]);
+  }, [step, videos, analysis, style, routeIntroClip, hasRouteIntro, routeIntroStatus, gearSummaryClip, isFree, equipmentSummary.length, gearSummaryStatus, renderGateTimedOut, selectedOverlayTextKey, reelTitleKey]);
 
   // Re-runs the render with whatever hook text is currently selected —
   // used when the user changes their hook pick/custom text on the Preview
@@ -513,7 +600,8 @@ export default function Home() {
     });
   };
 
-  const selectedHookText = analysis?.hooks.find((h) => h.id === selectedHookId)?.text ?? "";
+  const selectedHookTextRaw = analysis?.hooks.find((h) => h.id === selectedHookId)?.text ?? "";
+  const selectedHookText = isCoherentDisplayText(selectedHookTextRaw) ? selectedHookTextRaw : "";
   const previewUrl = montage?.url ?? videos[0]?.previewUrl ?? "";
   const combinedName = videos.length > 1 ? `${videos.length}-clips-montage` : videos[0]?.name ?? "reel";
   const requiresMapIntro = hasRouteIntro;
@@ -583,6 +671,9 @@ export default function Home() {
               setHasRouteIntro(available);
               setRouteIntroClip(null);
               setRouteIntroStatus(available ? "rendering" : "idle");
+              if (available) {
+                setRouteIntroGeneration((current) => current + 1);
+              }
             }}
             onLockedClick={() =>
               showUpgrade(copy.route.lockedTitle, copy.route.lockedMessage)
@@ -792,13 +883,15 @@ export default function Home() {
                 reelTitleFont={reelTitleFont}
                 reelTitleSize={reelTitleSize}
                 reelTitleColor={reelTitleColor}
-                overlayTexts={selectedOverlayTexts}
+                overlayTexts={sportOverlayTexts}
                 overlayFonts={overlayFonts}
                 overlaySizes={overlaySizes}
                 overlayColors={overlayColors}
                 introDurationSeconds={routeIntroClip?.durationSeconds ?? 0}
                 outroDurationSeconds={gearSummaryClip?.durationSeconds ?? 0}
                 montageInfo={montage ? { clipCount: montage.clipCount, durationSeconds: montage.durationSeconds } : undefined}
+                routeLabel={routeLabel}
+                sportTelemetry={sportTelemetry}
               />
 
               <Section title={copy.common.exportLabel}>
@@ -819,9 +912,12 @@ export default function Home() {
       <PricingModal open={pricingOpen} onClose={() => setPricingOpen(false)} />
       {routeIntroPoints && routeIntroPoints.length > 1 && (
         <RouteMapIntro
+          key={`${routeIntroGeneration}-${routeIntroCinematicProfile}`}
           points={routeIntroPoints}
           routeStats={routeIntroStats}
           initialLabels={routeIntroLabels ?? undefined}
+          cinematicProfile={routeIntroCinematicProfile}
+          generationToken={routeIntroGeneration}
           onClipReady={setRouteIntroClip}
           onStatusChange={setRouteIntroStatus}
           hideUi

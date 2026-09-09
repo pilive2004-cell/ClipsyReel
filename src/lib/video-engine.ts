@@ -2,13 +2,16 @@
 
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile } from "@ffmpeg/util";
-import { BestMoment, ReelStyle, ReelTitleColor, ReelTitleFont, ReelTitleSize } from "@/types";
+import { BestMoment, GpxRouteStats, ReelStyle, ReelTitleColor, ReelTitleFont, ReelTitleSize } from "@/types";
 import { STYLE_RECIPES, StyleRecipe } from "@/data/styleRecipes";
 import { pickTransitionName, randomTransitionDuration, STYLE_TRANSITIONS } from "@/data/transitions";
 import { detectHardwareAcceleration, buildEncoderArgs, HardwareCodec } from "@/lib/hw-acceleration";
 import { buildRenderCacheKey, fingerprintFile, getCachedBinaryAsset, putCachedBinaryAsset } from "@/lib/render-asset-cache";
+import { filterCoherentDisplayTexts, isCoherentDisplayText } from "@/lib/display-text";
 
 const ENABLE_MT_FFMPEG = process.env.NEXT_PUBLIC_ENABLE_MT_FFMPEG === "true";
+const INTRO_TRANSCODE_TIMEOUT_MS_FAST = 75_000;
+const INTRO_TRANSCODE_TIMEOUT_MS_QUALITY = 110_000;
 
 /** Clone file data to prevent ArrayBuffer detachment issues with FFmpeg worker. */
 async function getFileDataForFFmpeg(file: File | Blob): Promise<Uint8Array> {
@@ -622,6 +625,72 @@ function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: n
   ctx.closePath();
 }
 
+function hashString(seed: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < seed.length; i++) {
+    hash ^= seed.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function mulberry32(seed: number) {
+  let value = seed >>> 0;
+  return () => {
+    value += 0x6D2B79F5;
+    let t = Math.imul(value ^ (value >>> 15), 1 | value);
+    t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function drawSportScratchLayer(ctx: CanvasRenderingContext2D, frameWidth: number, frameHeight: number, seed: string) {
+  const rand = mulberry32(hashString(seed));
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+
+  for (let i = 0; i < 18; i++) {
+    const x = rand() * frameWidth;
+    const y = rand() * frameHeight;
+    const length = frameWidth * (0.07 + rand() * 0.26);
+    const angle = -0.8 + rand() * 1.6;
+    const x2 = x + Math.cos(angle) * length;
+    const y2 = y + Math.sin(angle) * length;
+    ctx.strokeStyle = rand() > 0.5 ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.08)";
+    ctx.lineWidth = 0.7 + rand() * 1.3;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+  }
+
+  ctx.globalAlpha = 0.12;
+  for (let i = 0; i < 90; i++) {
+    const x = rand() * frameWidth;
+    const y = rand() * frameHeight;
+    const size = 0.5 + rand() * 1.4;
+    ctx.fillStyle = rand() > 0.5 ? "rgba(255,255,255,0.7)" : "rgba(0,0,0,0.35)";
+    ctx.fillRect(x, y, size, size);
+  }
+
+  ctx.globalCompositeOperation = "overlay";
+  ctx.globalAlpha = 0.08;
+  for (let i = 0; i < 8; i++) {
+    const x = rand() * frameWidth;
+    const y = rand() * frameHeight;
+    const w = frameWidth * (0.06 + rand() * 0.16);
+    const h = frameHeight * (0.008 + rand() * 0.018);
+    ctx.fillStyle = i % 2 === 0 ? "rgba(255,255,255,0.85)" : "rgba(0,0,0,0.55)";
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(-0.6 + rand() * 1.2);
+    ctx.fillRect(-w / 2, -h / 2, w, h);
+    ctx.restore();
+  }
+
+  ctx.restore();
+}
+
 /**
  * Generates a small "Powered by ClipsyReel." watermark PNG (client-side
  * canvas — no server round-trip), sized relative to output width.
@@ -704,7 +773,7 @@ function wrapCanvasText(ctx: CanvasRenderingContext2D, text: string, maxWidth: n
   return lines.slice(0, 3);
 }
 
-async function generateOverlayTextPng(frameWidth: number, frameHeight: number, text: string): Promise<Uint8Array> {
+async function generateOverlayTextPng(frameWidth: number, frameHeight: number, text: string, style: ReelStyle): Promise<Uint8Array> {
   const canvas = document.createElement("canvas");
   canvas.width = frameWidth;
   canvas.height = frameHeight;
@@ -712,20 +781,44 @@ async function generateOverlayTextPng(frameWidth: number, frameHeight: number, t
   ctx.clearRect(0, 0, frameWidth, frameHeight);
 
   const centerX = frameWidth / 2;
-  const maxTextWidth = Math.round(frameWidth * 0.78);
-  const y = Math.round(frameHeight * 0.34);
+  const maxTextWidth = Math.round(frameWidth * (style === "sport" ? 0.5 : 0.78));
+  const y = Math.round(frameHeight * (style === "sport" ? 0.5 : 0.34));
 
-  ctx.font = `700 ${Math.round(frameWidth * 0.058)}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+  ctx.font = `700 ${Math.round(frameWidth * (style === "sport" ? 0.046 : 0.058))}px ${style === "sport" ? `"SFMono-Regular", Menlo, Monaco, Consolas, monospace` : `system-ui, -apple-system, "Segoe UI", sans-serif`}`;
   const lines = wrapCanvasText(ctx, text, maxTextWidth);
   const lineHeight = Math.round(frameWidth * 0.072);
 
-  ctx.fillStyle = "rgba(255,255,255,0.98)";
-  ctx.textAlign = "center";
+  if (style === "sport") {
+    const panelX = Math.round(frameWidth * 0.08);
+    const panelW = Math.round(frameWidth * 0.52);
+    const panelH = Math.round(lineHeight * lines.length + frameHeight * 0.07);
+    const panelY = Math.round(y - frameHeight * 0.06);
+    ctx.fillStyle = "rgba(2,6,23,0.56)";
+    roundRectPath(ctx, panelX, panelY, panelW, panelH, 24);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(34,211,238,0.34)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = "rgba(165,243,252,0.72)";
+    ctx.textAlign = "left";
+    ctx.font = `600 ${Math.round(frameWidth * 0.018)}px "SFMono-Regular", Menlo, Monaco, Consolas, monospace`;
+    ctx.fillText("EDITORIAL OVERLAY", panelX + 20, panelY + 18);
+    ctx.font = `700 ${Math.round(frameWidth * 0.046)}px "SFMono-Regular", Menlo, Monaco, Consolas, monospace`;
+    ctx.fillStyle = "rgba(255,255,255,0.98)";
+  } else {
+    ctx.fillStyle = "rgba(255,255,255,0.98)";
+    ctx.textAlign = "center";
+  }
+
   ctx.textBaseline = "middle";
   ctx.shadowColor = "rgba(0,0,0,0.2)";
   ctx.shadowBlur = 12;
   lines.forEach((line, index) => {
-    ctx.fillText(line, centerX, y + index * lineHeight);
+    if (style === "sport") {
+      ctx.fillText(line, Math.round(frameWidth * 0.11), y + index * lineHeight);
+    } else {
+      ctx.fillText(line, centerX, y + index * lineHeight);
+    }
   });
   ctx.shadowBlur = 0;
 
@@ -733,6 +826,191 @@ async function generateOverlayTextPng(frameWidth: number, frameHeight: number, t
     canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Overlay text canvas export failed"))), "image/png");
   });
 
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+async function generateSportTelemetryOverlayPng(
+  frameWidth: number,
+  frameHeight: number,
+  routeLabel: string | null | undefined,
+  gpxStats: GpxRouteStats | null | undefined,
+  maxSpeedKmh: number | null | undefined,
+  focus: 0 | 1 | 2,
+): Promise<Uint8Array> {
+  const canvas = document.createElement("canvas");
+  canvas.width = frameWidth;
+  canvas.height = frameHeight;
+  const ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
+  ctx.clearRect(0, 0, frameWidth, frameHeight);
+
+  const grid = Math.max(18, Math.round(frameWidth * 0.032));
+  ctx.strokeStyle = "rgba(34,211,238,0.07)";
+  ctx.lineWidth = 1;
+  for (let x = 0; x <= frameWidth; x += grid) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, frameHeight);
+    ctx.stroke();
+  }
+  for (let y = 0; y <= frameHeight; y += grid) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(frameWidth, y);
+    ctx.stroke();
+  }
+
+  drawSportScratchLayer(ctx, frameWidth, frameHeight, `${routeLabel ?? "sport"}|${focus}|${gpxStats?.durationLabel ?? ""}|${gpxStats?.distanceKm ?? ""}`);
+
+  const titleX = Math.round(frameWidth * 0.05);
+  const titleY = Math.round(frameHeight * 0.04);
+  const titleW = Math.round(frameWidth * 0.42);
+  const titleH = Math.round(frameHeight * 0.11);
+  roundRectPath(ctx, titleX, titleY, titleW, titleH, 22);
+  ctx.fillStyle = "rgba(2,6,23,0.48)";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(34,211,238,0.18)";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillStyle = "rgba(165,243,252,0.7)";
+  ctx.font = `600 ${Math.round(frameWidth * 0.011)}px "SFMono-Regular", Menlo, Monaco, Consolas, monospace`;
+  ctx.fillText("SPORT LAB", titleX + 16, titleY + 14);
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  ctx.font = `700 ${Math.round(frameWidth * 0.021)}px "SFMono-Regular", Menlo, Monaco, Consolas, monospace`;
+  const routeLabelText = routeLabel?.trim() ?? "";
+  const coherentRouteLabel = isCoherentDisplayText(routeLabelText) ? routeLabelText.toUpperCase() : "";
+  ctx.fillText("SPORT LAB", titleX + 16, titleY + 34);
+  if (coherentRouteLabel) {
+    ctx.fillStyle = "rgba(165,243,252,0.58)";
+    ctx.font = `600 ${Math.round(frameWidth * 0.010)}px "SFMono-Regular", Menlo, Monaco, Consolas, monospace`;
+    ctx.fillText(coherentRouteLabel, titleX + 16, titleY + 63);
+  }
+
+  const statX = Math.round(frameWidth * 0.52);
+  const statY = titleY;
+  const statW = Math.round(frameWidth * 0.43);
+  const statH = Math.round(frameHeight * 0.11);
+  roundRectPath(ctx, statX, statY, statW, statH, 22);
+  ctx.fillStyle = "rgba(2,6,23,0.48)";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.1)";
+  ctx.stroke();
+  const mainLabel = focus === 0 ? "DISTANCE" : focus === 1 ? "ELEVATION+" : "SPEED";
+  const mainValue = focus === 0
+    ? (gpxStats ? `${gpxStats.distanceKm.toFixed(1)} km` : "—")
+    : focus === 1
+      ? (gpxStats ? `${Math.round(gpxStats.elevationGainM)} m` : "—")
+      : (maxSpeedKmh ? `${Math.round(maxSpeedKmh)} km/h` : "—");
+  ctx.fillStyle = "rgba(165,243,252,0.68)";
+  ctx.font = `600 ${Math.round(frameWidth * 0.010)}px "SFMono-Regular", Menlo, Monaco, Consolas, monospace`;
+  ctx.fillText(mainLabel, statX + 14, statY + 14);
+  ctx.fillStyle = "rgba(255,255,255,0.96)";
+  ctx.font = `700 ${Math.round(frameWidth * 0.03)}px "SFMono-Regular", Menlo, Monaco, Consolas, monospace`;
+  ctx.fillText(mainValue, statX + 14, statY + 34);
+  ctx.fillStyle = "rgba(255,255,255,0.54)";
+  ctx.font = `500 ${Math.round(frameWidth * 0.009)}px "SFMono-Regular", Menlo, Monaco, Consolas, monospace`;
+  ctx.fillText(focus === 0 ? "route length" : focus === 1 ? "vertical effort" : "real pace cap", statX + 14, statY + 68);
+
+  const iconX = statX + statW - 34;
+  const iconY = statY + 30;
+  ctx.strokeStyle = focus === 1 ? "rgba(244,114,182,0.95)" : focus === 2 ? "rgba(250,204,21,0.95)" : "rgba(34,211,238,0.95)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  if (focus === 1) {
+    ctx.moveTo(iconX - 12, iconY + 18);
+    ctx.lineTo(iconX, iconY - 8);
+    ctx.lineTo(iconX + 12, iconY + 6);
+    ctx.lineTo(iconX + 24, iconY - 16);
+    ctx.lineTo(iconX + 36, iconY + 18);
+  } else if (focus === 2) {
+    ctx.moveTo(iconX - 14, iconY + 16);
+    ctx.lineTo(iconX + 6, iconY - 18);
+    ctx.lineTo(iconX + 20, iconY + 2);
+    ctx.lineTo(iconX + 34, iconY - 10);
+    ctx.lineTo(iconX + 44, iconY + 16);
+  } else {
+    ctx.moveTo(iconX - 16, iconY + 16);
+    ctx.lineTo(iconX - 2, iconY + 2);
+    ctx.lineTo(iconX + 10, iconY + 10);
+    ctx.lineTo(iconX + 26, iconY - 6);
+    ctx.lineTo(iconX + 42, iconY + 16);
+  }
+  ctx.stroke();
+
+  const schematicX = Math.round(frameWidth * 0.05);
+  const schematicY = Math.round(frameHeight * 0.22);
+  const schematicW = Math.round(frameWidth * 0.9);
+  const schematicH = Math.round(frameHeight * 0.18);
+  roundRectPath(ctx, schematicX, schematicY, schematicW, schematicH, 24);
+  ctx.fillStyle = "rgba(255,255,255,0.03)";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
+  ctx.stroke();
+  ctx.beginPath();
+  const points = Array.from({ length: 10 }, (_, index) => {
+    const t = index / 9;
+    const yFactor = focus === 1
+      ? 0.56 + Math.sin(t * Math.PI * 4) * 0.18 + (index % 2 === 0 ? 0.08 : -0.04)
+      : focus === 2
+        ? 0.42 + Math.sin(t * Math.PI * 7) * 0.06 + (index % 3 === 0 ? 0.08 : -0.01)
+        : 0.48 + t * 0.1 + Math.sin(t * Math.PI * 2.5) * 0.05;
+    return {
+      x: schematicX + 18 + t * (schematicW - 36),
+      y: schematicY + schematicH - 20 - yFactor * (schematicH - 28),
+    };
+  });
+  points.forEach((point, index) => {
+    if (index === 0) ctx.moveTo(point.x, point.y);
+    else ctx.lineTo(point.x, point.y);
+  });
+  ctx.strokeStyle = focus === 1 ? "rgba(244,114,182,0.92)" : focus === 2 ? "rgba(250,204,21,0.95)" : "rgba(34,211,238,0.95)";
+  ctx.lineWidth = 2.5;
+  ctx.stroke();
+  points.forEach((point, index) => {
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, index === 4 ? 6 : 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = index === 4 ? "rgba(255,255,255,0.92)" : "rgba(34,211,238,0.9)";
+    ctx.fill();
+  });
+
+  const chipsY = Math.round(frameHeight * 0.45);
+  const chips = [
+    ["DUR", gpxStats?.durationLabel ?? "—"],
+    ["ALT", gpxStats?.highestPointM ? `${Math.round(gpxStats.highestPointM)} m` : "—"],
+    ["SYNC", `${Math.round(Math.min(99, focus === 2 ? 93 : focus === 1 ? 70 : 38))}%`],
+  ];
+  chips.forEach((chip, index) => {
+    const chipX = Math.round(frameWidth * 0.05 + index * frameWidth * 0.19);
+    roundRectPath(ctx, chipX, chipsY, Math.round(frameWidth * 0.16), Math.round(frameHeight * 0.075), 18);
+    ctx.fillStyle = "rgba(2,6,23,0.45)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.stroke();
+    ctx.fillStyle = "rgba(165,243,252,0.6)";
+    ctx.font = `600 ${Math.round(frameWidth * 0.0095)}px "SFMono-Regular", Menlo, Monaco, Consolas, monospace`;
+    ctx.fillText(chip[0], chipX + 12, chipsY + 10);
+    ctx.fillStyle = "rgba(255,255,255,0.96)";
+    ctx.font = `700 ${Math.round(frameWidth * 0.016)}px "SFMono-Regular", Menlo, Monaco, Consolas, monospace`;
+    ctx.fillText(chip[1], chipX + 12, chipsY + 26);
+  });
+
+  const railX = Math.round(frameWidth * 0.05);
+  const railY = Math.round(frameHeight * 0.885);
+  const railW = Math.round(frameWidth * 0.9);
+  roundRectPath(ctx, railX, railY, railW, Math.round(frameHeight * 0.024), 999);
+  ctx.fillStyle = "rgba(255,255,255,0.06)";
+  ctx.fill();
+  const grad = ctx.createLinearGradient(railX, railY, railX + railW, railY);
+  grad.addColorStop(0, "rgba(34,211,238,0.65)");
+  grad.addColorStop(1, "rgba(168,85,247,0.58)");
+  roundRectPath(ctx, railX, railY, Math.round(railW * (focus === 0 ? 0.38 : focus === 1 ? 0.7 : 0.93)), Math.round(frameHeight * 0.024), 999);
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Sport telemetry overlay export failed"))), "image/png");
+  });
   return new Uint8Array(await blob.arrayBuffer());
 }
 
@@ -872,6 +1150,11 @@ export interface BuildMontageParams {
   videoAudioEnabled?: boolean[];
   /** Optional intro clip prepended before the best-moment montage (e.g. a 3D route flyover). */
   introClip?: { file: File; durationSeconds: number };
+  /**
+   * If true, intro transcode failures stop the whole render.
+   * If false (default), caller may retry without intro for reliability.
+   */
+  preserveRouteIntro?: boolean;
   /** Optional end card appended after the montage (e.g. gear summary). */
   outroClip?: { file: File; durationSeconds: number };
   style: ReelStyle;
@@ -895,6 +1178,12 @@ export interface BuildMontageParams {
   reelTitle?: ReelTitleOverlaySettings;
   /** Up to three custom overlay texts burned into the final exported MP4. */
   overlayTexts?: string[];
+  /** Optional route label shown in sport telemetry overlays. */
+  routeLabel?: string | null;
+  /** Optional GPX stats shown in sport telemetry overlays. */
+  gpxStats?: GpxRouteStats | null;
+  /** Optional sport-mode telemetry detail. */
+  sportTelemetry?: { maxSpeedKmh?: number | null } | null;
   /** Called with a 0–1 ratio whenever rendering progresses. Never exceeds 0.97 until the file is fully written. */
   onProgress?: (ratio: number) => void;
   /** Called with a human-readable label at the start of each pipeline phase (for UI status display). */
@@ -1009,6 +1298,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     videoDurations,
     videoAudioEnabled,
     introClip,
+    preserveRouteIntro = false,
     outroClip,
     style,
     mode,
@@ -1022,6 +1312,9 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     kenBurnsTier = "standard",
     reelTitle,
     overlayTexts = [],
+    routeLabel,
+    gpxStats,
+    sportTelemetry,
     onProgress,
     onPhaseChange,
   } = params;
@@ -1064,7 +1357,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
   const cleanedReelTitle = reelTitle?.text.trim()
     ? { ...reelTitle, text: reelTitle.text.trim() }
     : null;
-  const cleanedOverlayTexts = overlayTexts.map((text) => text.trim()).filter(Boolean).slice(0, 3);
+  const cleanedOverlayTexts = filterCoherentDisplayTexts(overlayTexts).slice(0, 3);
 
   const introDuration = introClip?.durationSeconds ?? 0;
   const outroDuration = outroClip?.durationSeconds ?? 0;
@@ -1166,6 +1459,46 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       await ffmpeg.writeFile(reelTitleName, cloneFFmpegData(data));
     }
   }
+  const sportTelemetryOverlayNames: string[] = [];
+  if (style === "sport") {
+    for (const focus of [0, 1, 2] as const) {
+      const name = `sport_overlay_${focus}_${stamp}.png`;
+      const sportOverlayCacheKey = await buildRenderCacheKey("sport-overlay-v2", [
+        w,
+        h,
+        focus,
+        routeLabel ?? "",
+        gpxStats?.distanceKm ?? "",
+        gpxStats?.durationLabel ?? "",
+        gpxStats?.elevationGainM ?? "",
+        gpxStats?.highestPointM ?? "",
+        sportTelemetry?.maxSpeedKmh ?? "",
+      ]);
+      const cachedOverlay = getCachedBinaryAsset(sportOverlayCacheKey);
+      if (cachedOverlay) {
+        await ffmpeg.writeFile(name, cloneFFmpegData(cachedOverlay));
+      } else {
+        const data = await generateSportTelemetryOverlayPng(w, h, routeLabel, gpxStats, sportTelemetry?.maxSpeedKmh ?? null, focus);
+        putCachedBinaryAsset(sportOverlayCacheKey, data, "image/png");
+        await ffmpeg.writeFile(name, cloneFFmpegData(data));
+      }
+      sportTelemetryOverlayNames.push(name);
+    }
+  }
+
+  const planSportTelemetryWindows = (durationSeconds: number) => {
+    if (sportTelemetryOverlayNames.length === 0) return [];
+    const startBoundary = Math.max(0.35, (introClip?.durationSeconds ?? 0) + 0.35);
+    const endBoundary = Math.max(startBoundary, durationSeconds - Math.max(0.35, (outroClip?.durationSeconds ?? 0) + 0.35));
+    const available = endBoundary - startBoundary;
+    if (available < 2.4) return [];
+    const segment = available / sportTelemetryOverlayNames.length;
+    return sportTelemetryOverlayNames.map((name, index) => {
+      const start = startBoundary + index * segment;
+      const end = index === sportTelemetryOverlayNames.length - 1 ? endBoundary : startBoundary + (index + 1) * segment;
+      return { name, start, end: Math.max(start + 0.8, end) };
+    });
+  };
 
   // ── Progress accounting ───────────────────────────────────────────────────
   // IMPORTANT: progress is capped at 0.97 throughout the render loop.
@@ -1174,7 +1507,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
   // still waiting for the file to be available.
   const normalizedClipUnits = (introClip ? 1 : 0) + (outroClip ? 1 : 0);
   const needsComposePass = segments.length + (introClip ? 1 : 0) + (outroClip ? 1 : 0) > 1 || !!watermark;
-  const totalUnits = normalizedClipUnits + segments.length + (needsComposePass ? 1 : 0);
+  let totalUnits = normalizedClipUnits + segments.length + (needsComposePass ? 1 : 0);
   const PROGRESS_RENDER_MAX = 0.93; // cap during ffmpeg work; last 7% = file ops + verification
   let completedUnits = 0;
   // Clamp to highest seen: ffmpeg.wasm progress events are non-monotonic
@@ -1200,15 +1533,17 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     ...(outroSourceName ? [outroSourceName] : []),
     ...(watermarkName ? [watermarkName] : []),
     ...(reelTitleName ? [reelTitleName] : []),
+    ...sportTelemetryOverlayNames,
   ];
   const overlayTextNames: string[] = [];
 
   try {
     for (let i = 0; i < cleanedOverlayTexts.length; i++) {
       const name = `overlay_text_${stamp}_${i}.png`;
-      const overlayCacheKey = await buildRenderCacheKey("overlay-text-v1", [
+      const overlayCacheKey = await buildRenderCacheKey("overlay-text-v2", [
         w,
         h,
+        style,
         cleanedOverlayTexts[i],
       ]);
       const cachedOverlay = getCachedBinaryAsset(overlayCacheKey);
@@ -1216,7 +1551,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       if (cachedOverlay) {
         await ffmpeg.writeFile(name, cloneFFmpegData(cachedOverlay));
       } else {
-        const data = await generateOverlayTextPng(w, h, cleanedOverlayTexts[i]);
+        const data = await generateOverlayTextPng(w, h, cleanedOverlayTexts[i], style);
         putCachedBinaryAsset(overlayCacheKey, data, "image/png");
         await ffmpeg.writeFile(name, cloneFFmpegData(data));
       }
@@ -1239,10 +1574,12 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
             outroClip?.durationSeconds ?? 0
           )
         : null;
-      if (overlayTextNames.length === 0 && !titleWindow) {
-        return { finalLabel: baseLabel, overlaysUsed: 0, usedTitle: false };
+      const sportWindows = planSportTelemetryWindows(durationSeconds);
+      if (overlayTextNames.length === 0 && !titleWindow && sportWindows.length === 0) {
+        return { finalLabel: baseLabel, overlaysUsed: 0, usedTitle: false, usedSport: false };
       }
 
+      const sportInputOffset = sportTelemetryOverlayNames.length;
       const titleInputOffset = reelTitleName ? 1 : 0;
       const overlays = planOverlayTextWindows(
         cleanedOverlayTexts,
@@ -1256,14 +1593,14 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       if (reelTitleName && titleWindow) {
         const titleLabel = `${labelPrefix}_titlesrc`;
         const titleOutLabel = `${labelPrefix}_title`;
-        filterParts.push(`[${firstInputIndex}:v]format=rgba[${titleLabel}]`);
+        filterParts.push(`[${firstInputIndex + sportInputOffset}:v]format=rgba[${titleLabel}]`);
         filterParts.push(
           `[${currentLabel}][${titleLabel}]overlay=(W-w)/2:H*0.08:enable='between(t,${titleWindow.start.toFixed(3)},${titleWindow.end.toFixed(3)})'[${titleOutLabel}]`
         );
         currentLabel = titleOutLabel;
       }
       overlays.forEach((overlay, index) => {
-        const inputIndex = firstInputIndex + titleInputOffset + index;
+        const inputIndex = firstInputIndex + sportInputOffset + titleInputOffset + index;
         const textLabel = `${labelPrefix}_txtsrc_${index}`;
         const outLabel = `${labelPrefix}_txt_${index}`;
         filterParts.push(`[${inputIndex}:v]format=rgba[${textLabel}]`);
@@ -1272,8 +1609,18 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         );
         currentLabel = outLabel;
       });
+      sportWindows.forEach((window, index) => {
+        const inputIndex = firstInputIndex + index;
+        const sportLabel = `${labelPrefix}_sportsrc_${index}`;
+        const sportOutLabel = `${labelPrefix}_sport_${index}`;
+        filterParts.push(`[${inputIndex}:v]format=rgba[${sportLabel}]`);
+        filterParts.push(
+          `[${currentLabel}][${sportLabel}]overlay=0:0:enable='between(t,${window.start.toFixed(3)},${window.end.toFixed(3)})'[${sportOutLabel}]`
+        );
+        currentLabel = sportOutLabel;
+      });
 
-      return { finalLabel: currentLabel, overlaysUsed: overlays.length, usedTitle: !!titleWindow };
+      return { finalLabel: currentLabel, overlaysUsed: overlays.length, usedTitle: !!titleWindow, usedSport: sportWindows.length > 0 };
     };
 
     const appendAudioChain = (
@@ -1314,38 +1661,53 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     if (introSourceName) {
       onPhaseChange?.("Transcoding map intro…");
       mark("intro-start");
-      introName = `intro_norm_${stamp}.mp4`;
-      const introCacheKey = await buildRenderCacheKey("intro-norm-v1", [
-        fingerprintFile(introClip!.file),
-        introClip!.durationSeconds,
-        quality,
-        w,
-        h,
-        RENDER_FPS,
-        selectedCodec,
-        renderCodecProfile,
-      ]);
-      const cachedIntro = getCachedBinaryAsset(introCacheKey);
-      if (cachedIntro) {
-        await ffmpeg.writeFile(introName, cloneFFmpegData(cachedIntro));
-        console.log("[video-engine] Map intro cache hit");
-      } else {
-        await ffmpeg.exec([
-          "-fflags", "+genpts",
-          "-i", introSourceName,
-          "-vf", `fps=${RENDER_FPS},scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setpts=PTS-STARTPTS,format=yuv420p`,
-          "-r", String(RENDER_FPS),
-          ...encoderArgs,
-          "-pix_fmt", "yuv420p",
-          introName,
+      const introTimeoutMs = renderSpeedProfile === "fast" ? INTRO_TRANSCODE_TIMEOUT_MS_FAST : INTRO_TRANSCODE_TIMEOUT_MS_QUALITY;
+      try {
+        introName = `intro_norm_${stamp}.mp4`;
+        const introCacheKey = await buildRenderCacheKey("intro-norm-v1", [
+          fingerprintFile(introClip!.file),
+          introClip!.durationSeconds,
+          quality,
+          w,
+          h,
+          RENDER_FPS,
+          selectedCodec,
+          renderCodecProfile,
         ]);
-        const data = await ffmpeg.readFile(introName);
-        putCachedBinaryAsset(introCacheKey, data as Uint8Array, "video/mp4");
+        const cachedIntro = getCachedBinaryAsset(introCacheKey);
+        if (cachedIntro) {
+          await ffmpeg.writeFile(introName, cloneFFmpegData(cachedIntro));
+          console.log("[video-engine] Map intro cache hit");
+        } else {
+          await withTimeout(
+            ffmpeg.exec([
+              "-fflags", "+genpts",
+              "-i", introSourceName,
+              "-vf", `fps=${RENDER_FPS},scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setpts=PTS-STARTPTS,format=yuv420p`,
+              "-r", String(RENDER_FPS),
+              ...encoderArgs,
+              "-pix_fmt", "yuv420p",
+              introName,
+            ]),
+            introTimeoutMs,
+          );
+          const data = await ffmpeg.readFile(introName);
+          putCachedBinaryAsset(introCacheKey, data as Uint8Array, "video/mp4");
+        }
+        tempFiles.push(introName);
+        completedUnits++;
+        mark("intro-done");
+        console.log(`[video-engine] Map intro transcode: ${elapsed("intro-start", "intro-done")}`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn("[video-engine] Map intro transcode failed.", message);
+        if (preserveRouteIntro) {
+          throw error;
+        }
+        introName = null;
+        totalUnits = Math.max(1, totalUnits - 1);
+        onPhaseChange?.("Map intro too heavy on this device — continuing without it…");
       }
-      tempFiles.push(introName);
-      completedUnits++;
-      mark("intro-done");
-      console.log(`[video-engine] Map intro transcode: ${elapsed("intro-start", "intro-done")}`);
     }
 
     let outroName: string | null = null;
@@ -1391,7 +1753,6 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     mark("phase1-start");
     for (let i = 0; i < segments.length; i++) {
       const rawSeg = segments[i];
-      const clipPlan = creativePlan.clips[i];
       const seg = rawSeg;
       const clipDuration = seg.length / effectiveSpeed(seg, recipe);
       const segmentFilter = buildSegmentFilter(seg, i, recipe, w, h, RENDER_FPS, fastMode, style);
@@ -1478,7 +1839,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         blob,
         durationSeconds,
         clipCount,
-        appliedEffects: [],
+        appliedEffects: style === "sport" ? ["Editorial sport telemetry overlay"] : [],
         proLockedEffects: [],
         editingPattern: { name: style, description: "" },
       };
@@ -1486,7 +1847,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
 
     // --- Single clip, no watermark: no re-encode needed, it *is* the final montage ---
     if (finalClipNames.length === 1 && !watermark) {
-      if (overlayTextNames.length === 0) {
+      if (overlayTextNames.length === 0 && !cleanedReelTitle && sportTelemetryOverlayNames.length === 0) {
         if (sourceAudioEnabled[0] ?? true) {
           return finaliseOutput(finalClipNames[0], finalDurations[0], 1);
         }
@@ -1511,14 +1872,15 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
 
       const outputName = `out_${stamp}.mp4`;
       const filterParts: string[] = [];
-      const { finalLabel, overlaysUsed, usedTitle } = appendOverlayFilters(filterParts, "0:v", 1, finalDurations[0], "single");
-      if (overlaysUsed === 0 && !usedTitle) {
+      const { finalLabel, overlaysUsed, usedTitle, usedSport } = appendOverlayFilters(filterParts, "0:v", 1, finalDurations[0], "single");
+      if (overlaysUsed === 0 && !usedTitle && !usedSport) {
         return finaliseOutput(finalClipNames[0], finalDurations[0], 1);
       }
       onPhaseChange?.("Burning in overlay text…");
       await ffmpeg.exec([
         "-i",
         finalClipNames[0],
+        ...sportTelemetryOverlayNames.flatMap((name) => ["-i", name]),
         ...(reelTitleName ? ["-i", reelTitleName] : []),
         ...overlayTextNames.slice(0, overlaysUsed).flatMap((name) => ["-i", name]),
         "-filter_complex",
@@ -1547,6 +1909,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       await ffmpeg.exec([
         "-i", finalClipNames[0],
         "-i", watermarkName as string,
+        ...sportTelemetryOverlayNames.flatMap((name) => ["-i", name]),
         ...(reelTitleName ? ["-i", reelTitleName] : []),
         ...overlayTextNames.slice(0, overlaysUsed).flatMap((name) => ["-i", name]),
         "-filter_complex",
@@ -1605,6 +1968,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       Math.max(acc, 0.5),
       "multi"
     );
+    execArgs.push(...sportTelemetryOverlayNames.flatMap((name) => ["-i", name]));
     if (reelTitleName) {
       execArgs.push("-i", reelTitleName);
     }
