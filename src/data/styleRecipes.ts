@@ -90,8 +90,8 @@ export const STYLE_RECIPES: Record<ReelStyle, StyleRecipe> = {
     zoom: "in",
     zoomIntensity: 1.24,
     speed: 1.05,
-    reelClipCount: 12,
-    targetReelSeconds: [28, 45],
+    reelClipCount: 14,
+    targetReelSeconds: [57, 60],
   }),
   cinematic: recipeFor("cinematic", {
     zoom: "out",

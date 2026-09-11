@@ -49,8 +49,11 @@ export const STYLE_TRANSITIONS: Record<ReelStyle, TransitionPool> = {
   // three defined styles (fast/punchy vs. slow/premium) so every style has a
   // sensible transition pool.
   sport: {
-    names: ["wipeleft", "wiperight", "slideleft", "slideright", "zoomin", "fadeblack", "radial"],
-    durationRange: [0.12, 0.24],
+    // Deliberately bias SPORT toward hard impact/glitch motifs (slice, blur,
+    // pixel and black-flash) and keep them short so cuts stay aggressive.
+    // Repeated names act as weighting because `pickTransitionName` is uniform.
+    names: ["fadeblack", "fadeblack", "pixelize", "hblur", "hlslice", "hrslice", "vdslice", "distance", "zoomin"],
+    durationRange: [0.08, 0.16],
   },
   travel: {
     names: ["fade"],

@@ -63,6 +63,8 @@ const MIN_SAMPLE_INTERVAL = 0.25;
 const MAX_SAMPLE_INTERVAL = 1.4;
 /** A sample below this normalized clarity is disqualified from being the very first ("opener") moment of a video — a soft/blurry/shaky first beat is one of the fastest ways to lose a viewer. */
 const MIN_OPENER_CLARITY = 0.28;
+const BASE_ANALYSIS_BUDGET_MS = 35000;
+const MAX_ANALYSIS_BUDGET_MS = 120000;
 
 interface FrameSample {
   t: number;
@@ -442,8 +444,9 @@ export async function analyzeVideoMoments(
   // clip can still supply enough distinct moments to build a fuller,
   // closer-to-Instagram's-max-length Reel instead of always topping out at
   // a handful of moments regardless of source length.
-  const momentCount = Math.max(1, Math.min(14, Math.floor(total / 3)));
-  const minGap = Math.max(2.6, total / (momentCount * 2.2));
+  // For SPORT, we need more moments to fill a 60s reel — increased cap from 14 to 32.
+  const momentCount = Math.max(1, Math.min(32, Math.floor(total / 2.5)));
+  const minGap = Math.max(1.8, total / (momentCount * 2.8));
 
   const ranked = smoothed.map((score, i) => ({ score, i })).sort((a, b) => b.score - a.score);
 
@@ -519,6 +522,14 @@ export async function analyzeVideoMoments(
 }
 
 /** Runs `analyzeVideoMoments` across all uploaded videos, aggregating overall progress. */
+export function estimateAnalysisBudgetMs(videos: { durationSeconds: number }[]): number {
+  const totalDurationSeconds = videos.reduce((sum, video) => sum + Math.max(0, video.durationSeconds), 0);
+  const perVideoBudget = videos.length * 9000;
+  const perSecondBudget = totalDurationSeconds * 320;
+  return Math.max(BASE_ANALYSIS_BUDGET_MS, Math.min(MAX_ANALYSIS_BUDGET_MS, Math.round(BASE_ANALYSIS_BUDGET_MS + perVideoBudget + perSecondBudget)));
+}
+
+/** Runs `analyzeVideoMoments` across all uploaded videos, aggregating overall progress. */
 export async function analyzeAllVideos(
   videos: { file: File; durationSeconds: number }[],
   onProgress?: (ratio: number) => void,
@@ -527,21 +538,26 @@ export async function analyzeAllVideos(
 ): Promise<BestMoment[]> {
   if (videos.length === 0) return [];
   const progressByVideo = new Array(videos.length).fill(0);
-  const momentGroups = await Promise.all(
-    videos.map((v, i) =>
-      analyzeVideoMoments(
-        v.file,
-        i,
-        v.durationSeconds,
-        (ratio) => {
-          progressByVideo[i] = ratio;
-          onProgress?.(progressByVideo.reduce((sum, value) => sum + value, 0) / videos.length);
-        },
-        gpxPoints,
-        signal
-      )
-    )
-  );
+  const momentGroups: BestMoment[][] = [];
+  for (let i = 0; i < videos.length; i++) {
+    if (signal?.aborted && momentGroups.length > 0) break;
+    const video = videos[i];
+    const moments = await analyzeVideoMoments(
+      video.file,
+      i,
+      video.durationSeconds,
+      (ratio) => {
+        progressByVideo[i] = ratio;
+        onProgress?.(progressByVideo.reduce((sum, value) => sum + value, 0) / videos.length);
+      },
+      gpxPoints,
+      signal
+    );
+    progressByVideo[i] = 1;
+    onProgress?.(progressByVideo.reduce((sum, value) => sum + value, 0) / videos.length);
+    momentGroups.push(moments);
+    if (signal?.aborted) break;
+  }
   onProgress?.(1);
   return momentGroups.flat();
 }

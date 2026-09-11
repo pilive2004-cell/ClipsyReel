@@ -1,13 +1,21 @@
 "use client";
 
 import { FFmpeg } from "@ffmpeg/ffmpeg";
-import { fetchFile } from "@ffmpeg/util";
-import { BestMoment, GpxRouteStats, ReelStyle, ReelTitleColor, ReelTitleFont, ReelTitleSize } from "@/types";
+import { fetchFile, toBlobURL } from "@ffmpeg/util";
+import { BestMoment, GpxRouteStats, ReelStyle, ReelTitleColor, ReelTitleFont, ReelTitleSize, SportTelemetry } from "@/types";
 import { STYLE_RECIPES, StyleRecipe } from "@/data/styleRecipes";
 import { pickTransitionName, randomTransitionDuration, STYLE_TRANSITIONS } from "@/data/transitions";
 import { detectHardwareAcceleration, buildEncoderArgs, HardwareCodec } from "@/lib/hw-acceleration";
 import { buildRenderCacheKey, fingerprintFile, getCachedBinaryAsset, putCachedBinaryAsset } from "@/lib/render-asset-cache";
 import { filterCoherentDisplayTexts, isCoherentDisplayText } from "@/lib/display-text";
+import {
+  buildSportHookSequence,
+  resolveSportHookPalette,
+  planSportHookWindows,
+  type SportHookBeat,
+  type SportHookEffect,
+  type SportHookWindow,
+} from "@/lib/sport-style";
 
 const ENABLE_MT_FFMPEG = process.env.NEXT_PUBLIC_ENABLE_MT_FFMPEG === "true";
 const INTRO_TRANSCODE_TIMEOUT_MS_FAST = 75_000;
@@ -24,6 +32,11 @@ async function getFileDataForFFmpeg(file: File | Blob): Promise<Uint8Array> {
 
 function cloneFFmpegData(data: Uint8Array): Uint8Array {
   return new Uint8Array(data);
+}
+
+function buildConcatManifest(fileNames: string[]): Uint8Array {
+  const manifest = fileNames.map((name) => `file '${name.replace(/'/g, "'\\''")}'`).join("\n");
+  return new TextEncoder().encode(`${manifest}\n`);
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
@@ -77,9 +90,6 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
  * UI barely has to change.
  */
 
-let ffmpegSingleton: FFmpeg | null = null;
-let loadingPromise: Promise<FFmpeg> | null = null;
-
 /**
  * Render mutex: ffmpeg.wasm is single-threaded and shares a single in-memory
  * FS. Concurrent `buildMontage` calls from re-running React effects corrupt
@@ -94,6 +104,18 @@ export function isRenderInProgress(): boolean {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+export function capTransitionDuration(baseTransitionDuration: number, prevClipLength: number, nextClipLength: number): number {
+  const safeBase = Number.isFinite(baseTransitionDuration) ? Math.max(0, baseTransitionDuration) : 0;
+  const safePrev = Number.isFinite(prevClipLength) ? Math.max(0, prevClipLength) : 0;
+  const safeNext = Number.isFinite(nextClipLength) ? Math.max(0, nextClipLength) : 0;
+  return Math.max(0, Math.min(safeBase, safePrev * 0.2, safeNext * 0.2));
+}
+
+export function shouldUseCompactConcatFallback(style: ReelStyle, clipCount: number): boolean {
+  if (style === "sport") return clipCount >= 3;
+  return clipCount >= 8;
 }
 
 export async function detectVideoHasAudio(file: File | Blob): Promise<boolean> {
@@ -132,46 +154,15 @@ export async function detectVideoHasAudio(file: File | Blob): Promise<boolean> {
 
 /** Lazily loads & caches a single ffmpeg.wasm instance (core files are self-hosted in /public/ffmpeg). */
 async function loadFFmpeg(): Promise<FFmpeg> {
-  if (ffmpegSingleton?.loaded) return ffmpegSingleton;
-  if (loadingPromise) return loadingPromise;
+  const ffmpeg = new FFmpeg();
+  const coreJsUrl = await toBlobURL("/ffmpeg/ffmpeg-core.js", "text/javascript");
+  const wasmUrl = await toBlobURL("/ffmpeg/ffmpeg-core.wasm", "application/wasm");
 
-  loadingPromise = (async () => {
-    const canUseMultiThread =
-      ENABLE_MT_FFMPEG &&
-      typeof window !== "undefined" &&
-      typeof SharedArrayBuffer !== "undefined" &&
-      (window.crossOriginIsolated ?? false);
-
-    if (canUseMultiThread) {
-      try {
-        const mtFfmpeg = new FFmpeg();
-        await withTimeout(
-          mtFfmpeg.load({
-            coreURL: "/ffmpeg-mt/ffmpeg-core.js",
-            wasmURL: "/ffmpeg-mt/ffmpeg-core.wasm",
-            workerURL: "/ffmpeg-mt/ffmpeg-core.worker.js",
-          }),
-          8000
-        );
-        ffmpegSingleton = mtFfmpeg;
-        return mtFfmpeg;
-      } catch {
-        // MT core failed, or didn't finish initializing within the timeout
-        // — fall through to the single-threaded core below.
-      }
-
-    }
-
-    const ffmpeg = new FFmpeg();
-    await ffmpeg.load({
-      coreURL: "/ffmpeg/ffmpeg-core.js",
-      wasmURL: "/ffmpeg/ffmpeg-core.wasm",
-    });
-    ffmpegSingleton = ffmpeg;
-    return ffmpeg;
-  })();
-
-  return loadingPromise;
+  await ffmpeg.load({
+    coreURL: coreJsUrl,
+    wasmURL: wasmUrl,
+  });
+  return ffmpeg;
 }
 
 /**
@@ -182,29 +173,51 @@ export async function preloadRenderPipeline(): Promise<void> {
   await Promise.all([loadFFmpeg(), detectHardwareAcceleration()]);
 }
 
-/** Destroys the singleton on unrecoverable FS errors so the next render gets a clean instance. */
-function resetFFmpegSingleton() {
-  try { ffmpegSingleton?.terminate?.(); } catch { /* ignore */ }
-  ffmpegSingleton = null;
-  loadingPromise = null;
-}
-
 /** Reads the real duration (seconds) of a video file using the browser's own decoder — no ffmpeg needed for this. */
 export function getVideoDuration(file: File): Promise<number> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const videoEl = document.createElement("video");
-    videoEl.preload = "metadata";
-    videoEl.src = url;
-    videoEl.onloadedmetadata = () => {
-      const duration = Number.isFinite(videoEl.duration) ? videoEl.duration : 0;
+    let settled = false;
+    const cleanup = () => {
+      window.clearTimeout(timeoutId);
+      videoEl.onloadedmetadata = null;
+      videoEl.onloadeddata = null;
+      videoEl.oncanplay = null;
+      videoEl.onerror = null;
       URL.revokeObjectURL(url);
-      resolve(duration);
+    };
+    const finalize = (duration: number | null, error?: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (typeof duration === "number" && Number.isFinite(duration) && duration > 0) {
+        resolve(duration);
+        return;
+      }
+      reject(error ?? new Error("Could not read video metadata."));
+    };
+    const timeoutId = window.setTimeout(() => {
+      finalize(null, new Error("Timed out while reading video metadata."));
+    }, 8000);
+    videoEl.preload = "metadata";
+    videoEl.playsInline = true;
+    videoEl.onloadedmetadata = () => {
+      finalize(Number.isFinite(videoEl.duration) ? videoEl.duration : null);
+    };
+    videoEl.onloadeddata = () => {
+      finalize(Number.isFinite(videoEl.duration) ? videoEl.duration : null);
+    };
+    videoEl.oncanplay = () => {
+      finalize(Number.isFinite(videoEl.duration) ? videoEl.duration : null);
     };
     videoEl.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error("Could not read video metadata."));
+      const mediaError = videoEl.error;
+      const detail = mediaError ? ` (MediaError ${mediaError.code}${mediaError.message ? `: ${mediaError.message}` : ""})` : "";
+      finalize(null, new Error(`Could not read video metadata.${detail}`));
     };
+    videoEl.src = url;
+    videoEl.load();
   });
 }
 
@@ -213,6 +226,8 @@ export interface Segment {
   sourceIndex: number;
   start: number;
   length: number;
+  /** Confidence score used for source-spread dedupe and editorial selection. */
+  confidence?: number;
   /** Rendered in slow-motion (see `applySlowMoToStandoutMoments` below). */
   slowMo?: boolean;
 }
@@ -269,16 +284,20 @@ function buildSegmentFromMoment(
   centerShiftSeconds = 0
 ): Segment | null {
   const videoDuration = videoDurations[moment.sourceIndex] ?? 0;
-  const targetLength = Math.max(3.2, recipe.clipDuration);
+  const isSportRecipe = recipe === STYLE_RECIPES.sport;
+  const targetLength = isSportRecipe
+    ? clamp(recipe.clipDuration, Math.max(0.85, recipe.minClipDuration), Math.max(1.6, recipe.maxClipDuration))
+    : Math.max(3.2, recipe.clipDuration);
   const momentCenter = (moment.startSeconds + moment.endSeconds) / 2 + centerShiftSeconds;
   const start = Math.min(
     Math.max(0, momentCenter - targetLength / 2),
-    Math.max(0, videoDuration - 0.3)
+    Math.max(0, videoDuration - (isSportRecipe ? 0.2 : 0.3))
   );
   const available = Math.max(0, videoDuration - start);
-  const length = Math.max(3.0, Math.min(targetLength, available));
-  if (length <= 2.9) return null;
-  return { sourceIndex: moment.sourceIndex, start, length };
+  const minLength = isSportRecipe ? Math.max(0.8, recipe.minClipDuration * 0.75) : 3.0;
+  const length = Math.max(minLength, Math.min(targetLength, available));
+  if (length <= (isSportRecipe ? 0.75 : 2.9)) return null;
+  return { sourceIndex: moment.sourceIndex, start, length, confidence: moment.confidence };
 }
 
 function estimatedMontageDuration(segments: Segment[], recipe: StyleRecipe): number {
@@ -288,7 +307,7 @@ function estimatedMontageDuration(segments: Segment[], recipe: StyleRecipe): num
 }
 
 /** Picks clips for a Reel up to `targetDurationSeconds`, allowing non-consecutive reuse when needed. */
-function planReelSegments(
+export function planReelSegments(
   bestMoments: BestMoment[],
   recipe: StyleRecipe,
   videoDurations: number[],
@@ -308,7 +327,7 @@ function planReelSegments(
   const perClipNet = recipe.clipDuration / recipe.speed;
   const [targetMinSeconds, targetMaxSeconds] = recipe.targetReelSeconds;
   const targetForStyle = perClipNet > 0 ? Math.round(((targetMinSeconds + targetMaxSeconds) / 2) / perClipNet) : recipe.reelClipCount;
-  const clipCap = 12;
+  const clipCap = recipe === STYLE_RECIPES.sport ? 48 : 12;
   // Never exceed the reel duration target or the render-performance clip cap, even if a style target/lots of footage would suggest more.
   const hardCapFromDuration = perClipNet > 0 ? Math.floor(targetDurationSeconds / perClipNet) : clipCap;
   const targetCount = Math.max(1, Math.min(clipCap, hardCapFromDuration, Math.max(recipe.reelClipCount, targetForStyle)));
@@ -358,7 +377,9 @@ function planReelSegments(
   const MIN_SOURCE_SPREAD_FRACTION = 0.12;
   function isFarEnoughFromSameSourcePicks(sourceIndex: number, startSeconds: number): boolean {
     const videoDuration = videoDurations[sourceIndex] ?? 0;
-    const minGapSeconds = Math.max(3, videoDuration * MIN_SOURCE_SPREAD_FRACTION);
+    const minGapSeconds = recipe === STYLE_RECIPES.sport
+      ? Math.max(0.75, videoDuration * 0.008)
+      : Math.max(3, videoDuration * MIN_SOURCE_SPREAD_FRACTION);
     const claimedTimes = perSourceSelectedTimes.get(sourceIndex) ?? [];
     return claimedTimes.every((t) => Math.abs(t - startSeconds) >= minGapSeconds);
   }
@@ -380,7 +401,7 @@ function planReelSegments(
       const list = byVideo.get(src)!;
       return round < list.length && (perSourceCount.get(src) ?? 0) < maxPerSource;
     });
-    if (stillCapable.length <= 1 && selected.length >= Math.min(4, targetCount)) break;
+    if (activeSources.length > 1 && stillCapable.length <= 1 && selected.length >= Math.min(4, targetCount)) break;
     for (const src of activeSources) {
       if (selected.length >= targetCount) break;
       const list = byVideo.get(src)!;
@@ -415,11 +436,23 @@ function planReelSegments(
     .map((m) => buildSegmentFromMoment(m, recipe, videoDurations, 0))
     .filter((s): s is Segment => s !== null);
 
-  if (segments.length === 0) return [];
+  if (segments.length === 0) {
+    // If moment selection cannot produce usable clips (e.g., invalid or sparse
+    // best-moment timestamps), fall back to an even-coverage cut so rendering
+    // never degrades to a raw single-source playback.
+    return avoidBackToBackSameSource(
+      removeNearDuplicateSegments(planStorySegments(videoDurations, recipe, targetDurationSeconds))
+    );
+  }
 
   const sourceDiversity = new Set(baseMoments.map((m) => m.sourceIndex)).size;
   const jitterPattern = [-1.4, 1.1, -0.8, 1.6, -2.0, 2.2, -1.1, 0.9];
-  const maxSegments = 20;
+  // Keep browser-side ffmpeg composition stable: a larger xfade chain is
+  // much more likely to fail near the end of export in wasm than a slightly
+  // shorter, better-paced montage. Sport is the worst offender because it
+  // creates a high cut density and long transition graph.
+  // Increased from 16 to 24 to accommodate 60s SPORT reels with more moments.
+  const maxSegments = recipe === STYLE_RECIPES.sport ? 24 : 20;
   let cursor = 0;
   let guard = 0;
   while (
@@ -440,13 +473,106 @@ function planReelSegments(
       const sameSourceConsecutive = sourceDiversity > 1 && previous.sourceIndex === candidate.sourceIndex;
       const tooSimilarConsecutive =
         previous.sourceIndex === candidate.sourceIndex &&
-        Math.abs(previous.start - candidate.start) < Math.max(1.2, recipe.clipDuration * 0.38);
+        Math.abs(previous.start - candidate.start) < Math.max(recipe === STYLE_RECIPES.sport ? 0.45 : 1.2, recipe.clipDuration * 0.38);
       if (sameSourceConsecutive || tooSimilarConsecutive) continue;
     }
     segments.push(candidate);
   }
 
-  return applySlowMoToStandoutMoments(segments, baseMoments);
+  let dedupedSegments = enforceSameSourceSpread(segments, videoDurations, recipe);
+  dedupedSegments = dedupedSegments.slice(0, maxSegments);
+
+  if (recipe === STYLE_RECIPES.sport && videoDurations.length > 1) {
+    const seenSources = new Set(dedupedSegments.map((segment) => segment.sourceIndex));
+    if (seenSources.size < Math.min(3, videoDurations.length)) {
+      const coverageSegments = planStorySegments(videoDurations, recipe, targetDurationSeconds);
+      const merged = [...dedupedSegments];
+      const seen = new Set(merged.map((segment) => `${segment.sourceIndex}:${segment.start.toFixed(3)}`));
+      for (const segment of coverageSegments) {
+        const key = `${segment.sourceIndex}:${segment.start.toFixed(3)}`;
+        if (seen.has(key) || seenSources.has(segment.sourceIndex) && seenSources.size >= Math.min(3, videoDurations.length)) continue;
+        if (seenSources.size < Math.min(3, videoDurations.length) && !seenSources.has(segment.sourceIndex)) {
+          seenSources.add(segment.sourceIndex);
+        }
+        merged.push(segment);
+        seen.add(key);
+        if (seenSources.size >= Math.min(3, videoDurations.length)) break;
+      }
+      dedupedSegments = avoidBackToBackSameSource(removeNearDuplicateSegments(merged));
+    }
+  }
+
+  if (recipe === STYLE_RECIPES.sport && estimatedMontageDuration(dedupedSegments, recipe) < targetDurationSeconds * 0.88) {
+    const coverageSegments = planStorySegments(videoDurations, recipe, targetDurationSeconds);
+    const merged = [...dedupedSegments];
+    const seen = new Set(merged.map((segment) => `${segment.sourceIndex}:${segment.start.toFixed(3)}`));
+
+    for (const segment of coverageSegments) {
+      const key = `${segment.sourceIndex}:${segment.start.toFixed(3)}`;
+      if (seen.has(key)) continue;
+      merged.push(segment);
+      seen.add(key);
+      const normalized = avoidBackToBackSameSource(removeNearDuplicateSegments(merged)).slice(0, maxSegments);
+      if (estimatedMontageDuration(normalized, recipe) >= targetDurationSeconds * 0.96 || normalized.length >= maxSegments) {
+        dedupedSegments = normalized;
+        break;
+      }
+      dedupedSegments = normalized;
+    }
+  }
+
+  // If the best-moment plan still collapses to a single segment, fall back to
+  // an even coverage cut so SPORT (and other montage modes) cannot degrade into
+  // a raw one-clip playback.
+  if (dedupedSegments.length < 2) {
+    const coverageSegments = planStorySegments(videoDurations, recipe, targetDurationSeconds);
+    const merged = [...dedupedSegments];
+    const seen = new Set(merged.map((segment) => `${segment.sourceIndex}:${segment.start.toFixed(3)}`));
+    for (const segment of coverageSegments) {
+      const key = `${segment.sourceIndex}:${segment.start.toFixed(3)}`;
+      if (seen.has(key)) continue;
+      merged.push(segment);
+      seen.add(key);
+      if (merged.length >= Math.max(3, Math.min(targetCount, coverageSegments.length))) break;
+    }
+    dedupedSegments = avoidBackToBackSameSource(removeNearDuplicateSegments(merged));
+  }
+
+  return applySlowMoToStandoutMoments(dedupedSegments.slice(0, maxSegments), baseMoments);
+}
+
+function enforceSameSourceSpread(segments: Segment[], videoDurations: number[], recipe: StyleRecipe): Segment[] {
+  const kept: Segment[] = [];
+  const acceptedTimesBySource = new Map<number, number[]>();
+
+  for (const segment of [...segments].sort((a, b) => a.sourceIndex - b.sourceIndex || a.start - b.start)) {
+    const sourceIndex = segment.sourceIndex;
+    const videoDuration = videoDurations[sourceIndex] ?? 0;
+    const minGapSeconds = recipe === STYLE_RECIPES.sport
+      ? Math.max(0.75, videoDuration * 0.008)
+      : Math.max(3, videoDuration * 0.12);
+    const claimedTimes = acceptedTimesBySource.get(sourceIndex) ?? [];
+    const overlaps = claimedTimes.some((time) => Math.abs(time - segment.start) < minGapSeconds);
+
+    if (overlaps) {
+      const existingIndex = kept.findIndex(
+        (candidate) =>
+          candidate.sourceIndex === sourceIndex &&
+          Math.abs(candidate.start - segment.start) < minGapSeconds
+      );
+      if (existingIndex === -1) continue;
+      if ((segment.confidence ?? 0) <= (kept[existingIndex].confidence ?? 0)) continue;
+      kept[existingIndex] = segment;
+      acceptedTimesBySource.set(sourceIndex, claimedTimes.map((time) => (Math.abs(time - kept[existingIndex].start) < minGapSeconds ? kept[existingIndex].start : time)));
+      continue;
+    }
+
+    kept.push(segment);
+    claimedTimes.push(segment.start);
+    acceptedTimesBySource.set(sourceIndex, claimedTimes);
+  }
+
+  return kept;
 }
 
 /**
@@ -513,7 +639,7 @@ function planStorySegments(videoDurations: number[], recipe: StyleRecipe, maxDur
 
   const perClipNet = recipe.clipDuration / recipe.speed;
   let totalCount = perClipNet > 0 ? Math.floor(maxDurationSeconds / perClipNet) : 8;
-  totalCount = Math.max(3, Math.min(totalCount, 18));
+  totalCount = Math.max(3, Math.min(totalCount, recipe === STYLE_RECIPES.sport ? 48 : 18));
 
   const segments: Omit<Segment, "confidence">[] = [];
   videoDurations.forEach((videoDuration, sourceIndex) => {
@@ -644,28 +770,58 @@ function mulberry32(seed: number) {
   };
 }
 
-function drawSportScratchLayer(ctx: CanvasRenderingContext2D, frameWidth: number, frameHeight: number, seed: string) {
+function isIgnorableFsCleanupError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /ErrnoError:\s*FS error/i.test(message);
+}
+
+async function deleteFFmpegTempFile(ffmpeg: FFmpeg, fileName: string): Promise<void> {
+  if (!fileName) return;
+  try {
+    await ffmpeg.deleteFile(fileName);
+  } catch (error) {
+    if (!isIgnorableFsCleanupError(error)) {
+      console.warn(`[video-engine] Failed to delete temporary ffmpeg file ${fileName}:`, error);
+    }
+  }
+}
+
+async function pruneFFmpegTempFiles(ffmpeg: FFmpeg, fileNames: string[], keep: Set<string> = new Set()): Promise<void> {
+  for (const fileName of fileNames) {
+    if (keep.has(fileName)) continue;
+    await deleteFFmpegTempFile(ffmpeg, fileName);
+  }
+}
+
+function drawSportScratchLayer(
+  ctx: CanvasRenderingContext2D,
+  frameWidth: number,
+  frameHeight: number,
+  seed: string,
+  effect: SportHookEffect | "route" = "route"
+) {
   const rand = mulberry32(hashString(seed));
+  const impact = effect === "scratch" || effect === "terrain" || effect === "dust";
   ctx.save();
   ctx.globalCompositeOperation = "screen";
 
-  for (let i = 0; i < 18; i++) {
+  for (let i = 0; i < (impact ? 26 : 18); i++) {
     const x = rand() * frameWidth;
     const y = rand() * frameHeight;
     const length = frameWidth * (0.07 + rand() * 0.26);
     const angle = -0.8 + rand() * 1.6;
     const x2 = x + Math.cos(angle) * length;
     const y2 = y + Math.sin(angle) * length;
-    ctx.strokeStyle = rand() > 0.5 ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.08)";
-    ctx.lineWidth = 0.7 + rand() * 1.3;
+    ctx.strokeStyle = rand() > 0.5 ? (impact ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.14)") : "rgba(0,0,0,0.08)";
+    ctx.lineWidth = (impact ? 0.9 : 0.7) + rand() * 1.3;
     ctx.beginPath();
     ctx.moveTo(x, y);
     ctx.lineTo(x2, y2);
     ctx.stroke();
   }
 
-  ctx.globalAlpha = 0.12;
-  for (let i = 0; i < 90; i++) {
+  ctx.globalAlpha = impact ? 0.2 : 0.12;
+  for (let i = 0; i < (impact ? 150 : 90); i++) {
     const x = rand() * frameWidth;
     const y = rand() * frameHeight;
     const size = 0.5 + rand() * 1.4;
@@ -674,8 +830,8 @@ function drawSportScratchLayer(ctx: CanvasRenderingContext2D, frameWidth: number
   }
 
   ctx.globalCompositeOperation = "overlay";
-  ctx.globalAlpha = 0.08;
-  for (let i = 0; i < 8; i++) {
+  ctx.globalAlpha = impact ? 0.14 : 0.08;
+  for (let i = 0; i < (impact ? 12 : 8); i++) {
     const x = rand() * frameWidth;
     const y = rand() * frameHeight;
     const w = frameWidth * (0.06 + rand() * 0.16);
@@ -686,6 +842,28 @@ function drawSportScratchLayer(ctx: CanvasRenderingContext2D, frameWidth: number
     ctx.rotate(-0.6 + rand() * 1.2);
     ctx.fillRect(-w / 2, -h / 2, w, h);
     ctx.restore();
+  }
+
+  if (impact) {
+    ctx.globalCompositeOperation = "lighter";
+    const flashHeight = frameHeight * 0.035;
+    const flashY = frameHeight * (0.58 + rand() * 0.14);
+    const redGrad = ctx.createLinearGradient(0, flashY, frameWidth, flashY);
+    redGrad.addColorStop(0, "rgba(225,29,46,0.38)");
+    redGrad.addColorStop(0.72, "rgba(225,29,46,0)");
+    ctx.fillStyle = redGrad;
+    ctx.fillRect(0, flashY, frameWidth, flashHeight);
+
+    const cyanGrad = ctx.createLinearGradient(frameWidth, flashY + flashHeight * 0.9, 0, flashY + flashHeight * 0.9);
+    cyanGrad.addColorStop(0, "rgba(56,189,248,0.26)");
+    cyanGrad.addColorStop(0.72, "rgba(56,189,248,0)");
+    ctx.fillStyle = cyanGrad;
+    ctx.fillRect(0, flashY + flashHeight * 0.9, frameWidth, flashHeight * 0.75);
+
+    ctx.globalCompositeOperation = "screen";
+    ctx.globalAlpha = 0.26;
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.fillRect(0, frameHeight * 0.54, frameWidth, frameHeight * 0.012);
   }
 
   ctx.restore();
@@ -773,16 +951,80 @@ function wrapCanvasText(ctx: CanvasRenderingContext2D, text: string, maxWidth: n
   return lines.slice(0, 3);
 }
 
-async function generateOverlayTextPng(frameWidth: number, frameHeight: number, text: string, style: ReelStyle): Promise<Uint8Array> {
+function drawSportBroadcastBanner(
+  ctx: CanvasRenderingContext2D,
+  frameWidth: number,
+  frameHeight: number,
+  beat: SportHookBeat
+) {
+  const colors = resolveSportHookPalette(beat.theme, beat.color);
+  const alignedRight = beat.align === "right";
+  const baseWidth = Math.round(frameWidth * 0.36);
+  const mainX = alignedRight ? Math.round(frameWidth * 0.54) : Math.round(frameWidth * 0.07);
+  const topY = Math.round(frameHeight * 0.735);
+  const mainW = baseWidth;
+  const mainH = Math.round(frameHeight * 0.078);
+
+  drawSportScratchLayer(ctx, frameWidth, frameHeight, `${beat.title}|${beat.effect}`, beat.effect);
+
+  ctx.save();
+  roundRectPath(ctx, mainX, topY, mainW, mainH, 18);
+  ctx.fillStyle = colors.mainFill;
+  ctx.fill();
+  ctx.strokeStyle = colors.outline;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  const accentBarX = alignedRight ? mainX : mainX + mainW - 12;
+  ctx.fillStyle = colors.accent;
+  ctx.fillRect(accentBarX, topY, 12, mainH);
+
+  ctx.textBaseline = "middle";
+  ctx.shadowColor = "rgba(0,0,0,0.2)";
+  ctx.shadowBlur = 8;
+  ctx.textAlign = alignedRight ? "right" : "left";
+  const fontFamily = canvasFontFamilyForTitle(beat.font);
+  const fontWeight = beat.font === "bold" || beat.font === "impact" ? 900 : beat.font === "minimal" ? 500 : 700;
+  const fontStyle = beat.font === "handwritten" || beat.font === "elegant" || beat.font === "cinematic" ? "italic" : "normal";
+  const fontSize = beat.size === "sm" ? Math.round(frameWidth * 0.024) : beat.size === "lg" ? Math.round(frameWidth * 0.031) : Math.round(frameWidth * 0.027);
+  ctx.font = `${fontStyle} ${fontWeight} ${fontSize}px ${fontFamily}`;
+  ctx.fillStyle = colors.mainText;
+
+  const titleLines = wrapCanvasText(ctx, beat.title, mainW - 34);
+  const titleStartX = alignedRight ? mainX + mainW - 18 : mainX + 18;
+  const lineHeight = Math.round(frameWidth * 0.03);
+
+  titleLines.forEach((line, index) => {
+    const y = topY + mainH / 2 + (index - (titleLines.length - 1) / 2) * lineHeight;
+    ctx.fillText(line, titleStartX, y);
+  });
+  ctx.restore();
+}
+
+async function generateOverlayTextPng(
+  frameWidth: number,
+  frameHeight: number,
+  text: string,
+  style: ReelStyle,
+  sportBeat?: SportHookBeat
+): Promise<Uint8Array> {
   const canvas = document.createElement("canvas");
   canvas.width = frameWidth;
   canvas.height = frameHeight;
   const ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
   ctx.clearRect(0, 0, frameWidth, frameHeight);
 
+  if (style === "sport" && sportBeat) {
+    drawSportBroadcastBanner(ctx, frameWidth, frameHeight, sportBeat);
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Sport broadcast overlay export failed"))), "image/png");
+    });
+    return new Uint8Array(await blob.arrayBuffer());
+  }
+
   const centerX = frameWidth / 2;
   const maxTextWidth = Math.round(frameWidth * (style === "sport" ? 0.5 : 0.78));
-  const y = Math.round(frameHeight * (style === "sport" ? 0.5 : 0.34));
+  const y = Math.round(frameHeight * (style === "sport" ? 0.72 : 0.34));
 
   ctx.font = `700 ${Math.round(frameWidth * (style === "sport" ? 0.046 : 0.058))}px ${style === "sport" ? `"SFMono-Regular", Menlo, Monaco, Consolas, monospace` : `system-ui, -apple-system, "Segoe UI", sans-serif`}`;
   const lines = wrapCanvasText(ctx, text, maxTextWidth);
@@ -859,7 +1101,7 @@ async function generateSportTelemetryOverlayPng(
     ctx.stroke();
   }
 
-  drawSportScratchLayer(ctx, frameWidth, frameHeight, `${routeLabel ?? "sport"}|${focus}|${gpxStats?.durationLabel ?? ""}|${gpxStats?.distanceKm ?? ""}`);
+  drawSportScratchLayer(ctx, frameWidth, frameHeight, `${routeLabel ?? "sport"}|${focus}|${gpxStats?.durationLabel ?? ""}|${gpxStats?.distanceKm ?? ""}`, "route");
 
   const titleX = Math.round(frameWidth * 0.05);
   const titleY = Math.round(frameHeight * 0.04);
@@ -896,7 +1138,7 @@ async function generateSportTelemetryOverlayPng(
   ctx.fill();
   ctx.strokeStyle = "rgba(255,255,255,0.1)";
   ctx.stroke();
-  const mainLabel = focus === 0 ? "DISTANCE" : focus === 1 ? "ELEVATION+" : "SPEED";
+  const mainLabel = focus === 0 ? "GPS POSITION" : focus === 1 ? "ALTITUDE" : "SPEED";
   const mainValue = focus === 0
     ? (gpxStats ? `${gpxStats.distanceKm.toFixed(1)} km` : "—")
     : focus === 1
@@ -910,7 +1152,7 @@ async function generateSportTelemetryOverlayPng(
   ctx.fillText(mainValue, statX + 14, statY + 34);
   ctx.fillStyle = "rgba(255,255,255,0.54)";
   ctx.font = `500 ${Math.round(frameWidth * 0.009)}px "SFMono-Regular", Menlo, Monaco, Consolas, monospace`;
-  ctx.fillText(focus === 0 ? "route length" : focus === 1 ? "vertical effort" : "real pace cap", statX + 14, statY + 68);
+  ctx.fillText(focus === 0 ? "GPS LOCK / COMPASS" : focus === 1 ? "vertical effort" : "real pace cap", statX + 14, statY + 68);
 
   const iconX = statX + statW - 34;
   const iconY = statY + 30;
@@ -976,9 +1218,9 @@ async function generateSportTelemetryOverlayPng(
 
   const chipsY = Math.round(frameHeight * 0.45);
   const chips = [
-    ["DUR", gpxStats?.durationLabel ?? "—"],
-    ["ALT", gpxStats?.highestPointM ? `${Math.round(gpxStats.highestPointM)} m` : "—"],
-    ["SYNC", `${Math.round(Math.min(99, focus === 2 ? 93 : focus === 1 ? 70 : 38))}%`],
+    ["TIME", gpxStats?.durationLabel ?? "—"],
+    ["D+", gpxStats?.elevationGainM ? `${Math.round(gpxStats.elevationGainM)} m` : "—"],
+    ["MAX", maxSpeedKmh ? `${Math.round(maxSpeedKmh)} km/h` : "—"],
   ];
   chips.forEach((chip, index) => {
     const chipX = Math.round(frameWidth * 0.05 + index * frameWidth * 0.19);
@@ -1103,12 +1345,16 @@ async function generateReelTitlePng(frameWidth: number, frameHeight: number, tit
   return new Uint8Array(await blob.arrayBuffer());
 }
 
-function planReelTitleWindow(totalDuration: number, introDuration: number, outroDuration: number) {
-  const start = Math.max(0.35, introDuration + 0.35);
+function planReelTitleWindow(totalDuration: number, introDuration: number, outroDuration: number, style: ReelStyle) {
+  const start = style === "sport"
+    ? Math.max(0.3, introDuration + 0.28)
+    : Math.max(0.35, introDuration + 0.35);
   const endBoundary = Math.max(start, totalDuration - Math.max(0.35, outroDuration + 0.35));
   const available = endBoundary - start;
   if (available < 1.4) return null;
-  const duration = clamp(available * 0.2, 1.2, 2.2);
+  const duration = style === "sport"
+    ? clamp(available * 0.18, 1.9, 3.3)
+    : clamp(available * 0.2, 1.2, 2.2);
   return { start, end: Math.min(endBoundary, start + duration) };
 }
 
@@ -1117,20 +1363,23 @@ function planOverlayTextWindows(
   totalDuration: number,
   introDuration: number,
   outroDuration: number,
-  minimumStartSeconds = 0
+  minimumStartSeconds = 0,
+  style: ReelStyle = "viral"
 ) {
   if (texts.length === 0) return [];
 
-  const startBoundary = Math.max(0.35, introDuration + 0.35, minimumStartSeconds);
-  const endBoundary = Math.max(startBoundary, totalDuration - Math.max(0.35, outroDuration + 0.35));
+  const startBoundary = style === "sport"
+    ? Math.max(0.14, minimumStartSeconds)
+    : Math.max(0.35, introDuration + 0.35, minimumStartSeconds);
+  const endBoundary = style === "sport"
+    ? Math.max(startBoundary, Math.min(totalDuration, 3.05))
+    : Math.max(startBoundary, totalDuration - Math.max(0.35, outroDuration + 0.35));
   const available = endBoundary - startBoundary;
-  if (available < 1.8) return [];
+  if (available < 1.2) return [];
 
-  const gap = texts.length > 1 ? 0.45 : 0;
+  const gap = texts.length > 1 ? (style === "sport" ? 0.08 : 0.45) : 0;
   const rawDuration = (available - gap * Math.max(0, texts.length - 1)) / texts.length;
-  // Keep the hook lines visible long enough to be read comfortably without
-  // covering the middle of the frame or rushing the first readable beat.
-  const overlayDuration = clamp(rawDuration, 2.8, 5.2);
+  const overlayDuration = style === "sport" ? clamp(rawDuration, 0.55, 0.95) : clamp(rawDuration, 2.8, 5.2);
   const totalNeeded = overlayDuration * texts.length + gap * Math.max(0, texts.length - 1);
   const offset = Math.max(0, (available - totalNeeded) / 2);
 
@@ -1178,12 +1427,24 @@ export interface BuildMontageParams {
   reelTitle?: ReelTitleOverlaySettings;
   /** Up to three custom overlay texts burned into the final exported MP4. */
   overlayTexts?: string[];
+  overlayFonts?: ReelTitleFont[];
+  overlaySizes?: ReelTitleSize[];
+  overlayColors?: ReelTitleColor[];
+  /** Optional selected hook text used to derive the sport opener sequence. */
+  openerHookText?: string;
   /** Optional route label shown in sport telemetry overlays. */
   routeLabel?: string | null;
   /** Optional GPX stats shown in sport telemetry overlays. */
   gpxStats?: GpxRouteStats | null;
   /** Optional sport-mode telemetry detail. */
-  sportTelemetry?: { maxSpeedKmh?: number | null } | null;
+  sportTelemetry?: SportTelemetry | null;
+  /** Optional GPX-derived points passed by the page; currently unused here but accepted by callers. */
+  gpxPoints?: { lat: number; lng: number }[] | null;
+  routeFocusPoints?: { lat: number; lng: number }[] | null;
+  customTextOverlays?: string[];
+  metadataCardLines?: string[] | null;
+  emotionalStory?: unknown;
+  adventureSetupOverlay?: unknown;
   /** Called with a 0–1 ratio whenever rendering progresses. Never exceeds 0.97 until the file is fully written. */
   onProgress?: (ratio: number) => void;
   /** Called with a human-readable label at the start of each pipeline phase (for UI status display). */
@@ -1249,42 +1510,19 @@ export async function buildMontage(params: BuildMontageParams): Promise<BuildMon
     try { await prev; } catch { /* previous render failed; safe to continue */ }
   }
 
-  let attempt = 0;
   try {
-    while (true) {
-      try {
-        return await _buildMontage(params);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        const audioRelated = /audio|stream specifier|stream map|acrossfade|amix|anullsrc|aac/i.test(message);
-        const audioRequested = params.videoAudioEnabled ? params.videoAudioEnabled.some(Boolean) : (params.keepOriginalAudio ?? true);
-
-        const isFsError = message.includes("FS error") || message.includes("ErrnoError") || message.includes("errno");
-        if (isFsError && attempt === 0) {
-          attempt += 1;
-          console.warn("[video-engine] FS error detected — retrying render with a fresh ffmpeg instance");
-          resetFFmpegSingleton();
-          continue;
-        }
-
-        if (!audioRequested || !audioRelated) {
-          throw err;
-        }
-
-        console.warn("[video-engine] Original-audio export failed; retrying without audio:", message);
-        return await _buildMontage({ ...params, keepOriginalAudio: false });
-      }
-    }
+    return await _buildMontage(params);
   } catch (err) {
-    // ErrnoError from Emscripten FS usually means the singleton is
-    // corrupted (stale files, OOM, or concurrent access). Reset it so the
-    // next render gets a fresh instance.
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes("FS error") || msg.includes("ErrnoError") || msg.includes("errno")) {
-      console.warn("[video-engine] FS error detected — resetting ffmpeg singleton for next render");
-      resetFFmpegSingleton();
+    const message = err instanceof Error ? err.message : String(err);
+    const audioRelated = /audio|stream specifier|stream map|acrossfade|amix|anullsrc|aac/i.test(message);
+    const audioRequested = params.videoAudioEnabled ? params.videoAudioEnabled.some(Boolean) : (params.keepOriginalAudio ?? true);
+
+    if (!audioRequested || !audioRelated) {
+      throw err;
     }
-    throw err;
+
+    console.warn("[video-engine] Original-audio export failed; retrying without audio:", message);
+    return await _buildMontage({ ...params, keepOriginalAudio: false });
   } finally {
     releaseLock();
     renderLock = null;
@@ -1292,7 +1530,6 @@ export async function buildMontage(params: BuildMontageParams): Promise<BuildMon
 }
 
 async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageResult> {
-  resetFFmpegSingleton();
   const {
     files,
     videoDurations,
@@ -1312,6 +1549,10 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     kenBurnsTier = "standard",
     reelTitle,
     overlayTexts = [],
+    overlayFonts = [],
+    overlaySizes = [],
+    overlayColors = [],
+    openerHookText,
     routeLabel,
     gpxStats,
     sportTelemetry,
@@ -1354,13 +1595,41 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
   );
   const watermarkLeft = Math.round(w * 0.04);
   const watermarkTop = Math.round(h * 0.07);
-  const cleanedReelTitle = reelTitle?.text.trim()
-    ? { ...reelTitle, text: reelTitle.text.trim() }
+  const sportDefaultTitleText = style === "sport"
+    ? (reelTitle?.text.trim() || (routeLabel && isCoherentDisplayText(routeLabel) ? routeLabel : (openerHookText && isCoherentDisplayText(openerHookText) ? openerHookText : "SPORT MODE")))
+    : reelTitle?.text.trim() || "";
+  const cleanedReelTitle = sportDefaultTitleText.trim()
+    ? {
+        ...reelTitle,
+        text: sportDefaultTitleText.trim(),
+        font: reelTitle?.font ?? "cinematic",
+        size: reelTitle?.size ?? "md",
+        color: reelTitle?.color ?? "white",
+      }
     : null;
-  const cleanedOverlayTexts = filterCoherentDisplayTexts(overlayTexts).slice(0, 3);
+  const sportHookSequence = style === "sport"
+    ? buildSportHookSequence({
+        routeLabel,
+        gpxStats,
+        sportTelemetry,
+        fallbackText: openerHookText || sportDefaultTitleText || "SPORT MODE",
+        customTexts: filterCoherentDisplayTexts(overlayTexts),
+        overlayFonts,
+        overlaySizes,
+        overlayColors,
+      })
+    : [];
+  const normalizedSportHookSequence: SportHookBeat[] = style === "sport" && sportHookSequence.length > 0 ? sportHookSequence : [
+    { text: `${sportDefaultTitleText || "SPORT MODE"} READY TO RIDE`, label: "LIVE SPORT", title: sportDefaultTitleText || "SPORT MODE", subtitle: "READY TO RIDE", accent: "white", effect: "scratch", theme: "sport", align: "left", font: "bold", size: "md", color: "white" },
+    { text: "FULL SEND OFFROAD ENERGY", label: "BREAKAWAY", title: "FULL SEND", subtitle: "OFFROAD ENERGY", accent: "orange", effect: "terrain", theme: "sport", align: "right", font: "bold", size: "md", color: "white" },
+    { text: "OFFROAD DUST AND FREEDOM", label: "TERRAIN", title: "OFFROAD", subtitle: "DUST AND FREEDOM", accent: "sand", effect: "dust", theme: "sport", align: "left", font: "bold", size: "md", color: "white" },
+  ];
+  const cleanedOverlayTexts = style === "sport"
+    ? normalizedSportHookSequence.map((beat) => beat.text || beat.title)
+    : filterCoherentDisplayTexts(overlayTexts).slice(0, 3);
 
   const introDuration = introClip?.durationSeconds ?? 0;
-  const outroDuration = outroClip?.durationSeconds ?? 0;
+  const outroDuration = style === "sport" ? Math.min(outroClip?.durationSeconds ?? 0, 3) : outroClip?.durationSeconds ?? 0;
   const reelContentTarget = Math.max(12, Math.min(60, maxReelSeconds) - introDuration - outroDuration);
   const segments = mode === "reel"
     ? planReelSegments(bestMoments, recipe, videoDurations, reelContentTarget)
@@ -1488,8 +1757,8 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
 
   const planSportTelemetryWindows = (durationSeconds: number) => {
     if (sportTelemetryOverlayNames.length === 0) return [];
-    const startBoundary = Math.max(0.35, (introClip?.durationSeconds ?? 0) + 0.35);
-    const endBoundary = Math.max(startBoundary, durationSeconds - Math.max(0.35, (outroClip?.durationSeconds ?? 0) + 0.35));
+    const startBoundary = Math.max(0.35, introDuration + 0.35);
+    const endBoundary = Math.max(startBoundary, durationSeconds - Math.max(0.35, outroDuration + 0.35));
     const available = endBoundary - startBoundary;
     if (available < 2.4) return [];
     const segment = available / sportTelemetryOverlayNames.length;
@@ -1527,6 +1796,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
 
   const segmentClipNames: string[] = [];
   const segmentDurations: number[] = [];
+  const retainedFinalOutputs = new Set<string>();
   const tempFiles: string[] = [
     ...inputNames,
     ...(introSourceName ? [introSourceName] : []),
@@ -1540,18 +1810,27 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
   try {
     for (let i = 0; i < cleanedOverlayTexts.length; i++) {
       const name = `overlay_text_${stamp}_${i}.png`;
+      const sportBeat = style === "sport" ? normalizedSportHookSequence[i] : undefined;
       const overlayCacheKey = await buildRenderCacheKey("overlay-text-v2", [
         w,
         h,
         style,
         cleanedOverlayTexts[i],
+        sportBeat?.label ?? "",
+        sportBeat?.subtitle ?? "",
+        sportBeat?.theme ?? "",
+        sportBeat?.align ?? "",
+        sportBeat?.effect ?? "",
+        sportBeat?.font ?? "",
+        sportBeat?.size ?? "",
+        sportBeat?.color ?? "",
       ]);
       const cachedOverlay = getCachedBinaryAsset(overlayCacheKey);
       console.log(`[video-engine] checkpoint: overlay ${i} start`);
       if (cachedOverlay) {
         await ffmpeg.writeFile(name, cloneFFmpegData(cachedOverlay));
       } else {
-        const data = await generateOverlayTextPng(w, h, cleanedOverlayTexts[i], style);
+        const data = await generateOverlayTextPng(w, h, cleanedOverlayTexts[i], style, sportBeat);
         putCachedBinaryAsset(overlayCacheKey, data, "image/png");
         await ffmpeg.writeFile(name, cloneFFmpegData(data));
       }
@@ -1559,6 +1838,8 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       overlayTextNames.push(name);
       tempFiles.push(name);
     }
+
+    const appendSportInsertFilters = (baseLabel: string) => ({ finalLabel: baseLabel, inputsUsed: 0 });
 
     const appendOverlayFilters = (
       filterParts: string[],
@@ -1569,9 +1850,10 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     ) => {
       const titleWindow = cleanedReelTitle
         ? planReelTitleWindow(
-            durationSeconds,
-            introClip?.durationSeconds ?? 0,
-            outroClip?.durationSeconds ?? 0
+          durationSeconds,
+          introDuration,
+          outroDuration,
+          style
           )
         : null;
       const sportWindows = planSportTelemetryWindows(durationSeconds);
@@ -1579,48 +1861,86 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         return { finalLabel: baseLabel, overlaysUsed: 0, usedTitle: false, usedSport: false };
       }
 
-      const sportInputOffset = sportTelemetryOverlayNames.length;
-      const titleInputOffset = reelTitleName ? 1 : 0;
-      const overlays = planOverlayTextWindows(
-        cleanedOverlayTexts,
-        durationSeconds,
-        introClip?.durationSeconds ?? 0,
-        outroClip?.durationSeconds ?? 0,
-        titleWindow ? titleWindow.end + 0.35 : 0
-      );
+      const overlays = style === "sport"
+        ? planSportHookWindows(
+          normalizedSportHookSequence,
+          durationSeconds,
+          introDuration,
+          outroDuration,
+          titleWindow ? titleWindow.end + 0.45 : 0
+          )
+        : planOverlayTextWindows(
+          cleanedOverlayTexts,
+          durationSeconds,
+          introDuration,
+          outroDuration,
+          titleWindow ? titleWindow.end + 0.35 : 0,
+          style
+          );
 
       let currentLabel = baseLabel;
+      let nextInputIndex = firstInputIndex;
+
+      if (style !== "sport") {
+        sportWindows.forEach((window, index) => {
+          const inputIndex = nextInputIndex;
+          nextInputIndex += 1;
+          const sportLabel = `${labelPrefix}_sportsrc_${index}`;
+          const sportOutLabel = `${labelPrefix}_sport_${index}`;
+          filterParts.push(`[${inputIndex}:v]format=rgba[${sportLabel}]`);
+          filterParts.push(
+          `[${currentLabel}][${sportLabel}]overlay=0:0:enable='between(t,${window.start.toFixed(3)},${window.end.toFixed(3)})'[${sportOutLabel}]`
+          );
+          currentLabel = sportOutLabel;
+        });
+      }
+
       if (reelTitleName && titleWindow) {
+        const inputIndex = nextInputIndex;
+        nextInputIndex += 1;
         const titleLabel = `${labelPrefix}_titlesrc`;
         const titleOutLabel = `${labelPrefix}_title`;
-        filterParts.push(`[${firstInputIndex + sportInputOffset}:v]format=rgba[${titleLabel}]`);
+        filterParts.push(`[${inputIndex}:v]format=rgba[${titleLabel}]`);
         filterParts.push(
           `[${currentLabel}][${titleLabel}]overlay=(W-w)/2:H*0.08:enable='between(t,${titleWindow.start.toFixed(3)},${titleWindow.end.toFixed(3)})'[${titleOutLabel}]`
         );
         currentLabel = titleOutLabel;
       }
+
       overlays.forEach((overlay, index) => {
-        const inputIndex = firstInputIndex + sportInputOffset + titleInputOffset + index;
+        const inputIndex = nextInputIndex;
+        nextInputIndex += 1;
         const textLabel = `${labelPrefix}_txtsrc_${index}`;
         const outLabel = `${labelPrefix}_txt_${index}`;
-        filterParts.push(`[${inputIndex}:v]format=rgba[${textLabel}]`);
-        filterParts.push(
+        if (style === "sport") {
+          const sportOverlay = overlay as SportHookWindow;
+          const overlayDuration = Math.max(0.45, overlay.end - overlay.start);
+          const introFade = Math.min(0.24, overlayDuration * 0.3);
+          const outroFade = Math.min(0.14, overlayDuration * 0.24);
+          const slideDistance = Math.round(w * 0.045);
+          const anchorMargin = Math.round(w * 0.06);
+          const xExpr = sportOverlay.align === "right"
+          ? `if(lt(t,${(overlay.start + introFade).toFixed(3)}),W-w-${anchorMargin}-${slideDistance} + ${slideDistance} * ((t-${overlay.start.toFixed(3)})/${introFade.toFixed(3)}),W-w-${anchorMargin})`
+          : `if(lt(t,${(overlay.start + introFade).toFixed(3)}),${anchorMargin}+${slideDistance} - ${slideDistance} * ((t-${overlay.start.toFixed(3)})/${introFade.toFixed(3)}),${anchorMargin})`;
+          const yExpr = sportOverlay.align === "right"
+          ? "H*0.55"
+          : "H*0.57";
+          filterParts.push(
+          `[${inputIndex}:v]loop=loop=999:size=1:start=0,trim=duration=${overlayDuration.toFixed(3)},setpts=PTS-STARTPTS,format=rgba,fade=t=in:st=0:d=${introFade.toFixed(3)}:alpha=1,fade=t=out:st=${Math.max(0, overlayDuration - outroFade).toFixed(3)}:d=${outroFade.toFixed(3)}:alpha=1[${textLabel}]`
+          );
+          filterParts.push(
+          `[${currentLabel}][${textLabel}]overlay=${xExpr}:${yExpr}:enable='between(t,${overlay.start.toFixed(3)},${overlay.end.toFixed(3)})'[${outLabel}]`
+          );
+        } else {
+          filterParts.push(`[${inputIndex}:v]format=rgba[${textLabel}]`);
+          filterParts.push(
           `[${currentLabel}][${textLabel}]overlay=(W-w)/2:H*0.32:enable='between(t,${overlay.start.toFixed(3)},${overlay.end.toFixed(3)})'[${outLabel}]`
-        );
+          );
+        }
         currentLabel = outLabel;
       });
-      sportWindows.forEach((window, index) => {
-        const inputIndex = firstInputIndex + index;
-        const sportLabel = `${labelPrefix}_sportsrc_${index}`;
-        const sportOutLabel = `${labelPrefix}_sport_${index}`;
-        filterParts.push(`[${inputIndex}:v]format=rgba[${sportLabel}]`);
-        filterParts.push(
-          `[${currentLabel}][${sportLabel}]overlay=0:0:enable='between(t,${window.start.toFixed(3)},${window.end.toFixed(3)})'[${sportOutLabel}]`
-        );
-        currentLabel = sportOutLabel;
-      });
 
-      return { finalLabel: currentLabel, overlaysUsed: overlays.length, usedTitle: !!titleWindow, usedSport: sportWindows.length > 0 };
+      return { finalLabel: currentLabel, overlaysUsed: overlays.length, usedTitle: !!titleWindow, usedSport: style !== "sport" && sportWindows.length > 0 };
     };
 
     const appendAudioChain = (
@@ -1666,7 +1986,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         introName = `intro_norm_${stamp}.mp4`;
         const introCacheKey = await buildRenderCacheKey("intro-norm-v1", [
           fingerprintFile(introClip!.file),
-          introClip!.durationSeconds,
+          introDuration,
           quality,
           w,
           h,
@@ -1683,6 +2003,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
             ffmpeg.exec([
               "-fflags", "+genpts",
               "-i", introSourceName,
+              "-t", introDuration.toFixed(3),
               "-vf", `fps=${RENDER_FPS},scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setpts=PTS-STARTPTS,format=yuv420p`,
               "-r", String(RENDER_FPS),
               ...encoderArgs,
@@ -1717,7 +2038,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       outroName = `outro_norm_${stamp}.mp4`;
       const outroCacheKey = await buildRenderCacheKey("outro-norm-v1", [
         fingerprintFile(outroClip!.file),
-        outroClip!.durationSeconds,
+        outroDuration,
         quality,
         w,
         h,
@@ -1733,6 +2054,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         await ffmpeg.exec([
           "-fflags", "+genpts",
           "-i", outroSourceName,
+          "-t", outroDuration.toFixed(3),
           "-vf", `fps=${RENDER_FPS},scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setpts=PTS-STARTPTS,format=yuv420p`,
           "-r", String(RENDER_FPS),
           ...encoderArgs,
@@ -1811,16 +2133,149 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     console.log(`[video-engine] Phase 1 (${segments.length} clips, HW codec, KenBurns=${effectiveKenBurnsTier}): ${elapsed("phase1-start", "phase1-done")}`);
 
     const finalClipNames = [...(introName ? [introName] : []), ...segmentClipNames, ...(outroName ? [outroName] : [])];
-    const finalDurations = [...(introName ? [introClip!.durationSeconds] : []), ...segmentDurations, ...(outroName ? [outroClip!.durationSeconds] : [])];
+    let finalDurations = [...(introName ? [introDuration] : []), ...segmentDurations, ...(outroName ? [outroDuration] : [])];
 
-    // ── Helper: read + convert output file, then report final progress phases ──
-    const finaliseOutput = async (name: string, durationSeconds: number, clipCount: number): Promise<BuildMontageResult> => {
+    // SPORT mode is the most FS-sensitive path in ffmpeg.wasm, but the reel also
+    // needs enough distinct clips to preserve the planned narrative (intro -> action
+    // beats -> outro). Keep the final graph compact without collapsing the montage to
+    // a single-shot fallback or stripping the required title/hook/outro sequence.
+    const composeCap = style === "sport" ? 5 : 6;
+    if (finalClipNames.length > composeCap) {
+      const preferIntro = introName ? finalClipNames.indexOf(introName) : -1;
+      const preferOutro = outroName ? finalClipNames.lastIndexOf(outroName) : -1;
+      const keepIndexes = new Set<number>();
+      if (preferIntro >= 0) keepIndexes.add(preferIntro);
+      if (preferOutro >= 0) keepIndexes.add(preferOutro);
+      for (let index = 0; index < finalClipNames.length && keepIndexes.size < composeCap; index++) {
+        if (index === preferIntro || index === preferOutro) continue;
+        keepIndexes.add(index);
+      }
+      const trimmed = [...keepIndexes].sort((a, b) => a - b).map((index) => finalClipNames[index]);
+      const trimmedDurations = trimmed.map((name) => {
+        const index = finalClipNames.indexOf(name);
+        return index >= 0 ? finalDurations[index] : 0;
+      });
+      const reducedTotal = trimmedDurations.reduce((sum, duration) => sum + duration, 0);
+      if (reducedTotal > 0.1) {
+        finalClipNames.splice(0, finalClipNames.length, ...trimmed);
+        finalDurations = trimmedDurations;
+      }
+    }
+
+    // Keep the final encode and readback on the same FFmpeg instance. The
+    // browser-side FS is single-instance and the fresh-instance copy step can
+    // leave the output file present in one in-memory FS but unreadable in the
+    // actual render/session that is still active.
+    const readFinalOutputFile = async (ffmpegInstance: FFmpeg, fileName: string): Promise<Uint8Array> => {
+        const candidatePaths = [
+          fileName,
+          `/home/${fileName}`,
+          `/tmp/${fileName}`,
+          `home/${fileName}`,
+          `tmp/${fileName}`,
+        ];
+        const joinPath = (base: string, child: string) => {
+          if (!base || base === "/") return `/${child}`;
+          return `${base.replace(/\/$/, "")}/${child}`;
+        };
+        const tryReadPath = async (candidatePath: string): Promise<Uint8Array | null> => {
+          try {
+            const data = await ffmpegInstance.readFile(candidatePath) as Uint8Array;
+            if (data.byteLength === 0) {
+              console.warn(`[video-engine] finaliseOutput readFile returned empty data for ${candidatePath}`);
+              return null;
+            }
+            console.log(`[video-engine] finaliseOutput readFile succeeded for ${candidatePath} (${data.byteLength} bytes)`);
+            return data;
+          } catch {
+            return null;
+          }
+        };
+        const scanDirectory = async (dirPath: string, depth: number): Promise<{ path: string; data: Uint8Array } | null> => {
+          try {
+            const entries = await ffmpegInstance.listDir(dirPath);
+            console.log(`[video-engine] finaliseOutput scan ${dirPath} for ${fileName}:`, entries.map((entry) => entry.name));
+            for (const entry of entries) {
+              if (entry.name === "." || entry.name === "..") continue;
+              const candidatePath = joinPath(dirPath, entry.name);
+              const directData = await tryReadPath(candidatePath);
+              if (directData) return { path: candidatePath, data: directData };
+              if (depth > 0) {
+                const nested = await scanDirectory(candidatePath, depth - 1);
+                if (nested) return nested;
+              }
+            }
+          } catch (error) {
+            console.log(`[video-engine] finaliseOutput scan failed for ${dirPath}:`, error);
+          }
+          return null;
+        };
+        let lastError: unknown;
+        for (let attempt = 0; attempt < 4; attempt++) {
+          try {
+            if (attempt > 0) {
+              await new Promise((resolve) => window.setTimeout(resolve, 150 * attempt));
+            }
+            for (const candidatePath of candidatePaths) {
+              const data = await tryReadPath(candidatePath);
+              if (data) return data;
+            }
+            for (const dirPath of ["/", "/home", "/tmp", "home", "tmp"]) {
+              const scanned = await scanDirectory(dirPath, 1);
+              if (scanned) return scanned.data;
+            }
+            const rootEntries = await ffmpegInstance.listDir('/');
+            console.log(`[video-engine] finaliseOutput FS root for ${fileName} (attempt ${attempt + 1}):`, rootEntries.map((entry) => entry.name));
+            throw new Error(`FFmpeg output file ${fileName} missing from in-memory FS.`);
+          } catch (error) {
+            lastError = error;
+            const message = error instanceof Error ? error.message : String(error);
+            if (attempt < 3 && /FS error|ENOENT|No such file|missing from in-memory FS|not found/i.test(message)) {
+              console.warn(`[video-engine] Final output read retry ${attempt + 1}/4 for ${fileName}:`, error);
+              continue;
+            }
+            throw error;
+          }
+        }
+        throw lastError ?? new Error(`Failed to read final output ${fileName}.`);
+    };
+
+  const finaliseOutput = async (name: string, durationSeconds: number, clipCount: number, outputFFmpeg: FFmpeg = ffmpeg): Promise<BuildMontageResult> => {
+      retainedFinalOutputs.add(name);
       onPhaseChange?.("Writing output file…");
       onProgress?.(0.95);
-      const data = await ffmpeg.readFile(name);
+      let data: Uint8Array;
+      try {
+        data = await readFinalOutputFile(outputFFmpeg, name);
+      } catch (error) {
+        if (outputFFmpeg !== ffmpeg) {
+          try {
+            console.warn(`[video-engine] finaliseOutput falling back to primary FFmpeg instance for ${name}.`);
+            data = await readFinalOutputFile(ffmpeg, name);
+          } catch (primaryError) {
+            try {
+              const directory = await outputFFmpeg.listDir('/');
+              console.error(`[video-engine] finaliseOutput readFile failed for ${name}. Root dir:`, directory.map((entry) => entry.name));
+            } catch (dirError) {
+              console.error(`[video-engine] finaliseOutput readFile failed for ${name}; failed to inspect FS root.`, dirError);
+            }
+            console.error(`[video-engine] finaliseOutput readFile failed for ${name}`, primaryError);
+            throw primaryError;
+          }
+        } else {
+        try {
+          const directory = await outputFFmpeg.listDir('/');
+          console.error(`[video-engine] finaliseOutput readFile failed for ${name}. Root dir:`, directory.map((entry) => entry.name));
+        } catch (dirError) {
+          console.error(`[video-engine] finaliseOutput readFile failed for ${name}; failed to inspect FS root.`, dirError);
+        }
+        console.error(`[video-engine] finaliseOutput readFile failed for ${name}`, error);
+        throw error;
+        }
+      }
       onProgress?.(0.97);
       onPhaseChange?.("Verifying export…");
-      const blob = ensureNonEmptyVideoBlob(data as Uint8Array, "video/mp4");
+      const blob = ensureNonEmptyVideoBlob(data, "video/mp4");
       onProgress?.(0.99);
       const url = URL.createObjectURL(blob);
       mark("done");
@@ -1847,7 +2302,8 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
 
     // --- Single clip, no watermark: no re-encode needed, it *is* the final montage ---
     if (finalClipNames.length === 1 && !watermark) {
-      if (overlayTextNames.length === 0 && !cleanedReelTitle && sportTelemetryOverlayNames.length === 0) {
+      const singleSportInsertPlan = appendSportInsertFilters("0:v");
+      if (overlayTextNames.length === 0 && !cleanedReelTitle && sportTelemetryOverlayNames.length === 0 && singleSportInsertPlan.inputsUsed === 0) {
         if (sourceAudioEnabled[0] ?? true) {
           return finaliseOutput(finalClipNames[0], finalDurations[0], 1);
         }
@@ -1872,15 +2328,22 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
 
       const outputName = `out_${stamp}.mp4`;
       const filterParts: string[] = [];
-      const { finalLabel, overlaysUsed, usedTitle, usedSport } = appendOverlayFilters(filterParts, "0:v", 1, finalDurations[0], "single");
-      if (overlaysUsed === 0 && !usedTitle && !usedSport) {
+      const { finalLabel: afterInsertLabel, inputsUsed: sportInsertInputs } = appendSportInsertFilters("0:v");
+      const { finalLabel, overlaysUsed, usedTitle, usedSport } = appendOverlayFilters(
+        filterParts,
+        afterInsertLabel,
+        1 + sportInsertInputs,
+        finalDurations[0],
+        "single"
+      );
+      if (overlaysUsed === 0 && !usedTitle && !usedSport && sportInsertInputs === 0) {
         return finaliseOutput(finalClipNames[0], finalDurations[0], 1);
       }
       onPhaseChange?.("Burning in overlay text…");
       await ffmpeg.exec([
         "-i",
         finalClipNames[0],
-        ...sportTelemetryOverlayNames.flatMap((name) => ["-i", name]),
+        ...(style !== "sport" ? sportTelemetryOverlayNames.flatMap((name) => ["-i", name]) : []),
         ...(reelTitleName ? ["-i", reelTitleName] : []),
         ...overlayTextNames.slice(0, overlaysUsed).flatMap((name) => ["-i", name]),
         "-filter_complex",
@@ -1905,11 +2368,12 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       onPhaseChange?.("Applying watermark…");
       const outputName = `out_${stamp}.mp4`;
       const filterParts = [`[1:v]format=rgba[wm]`, `[0:v][wm]overlay=${watermarkLeft}:${watermarkTop}[vwm]`];
-      const { finalLabel, overlaysUsed } = appendOverlayFilters(filterParts, "vwm", 2, finalDurations[0], "singlewm");
+      const { finalLabel: afterInsertLabel, inputsUsed: sportInsertInputs } = appendSportInsertFilters("vwm");
+      const { finalLabel, overlaysUsed } = appendOverlayFilters(filterParts, afterInsertLabel, 2 + sportInsertInputs, finalDurations[0], "singlewm");
       await ffmpeg.exec([
         "-i", finalClipNames[0],
         "-i", watermarkName as string,
-        ...sportTelemetryOverlayNames.flatMap((name) => ["-i", name]),
+        ...(style !== "sport" ? sportTelemetryOverlayNames.flatMap((name) => ["-i", name]) : []),
         ...(reelTitleName ? ["-i", reelTitleName] : []),
         ...overlayTextNames.slice(0, overlaysUsed).flatMap((name) => ["-i", name]),
         "-filter_complex",
@@ -1927,7 +2391,137 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       return finaliseOutput(outputName, finalDurations[0], 1);
     }
 
-    // --- Phase 2: cross-fade the small pre-rendered clips together (+ optional watermark overlay) ---
+    // --- Phase 2: compose the finished timeline. For SPORT and other dense
+    // reels, the xfade chain can be too heavy for browser ffmpeg.wasm at the
+    // very end of export, so fall back to a simpler concat path when the clip
+    // count is high. This keeps the montage dynamic while avoiding the final
+    // 95% crash that comes from a very long transition graph.
+    const useCompactConcatFallback = shouldUseCompactConcatFallback(style, finalClipNames.length);
+    if (useCompactConcatFallback) {
+      onPhaseChange?.(`Compositing ${finalClipNames.length} clips in compact mode…`);
+      mark("phase2-start");
+
+      const baseOutputName = `base_${stamp}.mp4`;
+      const concatManifestName = `concat_${stamp}.txt`;
+      await ffmpeg.writeFile(concatManifestName, buildConcatManifest(finalClipNames));
+      tempFiles.push(concatManifestName);
+      try {
+        await ffmpeg.exec([
+          "-f", "concat",
+          "-safe", "0",
+          "-i", concatManifestName,
+          "-c", "copy",
+          baseOutputName,
+        ]);
+      } catch (error) {
+        console.warn("[video-engine] compact-concat copy join failed; falling back to re-encode concat", error);
+        const concatFilterParts: string[] = [];
+        const concatInputs = finalClipNames.map((_, index) => `[${index}:v]`).join("");
+        concatFilterParts.push(`${concatInputs}concat=n=${finalClipNames.length}:v=1:a=0[vbase]`);
+
+        const baseExecArgs = finalClipNames.flatMap((name) => ["-i", name]);
+        baseExecArgs.push(
+          "-filter_complex", concatFilterParts.join(";"),
+          "-map", "[vbase]",
+          "-an",
+          "-r", String(RENDER_FPS),
+          ...encoderArgs,
+          "-pix_fmt", "yuv420p",
+          "-threads", "0",
+          baseOutputName
+        );
+        try {
+          await ffmpeg.exec(baseExecArgs);
+        } catch (fallbackError) {
+          console.error("[video-engine] compact-concat base composition failed", fallbackError);
+          throw fallbackError;
+        }
+      }
+      tempFiles.push(baseOutputName);
+
+      const renderDuration = Math.max(finalDurations.reduce((sum, d) => sum + d, 0), 0.5);
+      const finalStageFFmpeg = await loadFFmpeg();
+      const stageTransferFiles = [
+        baseOutputName,
+        ...(watermark ? [watermarkName as string] : []),
+        ...(reelTitleName ? [reelTitleName] : []),
+        ...sportTelemetryOverlayNames,
+        ...overlayTextNames,
+      ];
+      for (const fileName of stageTransferFiles) {
+        try {
+          const data = await ffmpeg.readFile(fileName) as Uint8Array;
+          await finalStageFFmpeg.writeFile(fileName, cloneFFmpegData(data));
+        } catch (error) {
+          console.warn(`[video-engine] Failed to stage ${fileName} into compact final FFmpeg instance:`, error);
+        }
+      }
+
+      const overlayFilterParts: string[] = [];
+      const overlayExecArgs = ["-i", baseOutputName];
+      let currentLabel = "0:v";
+      let overlayStartIndex = 1;
+
+      if (watermark) {
+        overlayExecArgs.push("-i", watermarkName as string);
+        overlayFilterParts.push(`[1:v]format=rgba[wm]`);
+        overlayFilterParts.push(`[0:v][wm]overlay=${watermarkLeft}:${watermarkTop}[vwm]`);
+        currentLabel = "vwm";
+        overlayStartIndex = 2;
+      }
+
+      const { finalLabel: afterInsertLabel, inputsUsed: multiSportInsertInputs } = appendSportInsertFilters(currentLabel);
+      overlayStartIndex += multiSportInsertInputs;
+      const { finalLabel, overlaysUsed } = appendOverlayFilters(
+        overlayFilterParts,
+        afterInsertLabel,
+        overlayStartIndex,
+        renderDuration,
+        "multi"
+      );
+      if (style !== "sport") {
+        overlayExecArgs.push(...sportTelemetryOverlayNames.flatMap((name) => ["-i", name]));
+      }
+      if (reelTitleName) overlayExecArgs.push("-i", reelTitleName);
+      overlayExecArgs.push(...overlayTextNames.slice(0, overlaysUsed).flatMap((name) => ["-i", name]));
+
+      if (overlayFilterParts.length === 0 && !watermark) {
+        tempFiles.push(baseOutputName);
+        return finaliseOutput(baseOutputName, renderDuration, finalClipNames.length);
+      }
+
+      console.log("[video-engine] compact-overlay debug", {
+        baseOutputName,
+        outputName: `out_${stamp}.mp4`,
+        inputs: overlayExecArgs,
+        filterComplex: overlayFilterParts.join(";"),
+      });
+      const outputName = `out_${stamp}.mp4`;
+      overlayExecArgs.push(
+        "-filter_complex", overlayFilterParts.join(";"),
+        "-map", `[${finalLabel}]`,
+        "-an",
+        "-r", String(RENDER_FPS),
+        ...encoderArgs,
+        "-pix_fmt", "yuv420p",
+        "-threads", "0",
+        outputName
+      );
+
+      try {
+        await finalStageFFmpeg.exec(overlayExecArgs);
+      } catch (error) {
+        console.error("[video-engine] compact-concat overlay composition failed", error);
+        throw error;
+      }
+      completedUnits++;
+      mark("phase2-done");
+      console.log(`[video-engine] Phase 2 (compact-concat compose): ${elapsed("phase2-start", "phase2-done")}`);
+
+      tempFiles.push(outputName);
+      return finaliseOutput(outputName, renderDuration, finalClipNames.length, finalStageFFmpeg);
+    }
+
     onPhaseChange?.(`Compositing ${finalClipNames.length} clips with transitions…`);
     mark("phase2-start");
     const filterParts: string[] = [];
@@ -1938,7 +2532,11 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
 
     for (let i = 1; i < finalClipNames.length; i++) {
       const transitionName = pickTransitionName(transitionPool, prevTransitionName);
-      const transitionDuration = Math.min(randomTransitionDuration(transitionPool), finalDurations[i - 1], finalDurations[i]);
+      const transitionDuration = capTransitionDuration(
+        randomTransitionDuration(transitionPool),
+        finalDurations[i - 1],
+        finalDurations[i]
+      );
       prevTransitionName = transitionName;
       transitionDurations.push(transitionDuration);
 
@@ -1953,7 +2551,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
 
     const execArgs = finalClipNames.flatMap((name) => ["-i", name]);
     let mapTarget = "[vpre]";
-    const overlayStartIndex = finalClipNames.length + (watermark ? 1 : 0);
+    let overlayStartIndex = finalClipNames.length + (watermark ? 1 : 0);
     if (watermark) {
       const wmInputIndex = finalClipNames.length;
       execArgs.push("-i", watermarkName as string);
@@ -1961,14 +2559,18 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       filterParts.push(`[vpre][wm]overlay=${watermarkLeft}:${watermarkTop}[vout]`);
       mapTarget = "[vout]";
     }
+    const { finalLabel: afterInsertLabel, inputsUsed: multiSportInsertInputs } = appendSportInsertFilters(mapTarget.slice(1, -1));
+    overlayStartIndex += multiSportInsertInputs;
     const { finalLabel, overlaysUsed } = appendOverlayFilters(
       filterParts,
-      mapTarget.slice(1, -1),
+      afterInsertLabel,
       overlayStartIndex,
       Math.max(acc, 0.5),
       "multi"
     );
-    execArgs.push(...sportTelemetryOverlayNames.flatMap((name) => ["-i", name]));
+    if (style !== "sport") {
+      execArgs.push(...sportTelemetryOverlayNames.flatMap((name) => ["-i", name]));
+    }
     if (reelTitleName) {
       execArgs.push("-i", reelTitleName);
     }
@@ -1994,7 +2596,12 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       outputName
     );
 
-    await ffmpeg.exec(execArgs);
+    try {
+      await ffmpeg.exec(execArgs);
+    } catch (error) {
+      console.error("[video-engine] xfade final composition failed", error);
+      throw error;
+    }
     completedUnits++;
     mark("phase2-done");
     console.log(`[video-engine] Phase 2 (compose): ${elapsed("phase2-start", "phase2-done")}`);
@@ -2003,7 +2610,15 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     return finaliseOutput(outputName, Math.max(acc, 0.5), finalClipNames.length);
   } finally {
     ffmpeg.off("progress", progressHandler);
-    await Promise.all(tempFiles.map((name) => ffmpeg.deleteFile(name).catch(() => {})));
-    resetFFmpegSingleton();
+    for (const name of tempFiles) {
+      if (retainedFinalOutputs.has(name)) continue;
+      try {
+        await ffmpeg.deleteFile(name);
+      } catch (error) {
+        if (!isIgnorableFsCleanupError(error)) {
+          console.warn(`[video-engine] Cleanup skipped for ${name}:`, error);
+        }
+      }
+    }
   }
 }

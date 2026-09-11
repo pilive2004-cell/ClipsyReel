@@ -1,5 +1,3 @@
-import { ReelStyle } from "@/types";
-
 export type AdventureEventType =
   | "Adventure Ride"
   | "Raid"
@@ -533,40 +531,22 @@ const PROFILE_EVENT_IDS: Record<DiscoveryProfile, string[]> = {
   ],
 };
 
-export function inferDiscoveryProfile(style: ReelStyle, videoNames: string[]): DiscoveryProfile {
-  if (style === "sport") return "sport";
-  if (style === "travel") return "travel";
-  if (style === "adventure") return "adventure";
-
+export function inferDiscoveryProfile(videoNames: string[]): DiscoveryProfile {
   const haystack = videoNames.join(" ").toLowerCase();
   if (/(track|motogp|race|racing|circuit|speed)/.test(haystack)) return "sport";
   if (/(trip|travel|roadtrip|tour|journey|overland)/.test(haystack)) return "travel";
   return "adventure";
 }
 
-export async function loadAdventureEvents(profile: DiscoveryProfile): Promise<AdventureEventRecord[]> {
+export async function loadAdventureEvents(_profile: DiscoveryProfile): Promise<AdventureEventRecord[]> {
   // Async-by-design so it can later be swapped to API-backed dynamic feeds
   // (featured/sponsored/affiliate) without changing the UI call site.
   await new Promise((resolve) => setTimeout(resolve, 220));
-  const prioritized = new Set(PROFILE_EVENT_IDS[profile]);
-
-  const sorted = [...ADVENTURE_EVENT_DATA].sort((a, b) => {
-    const aPriority = prioritized.has(a.id) ? 1 : 0;
-    const bPriority = prioritized.has(b.id) ? 1 : 0;
-    if (aPriority !== bPriority) return bPriority - aPriority;
-    if (a.featured !== b.featured) return a.featured ? -1 : 1;
-    return new Date(a.startDate).getTime() - new Date(b.startDate).getTime();
-  });
-
   const withImages = await Promise.all(
-    sorted.slice(0, 10).map(async (event) => {
-      if (!event.officialWebsite) return event;
-      const resolvedImage = await resolveOfficialWebsiteImage(event.officialWebsite);
-      return {
-        ...event,
-        image: resolvedImage ?? event.image ?? null,
-      };
-    }),
+    ADVENTURE_EVENT_DATA.slice(0, 10).map(async (event) => ({
+      ...event,
+      image: event.image ?? null,
+    })),
   );
 
   return withImages;

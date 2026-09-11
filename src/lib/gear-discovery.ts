@@ -1,4 +1,4 @@
-import { GEAR_LABELS, GEAR_CATEGORY_KEYS, GearCategoryKey, GearSelections } from "@/data/gearCatalog";
+import { GEAR_LABELS, GearCategoryKey } from "@/data/gearCatalog";
 
 export interface GearDiscoveryItem {
   id: string;
@@ -197,60 +197,7 @@ const EDITORIAL_NEWS_ITEMS: GearDiscoveryItem[] = [...EDITORIAL_NEWS_SOURCES]
     image: buildWebsiteScreenshotUrl(source.url),
   }));
 
-export async function loadGearDiscoveryItems(selections: GearSelections): Promise<GearDiscoveryItem[]> {
+export async function loadGearDiscoveryItems(): Promise<GearDiscoveryItem[]> {
   await new Promise((resolve) => setTimeout(resolve, 180));
-  const items: GearDiscoveryItem[] = [];
-
-  for (const key of GEAR_CATEGORY_KEYS) {
-    const selection = selections[key];
-    const brand = selection.brand.trim();
-    if (!brand) continue;
-
-    const model = (selection.customModel.trim() || selection.model.trim()).trim();
-    const known = BRAND_NEWS[brand];
-    const launches = known?.launches ?? [`${brand} latest release`, `${brand} performance update`];
-    const url = known?.url ?? "https://www.motorcyclenews.com/";
-    const update = known?.update ?? "Latest product updates and rider-focused improvements.";
-
-    const newModelSummary = model
-      ? `${brand} ${model} • ${launches[0]}`
-      : `${brand} • ${launches[0]}`;
-
-    items.push({
-      id: `${key}-${brand}-new-model`.toLowerCase().replace(/\s+/g, "-"),
-      brand,
-      brandLogo: brandLogoImage(brand),
-      category: key,
-      title: launches[0],
-      subtitle: `${GEAR_LABELS[key]} • New model`,
-      summary: newModelSummary,
-      description: model
-        ? `Because you selected ${brand} ${model}, here is the closest new release to watch.`
-        : `Because you selected ${brand} for ${GEAR_LABELS[key]}, here is the latest model reveal.`,
-      ctaLabel: "See release",
-      ctaUrl: url,
-      kind: "new-model",
-      featured: true,
-      image: buildWebsiteScreenshotUrl(url),
-    });
-
-    const brandSummary = update.length > 54 ? `${update.slice(0, 51).trimEnd()}…` : update;
-
-    items.push({
-      id: `${key}-${brand}-brand-news`.toLowerCase().replace(/\s+/g, "-"),
-      brand,
-      brandLogo: brandLogoImage(brand),
-      category: key,
-      title: `${brand} brand update`,
-      subtitle: `${GEAR_LABELS[key]} • Brand news`,
-      summary: brandSummary,
-      description: update,
-      ctaLabel: "Read news",
-      ctaUrl: url,
-      kind: "brand-news",
-      image: buildWebsiteScreenshotUrl(url),
-    });
-  }
-
-  return [...EDITORIAL_NEWS_ITEMS, ...items].slice(0, 12);
+  return EDITORIAL_NEWS_ITEMS;
 }

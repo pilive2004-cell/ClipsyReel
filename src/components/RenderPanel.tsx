@@ -1,24 +1,18 @@
 "use client";
 
-import { Dispatch, SetStateAction, SyntheticEvent, useEffect, useMemo, useState } from "react";
+import { Dispatch, SetStateAction, SyntheticEvent, useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Bike, Bookmark, ChevronLeft, ChevronRight, Clapperboard, ExternalLink, Heart, Info, LocateFixed, Share2 } from "lucide-react";
-import { GearSelections } from "@/data/gearCatalog";
+import { Bookmark, ChevronLeft, ChevronRight, Clapperboard, ExternalLink, Heart, Info, LocateFixed, Share2 } from "lucide-react";
 import FunProgressBar from "@/components/FunProgressBar";
-import { AdventureEventRecord, inferDiscoveryProfile, loadAdventureEvents } from "@/lib/adventure-events";
+import { AdventureEventRecord, loadAdventureEvents } from "@/lib/adventure-events";
 import { GearDiscoveryItem, loadGearDiscoveryItems } from "@/lib/gear-discovery";
 import { useLocale } from "@/lib/i18n";
 import type { Locale } from "@/lib/i18n";
-import { ReelStyle } from "@/types";
 
 interface RenderPanelProps {
   /** 0-1 progress. `null` while the ffmpeg.wasm engine itself is still downloading/booting. */
   progress: number | null;
   phaseLabel: string;
-  styleLabel: string;
-  style: ReelStyle;
-  videoNames: string[];
-  gearSelections: GearSelections;
 }
 
 interface SportTelemetry {
@@ -181,15 +175,6 @@ const RENDER_DISCOVERY_COPY: Record<
   },
 };
 
-const SPORT_LAB_COPY: Record<Locale, { system: string; diagnostics: string; terrain: string; exposure: string; clips: string; live: string }> = {
-  fr: { system: "SYSTÈME", diagnostics: "Diagnostics route", terrain: "Relief & altitude", exposure: "Panneaux éditoriaux", clips: "Sources clip", live: "Flux live" },
-  de: { system: "SYSTEM", diagnostics: "Routen-Diagnostik", terrain: "Relief & Höhe", exposure: "Editorial-Panels", clips: "Clip-Quellen", live: "Live-Feed" },
-  en: { system: "SYSTEM", diagnostics: "Route diagnostics", terrain: "Relief & altitude", exposure: "Editorial panels", clips: "Clip sources", live: "Live feed" },
-  es: { system: "SISTEMA", diagnostics: "Diagnóstico de ruta", terrain: "Relieve y altitud", exposure: "Paneles editoriales", clips: "Fuentes de clips", live: "Feed en vivo" },
-  it: { system: "SISTEMA", diagnostics: "Diagnostica percorso", terrain: "Rilievo e altitudine", exposure: "Pannelli editoriali", clips: "Sorgenti clip", live: "Feed live" },
-  zh: { system: "系统", diagnostics: "路线诊断", terrain: "地形与海拔", exposure: "编辑面板", clips: "片段来源", live: "实时流" },
-};
-
 /**
  * Shown while the real ffmpeg.wasm montage (cuts + Ken Burns zoom + transitions)
  * is being rendered in the browser. Unlike `AIAnalysisPanel` (a simulated
@@ -201,10 +186,6 @@ const SPORT_LAB_COPY: Record<Locale, { system: string; diagnostics: string; terr
 export default function RenderPanel({
   progress,
   phaseLabel,
-  styleLabel,
-  style,
-  videoNames,
-  gearSelections,
 }: RenderPanelProps) {
   const { copy, locale } = useLocale();
   const [events, setEvents] = useState<AdventureEventRecord[]>([]);
@@ -219,14 +200,9 @@ export default function RenderPanel({
   const [eventIndex, setEventIndex] = useState(0);
   const [gearIndex, setGearIndex] = useState(0);
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const discoveryProfile = useMemo(
-    () => inferDiscoveryProfile(style, videoNames),
-    [style, videoNames]
-  );
-
   useEffect(() => {
     let cancelled = false;
-    void loadAdventureEvents(discoveryProfile).then((items) => {
+    void loadAdventureEvents("adventure").then((items) => {
       if (!cancelled) setEvents(items);
     }).catch((error) => {
       console.error("[RenderPanel] adventure events loading failed", error);
@@ -235,11 +211,11 @@ export default function RenderPanel({
     return () => {
       cancelled = true;
     };
-  }, [discoveryProfile]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    void loadGearDiscoveryItems(gearSelections).then((items) => {
+    void loadGearDiscoveryItems().then((items) => {
       if (!cancelled) setGearNews(items);
     }).catch((error) => {
       console.error("[RenderPanel] gear discovery loading failed", error);
@@ -248,7 +224,7 @@ export default function RenderPanel({
     return () => {
       cancelled = true;
     };
-  }, [gearSelections]);
+  }, []);
 
   useEffect(() => {
     const ticker = window.setInterval(() => setNowMs(Date.now()), 1000);
@@ -257,7 +233,6 @@ export default function RenderPanel({
 
   const percent = progress === null ? 0 : Math.round(progress * 100);
   const discoveryCopy = RENDER_DISCOVERY_COPY[locale];
-  const sportCopy = SPORT_LAB_COPY[locale];
   const featuredEvent = events[Math.min(eventIndex, Math.max(events.length - 1, 0))] ?? null;
   const featuredGear = gearNews[Math.min(gearIndex, Math.max(gearNews.length - 1, 0))] ?? null;
 
@@ -324,209 +299,6 @@ export default function RenderPanel({
     handleImageError(event, eventFallbackImage(record));
   };
 
-  if (style === "sport") {
-    return (
-      <div className="grid w-full gap-4">
-        <div className="rounded-[28px] border border-cyan-400/14 bg-slate-950/78 p-4 shadow-[0_24px_60px_rgba(8,47,73,0.24)]">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <motion.div
-                className="flex h-11 w-11 items-center justify-center rounded-2xl brand-gradient shadow-[0_10px_24px_rgba(168,85,247,0.26)]"
-                animate={{ y: [0, -2, 0] }}
-                transition={{ duration: 2.8, repeat: Infinity, ease: "easeInOut" }}
-              >
-                <Bike className="h-5 w-5 text-white" />
-              </motion.div>
-              <div>
-                <p className="text-[10px] uppercase tracking-[0.22em] text-cyan-100/60">{sportCopy.diagnostics}</p>
-                <p className="mt-1 text-2xl font-semibold leading-tight text-white">{sportCopy.system}</p>
-              </div>
-            </div>
-            <span className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.18em] text-cyan-100/90">
-              {sportCopy.live}
-            </span>
-          </div>
-          <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/8">
-            <motion.div
-              className="h-full rounded-full bg-[linear-gradient(90deg,#22d3ee,#a855f7)]"
-              animate={{ width: `${Math.max(percent, 6)}%` }}
-              transition={{ duration: 0.6, ease: "easeOut" }}
-            />
-          </div>
-          <div className="mt-3 flex items-center justify-between text-[10px] uppercase tracking-[0.18em] text-white/45">
-            <span>{phaseLabel}</span>
-            <span>{percent}%</span>
-          </div>
-        </div>
-
-        <div className="grid gap-3">
-          {featuredEvent && (
-            <motion.article
-              key={featuredEvent.id}
-              className="group overflow-hidden rounded-[24px] border border-white/10 bg-slate-950/80 shadow-[0_18px_38px_rgba(15,23,42,0.34)] ring-1 ring-white/5"
-              whileHover={{ y: -2 }}
-            >
-              <div className="relative h-44 w-full overflow-hidden">
-                {featuredEvent.image ? (
-                  <>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={featuredEvent.image}
-                      alt={`${featuredEvent.name} scene`}
-                      className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]"
-                      onError={(e) => handleEventImageError(e, featuredEvent)}
-                    />
-                  </>
-                ) : (
-                  <>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={eventFallbackImage(featuredEvent)}
-                      alt={`${featuredEvent.name} fallback scene`}
-                      className="h-full w-full object-cover"
-                    />
-                  </>
-                )}
-                <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(2,6,23,0.12),rgba(2,6,23,0.72))]" />
-                <div className="absolute inset-x-3 top-3 flex items-start justify-between gap-3">
-                  <motion.div
-                    className="h-14 w-14 overflow-hidden rounded-2xl border border-white/25 bg-white/95 shadow-[0_12px_28px_rgba(0,0,0,0.28)]"
-                    animate={{ y: [-0.4, 0.7, -0.4] }}
-                    transition={{ duration: 2.8, repeat: Infinity, ease: "easeInOut" }}
-                  >
-                    {featuredEvent.logo && !failedLogos.has(featuredEvent.id) ? (
-                      <>
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={featuredEvent.logo}
-                          alt={`${featuredEvent.name} logo`}
-                          className="h-full w-full object-contain p-1.5"
-                          onError={() => markLogoFailed(featuredEvent.id)}
-                          onLoad={(e) => {
-                            if (e.currentTarget.naturalWidth < 96 || e.currentTarget.naturalHeight < 96) {
-                              markLogoFailed(featuredEvent.id);
-                            }
-                          }}
-                        />
-                      </>
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-sm font-bold text-slate-800">{initials(featuredEvent.name)}</div>
-                    )}
-                  </motion.div>
-                  <div className="flex items-center gap-2">
-                    {events.length > 1 && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => cycleStory("events", -1)}
-                          className="rounded-full border border-white/12 bg-slate-950/60 p-1.5 text-white/75 transition hover:bg-white/[0.1]"
-                          aria-label={discoveryCopy.previous}
-                        >
-                          <ChevronLeft className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => cycleStory("events", 1)}
-                          className="rounded-full border border-white/12 bg-slate-950/60 p-1.5 text-white/75 transition hover:bg-white/[0.1]"
-                          aria-label={discoveryCopy.next}
-                        >
-                          <ChevronRight className="h-3.5 w-3.5" />
-                        </button>
-                      </>
-                    )}
-                    <span className="rounded-full border border-white/15 bg-slate-950/65 px-2 py-1 text-[10px] font-medium uppercase tracking-[0.12em] text-white/85">
-                      {featuredEvent.type}
-                    </span>
-                  </div>
-                </div>
-                <div className="absolute bottom-2 left-3 right-3">
-                  <p className="text-xl font-semibold text-white">{featuredEvent.name}</p>
-                  <p className="text-xs text-white/80">{featuredEvent.location} · {featuredEvent.country}</p>
-                </div>
-              </div>
-            </motion.article>
-          )}
-
-          {featuredGear && (
-            <motion.article
-              key={featuredGear.id}
-              className="group overflow-hidden rounded-[24px] border border-white/10 bg-slate-950/80 shadow-[0_18px_38px_rgba(15,23,42,0.34)] ring-1 ring-white/5"
-              whileHover={{ y: -2 }}
-            >
-              <div className="relative h-44 w-full overflow-hidden">
-                {featuredGear.image ? (
-                  <>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={featuredGear.image}
-                      alt={`${featuredGear.title} visual`}
-                      className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]"
-                      onError={(e) => handleImageError(e, gearFallbackImage(featuredGear))}
-                    />
-                  </>
-                ) : (
-                  <>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={gearFallbackImage(featuredGear)}
-                      alt={`${featuredGear.title} fallback visual`}
-                      className="h-full w-full object-cover"
-                    />
-                  </>
-                )}
-                <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(2,6,23,0.12),rgba(2,6,23,0.72))]" />
-                <div className="absolute left-3 right-3 top-3 flex items-start justify-between gap-2">
-                  <span className={"rounded-full px-2 py-0.5 text-[10px] font-semibold " + (featuredGear.kind === "new-model" ? "bg-cyan-400/25 text-cyan-100" : featuredGear.kind === "brand-news" ? "bg-fuchsia-400/25 text-fuchsia-100" : "bg-emerald-400/25 text-emerald-100")}>
-                    {featuredGear.kind === "new-model" ? discoveryCopy.newModel : featuredGear.kind === "brand-news" ? discoveryCopy.brandNews : discoveryCopy.community}
-                  </span>
-                  <div className="flex items-center gap-2">
-                    {gearNews.length > 1 && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => cycleStory("gear", -1)}
-                          className="rounded-full border border-white/12 bg-slate-950/60 p-1.5 text-white/75 transition hover:bg-white/[0.1]"
-                          aria-label={discoveryCopy.previous}
-                        >
-                          <ChevronLeft className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => cycleStory("gear", 1)}
-                          className="rounded-full border border-white/12 bg-slate-950/60 p-1.5 text-white/75 transition hover:bg-white/[0.1]"
-                          aria-label={discoveryCopy.next}
-                        >
-                          <ChevronRight className="h-3.5 w-3.5" />
-                        </button>
-                      </>
-                    )}
-                    <span className="rounded-full bg-slate-950/60 px-2 py-0.5 text-[10px] text-white/85">{featuredGear.brand}</span>
-                  </div>
-                </div>
-                <div className="absolute bottom-2 left-3 right-3">
-                  <p className="line-clamp-2 text-lg font-semibold leading-tight text-white">{featuredGear.title}</p>
-                  <p className="truncate text-xs text-white/80">{featuredGear.subtitle}</p>
-                </div>
-              </div>
-              <div className="px-3 pb-3 pt-3">
-                <p className="mb-1 text-[10px] uppercase tracking-[0.14em] text-cyan-100/80">{copy.gearLabel(featuredGear.category)} · {featuredGear.brand}</p>
-                <p className="mb-2 text-sm font-medium leading-snug text-white/95">{featuredGear.summary}</p>
-                <div className="rounded-2xl border border-fuchsia-300/10 bg-[linear-gradient(180deg,rgba(168,85,247,0.08),rgba(15,23,42,0.55))] px-2.5 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-                  <p className="text-[11px] leading-relaxed text-white/70">{featuredGear.description}</p>
-                </div>
-              </div>
-            </motion.article>
-          )}
-          {!featuredEvent && !featuredGear && (
-            <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-4 text-center text-[12px] text-white/65">
-              {discoveryCopy.upcomingSubtitle}
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="grid w-full gap-4" style={{ gridTemplateRows: "auto 1fr" }}>
       <div className="flex flex-col items-center gap-5 rounded-3xl border border-white/10 glass-card px-5 py-6 text-center">
@@ -546,7 +318,7 @@ export default function RenderPanel({
         </div>
 
         <div>
-          <p className="text-base font-semibold text-white/90">{copy.render.editing.replace("{style}", styleLabel)}</p>
+          <p className="text-base font-semibold text-white/90">{copy.render.editing}</p>
           <p className="mt-1 text-xs text-white/45">{phaseLabel}</p>
         </div>
 
@@ -583,7 +355,7 @@ export default function RenderPanel({
                  <ChevronRight className="h-3.5 w-3.5" />
                </button>
                <span className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.12em] text-cyan-100/90">
-                 {discoveryProfile.toUpperCase()}
+                 {discoveryCopy.personalized}
                </span>
               </div>
             )}
@@ -601,123 +373,58 @@ export default function RenderPanel({
               return (
                <motion.article
                  key={featuredEvent.id}
-                 className="group overflow-hidden rounded-[24px] border border-white/10 bg-slate-950/80 shadow-[0_18px_38px_rgba(15,23,42,0.34)] ring-1 ring-white/5"
+                 className="group relative w-full max-w-[1100px] overflow-hidden rounded-[24px] border border-white/10 shadow-[0_18px_38px_rgba(15,23,42,0.34)] sm:max-w-full"
                  whileHover={{ y: -2 }}
+                 style={{
+                   backgroundColor: "var(--surface)",
+                   backgroundImage:
+                     "linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px)",
+                   backgroundSize: "24px 24px",
+                 }}
                >
-                 <div className="relative h-40 w-full overflow-hidden">
-                   {featuredEvent.image ? (
-                     <>
-                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                       <img
-                         src={featuredEvent.image}
-                         alt={`${featuredEvent.name} scene`}
-                         className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]"
-                         onError={(e) => handleEventImageError(e, featuredEvent)}
-                       />
-                     </>
-                   ) : (
-                     <>
-                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                       <img
-                         src={eventFallbackImage(featuredEvent)}
-                         alt={`${featuredEvent.name} fallback scene`}
-                         className="h-full w-full object-cover"
-                       />
-                     </>
-                   )}
-                   <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(2,6,23,0.12),rgba(2,6,23,0.72))]" />
-                   <div className="absolute inset-x-3 top-3 flex items-start justify-between gap-3">
-                     <motion.div
-                       className="h-14 w-14 overflow-hidden rounded-2xl border border-white/25 bg-white/95 shadow-[0_12px_28px_rgba(0,0,0,0.28)]"
-                       animate={{ y: [-0.4, 0.7, -0.4] }}
-                       transition={{ duration: 2.8, repeat: Infinity, ease: "easeInOut" }}
+                 <div className="flex flex-col gap-3 px-3 py-3 sm:px-4 sm:py-4">
+                   <div className="flex items-center justify-between gap-2">
+                     <span className="text-[0.58rem] font-bold uppercase tracking-[0.22em] text-cyan-100/75">
+                       NEWS
+                     </span>
+                     <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[0.56rem] font-medium uppercase tracking-[0.15em] text-white/70">
+                       {dateLabel}
+                     </span>
+                   </div>
+
+                   <div className="flex items-start gap-3">
+                     <div
+                       className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-[10px] border border-black/10 bg-white text-[0.8rem] font-black text-slate-800 shadow-[0_8px_18px_rgba(0,0,0,0.12)] sm:h-12 sm:w-12"
                      >
                        {featuredEvent.logo && !failedLogos.has(featuredEvent.id) ? (
-                         <>
-                           {/* eslint-disable-next-line @next/next/no-img-element */}
-                           <img
-                             src={featuredEvent.logo}
-                             alt={`${featuredEvent.name} logo`}
-                             className="h-full w-full object-contain p-1.5"
-                             onError={() => markLogoFailed(featuredEvent.id)}
-                             onLoad={(e) => {
-                               if (e.currentTarget.naturalWidth < 96 || e.currentTarget.naturalHeight < 96) {
-                                 markLogoFailed(featuredEvent.id);
-                               }
-
-                             }}
-                           />
-                         </>
+                         <img
+                           src={featuredEvent.logo}
+                           alt={`${featuredEvent.name} logo`}
+                           className="h-full w-full object-contain p-1.25 sm:p-1.5"
+                           onError={() => markLogoFailed(featuredEvent.id)}
+                         />
                        ) : (
-                         <div className="flex h-full w-full items-center justify-center text-sm font-bold text-slate-800">{logoFallback}</div>
+                         <span>{logoFallback}</span>
                        )}
-                     </motion.div>
-                     <span className="rounded-full border border-white/15 bg-slate-950/65 px-2 py-1 text-[10px] font-medium uppercase tracking-[0.12em] text-white/85">
-                       {featuredEvent.type}
-                     </span>
-                   </div>
-                   <div className="absolute bottom-2 left-3 right-3">
-                     <p className="text-xl font-semibold text-white">{featuredEvent.name}</p>
-                     <p className="text-xs text-white/80">{featuredEvent.location} · {featuredEvent.country}</p>
-                   </div>
-                 </div>
-
-                 <div className="space-y-2.5 px-3 pb-3 pt-3 text-sm text-white/80">
-                   <div className="flex items-center justify-between gap-2 rounded-2xl border border-cyan-300/15 bg-[linear-gradient(180deg,rgba(14,116,144,0.18),rgba(15,23,42,0.58))] px-2.5 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-                     <div>
-                       <p className="text-[10px] uppercase tracking-[0.13em] text-cyan-100/70">{discoveryCopy.startsIn}</p>
-                       <p className="mt-1 text-sm font-semibold text-white">{countdown}</p>
                      </div>
-                     <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-1 text-[10px] uppercase tracking-[0.12em] text-white/75">
-                       {featuredEvent.featured ? "Featured" : "Live"}
-                     </span>
-                   </div>
-                   <p className="flex items-center gap-1.5 text-xs text-white/75"><LocateFixed className="h-3.5 w-3.5 text-cyan-200/80" /> {dateLabel}</p>
-                   {expanded.has(featuredEvent.id) ? (
-                     <p className="rounded-xl border border-white/10 bg-black/20 px-2.5 py-2 text-[11px] leading-relaxed text-white/70">
-                       {featuredEvent.description}
-                     </p>
-                   ) : (
-                     <p className="text-[11px] leading-relaxed text-white/65">{featuredEvent.description}</p>
-                   )}
 
-                   <div className="mt-1 flex items-center gap-1.5">
-                     <a
-                       href={featuredEvent.officialWebsite}
-                       target="_blank"
-                       rel="noreferrer"
-                       className="flex flex-1 items-center justify-center gap-1 rounded-xl border border-fuchsia-300/35 bg-fuchsia-500/10 px-2 py-1.5 text-[11px] font-semibold text-fuchsia-100 transition hover:bg-fuchsia-500/20"
-                     >
-                       {discoveryCopy.discoverEvent}
-                       <ExternalLink className="h-3 w-3" />
-                     </a>
+                     <h3 className="min-w-0 flex-1 text-[clamp(0.95rem,1.6vw,1.5rem)] font-black uppercase leading-[1.04] tracking-[-0.06em] text-white/95">
+                       {featuredEvent.name}
+                     </h3>
+                   </div>
+
+                   <p className="max-w-[68ch] text-[clamp(0.72rem,1.2vw,0.98rem)] leading-[1.28] text-white/85">
+                     {featuredEvent.description}
+                   </p>
+
+                   <div className="flex items-center justify-end">
                      <button
-                       onClick={() => toggleSet(setSaved, featuredEvent.id)}
-                       className={"rounded-xl border px-2 py-1.5 transition " + (saved.has(featuredEvent.id) ? "border-emerald-300/35 bg-emerald-500/10 text-emerald-200" : "border-white/12 bg-white/[0.02] text-white/70")}
-                       aria-label="Save event"
+                       type="button"
+                       onClick={() => window.open(featuredEvent.officialWebsite, "_blank", "noopener,noreferrer")}
+                       className="inline-flex items-center justify-center rounded-[12px] px-4 py-2 text-[0.72rem] font-bold text-white shadow-[0_6px_0_rgba(0,0,0,0.18)] transition hover:translate-y-[-1px] sm:px-5 sm:py-2.5"
+                       style={{ background: "var(--brand-from)" }}
                      >
-                       <Bookmark className="h-3.5 w-3.5" />
-                     </button>
-                     <button
-                       onClick={() => toggleSet(setLiked, featuredEvent.id)}
-                       className={"rounded-xl border px-2 py-1.5 transition " + (liked.has(featuredEvent.id) ? "border-rose-300/35 bg-rose-500/10 text-rose-200" : "border-white/12 bg-white/[0.02] text-white/70")}
-                       aria-label="Like event"
-                     >
-                       <Heart className="h-3.5 w-3.5" />
-                     </button>
-                     <button
-                       onClick={() => shareEvent(featuredEvent)}
-                       className="rounded-xl border border-white/12 bg-white/[0.02] px-2 py-1.5 text-white/70 transition hover:bg-white/[0.06]"
-                       aria-label={discoveryCopy.shareByEmail}
-                     >
-                       <Share2 className="h-3.5 w-3.5" />
-                     </button>
-                     <button
-                       onClick={() => toggleSet(setExpanded, featuredEvent.id)}
-                       className="rounded-xl border border-white/12 bg-white/[0.02] px-2 py-1.5 text-white/70 transition hover:bg-white/[0.06]"
-                       aria-label="View details"
-                     >
-                       <Info className="h-3.5 w-3.5" />
+                       Read more
                      </button>
                    </div>
                  </div>
@@ -771,93 +478,61 @@ export default function RenderPanel({
               {featuredGear ? (() => (
               <motion.article
                 key={featuredGear.id}
-                className="group overflow-hidden rounded-[24px] border border-white/10 bg-slate-950/80 shadow-[0_18px_38px_rgba(15,23,42,0.34)] ring-1 ring-white/5"
+                className="group relative w-full max-w-[1100px] overflow-hidden rounded-[24px] border border-white/10 shadow-[0_18px_38px_rgba(15,23,42,0.34)] sm:max-w-full"
                 whileHover={{ y: -2 }}
+                style={{
+                  backgroundColor: "var(--surface)",
+                  backgroundImage:
+                    "linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px)",
+                  backgroundSize: "24px 24px",
+                }}
               >
-              <div className="relative h-40 w-full overflow-hidden">
-                {featuredGear.image ? (
-                  <>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={featuredGear.image}
-                      alt={`${featuredGear.title} visual`}
-                      className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]"
-                      onError={(e) => handleImageError(e, gearFallbackImage(featuredGear))}
-                    />
-                  </>
-                ) : (
-                  <>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={gearFallbackImage(featuredGear)}
-                      alt={`${featuredGear.title} fallback visual`}
-                      className="h-full w-full object-cover"
-                    />
-                  </>
-                )}
-                <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(2,6,23,0.12),rgba(2,6,23,0.72))]" />
-                <div className="absolute left-3 right-3 top-3 flex items-start justify-between gap-2">
-                  <span className={"rounded-full px-2 py-0.5 text-[10px] font-semibold " + (featuredGear.kind === "new-model" ? "bg-cyan-400/25 text-cyan-100" : featuredGear.kind === "brand-news" ? "bg-fuchsia-400/25 text-fuchsia-100" : "bg-emerald-400/25 text-emerald-100")}>
-                    {featuredGear.kind === "new-model" ? discoveryCopy.newModel : featuredGear.kind === "brand-news" ? discoveryCopy.brandNews : discoveryCopy.community}
-                  </span>
-                  <span className="rounded-full bg-slate-950/60 px-2 py-0.5 text-[10px] text-white/85">{featuredGear.brand}</span>
-                </div>
-                <div className="absolute bottom-2 left-3 right-3">
-                  <p className="line-clamp-2 text-lg font-semibold leading-tight text-white">{featuredGear.title}</p>
-                  <p className="truncate text-xs text-white/80">{featuredGear.subtitle}</p>
-                </div>
-              </div>
-              <div className="px-3 pb-3 pt-3">
-                <p className="mb-1 text-[10px] uppercase tracking-[0.14em] text-cyan-100/80">{copy.gearLabel(featuredGear.category)} · {featuredGear.brand}</p>
-                <p className="mb-2 text-sm font-medium leading-snug text-white/95">{featuredGear.summary}</p>
-                <div className="rounded-2xl border border-fuchsia-300/10 bg-[linear-gradient(180deg,rgba(168,85,247,0.08),rgba(15,23,42,0.55))] px-2.5 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-                  <p className="text-[11px] leading-relaxed text-white/70">{featuredGear.description}</p>
-                </div>
-              </div>
-              <div className="mt-1 flex items-center gap-1.5 px-3 pb-3">
-                  <a
-                    href={featuredGear.ctaUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex flex-1 items-center justify-center gap-1 rounded-xl border border-cyan-300/35 bg-cyan-500/10 px-2 py-1.5 text-[11px] font-semibold text-cyan-100 transition hover:bg-cyan-500/20"
-                  >
-                    {featuredGear.ctaLabel}
-                    <ExternalLink className="h-3 w-3" />
-                  </a>
-                  <button
-                    onClick={() => toggleSet(setSavedGear, featuredGear.id)}
-                    className={"rounded-xl border px-2 py-1.5 transition " + (savedGear.has(featuredGear.id) ? "border-emerald-300/35 bg-emerald-500/10 text-emerald-200" : "border-white/12 bg-white/[0.02] text-white/70")}
-                    aria-label="Save gear update"
-                  >
-                    <Bookmark className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    onClick={() => toggleSet(setLikedGear, featuredGear.id)}
-                    className={"rounded-xl border px-2 py-1.5 transition " + (likedGear.has(featuredGear.id) ? "border-rose-300/35 bg-rose-500/10 text-rose-200" : "border-white/12 bg-white/[0.02] text-white/70")}
-                    aria-label="Like gear update"
-                  >
-                    <Heart className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    onClick={() => shareLink(featuredGear.title, `${featuredGear.brand} • ${copy.gearLabel(featuredGear.category)}`, featuredGear.ctaUrl)}
-                    className="rounded-xl border border-white/12 bg-white/[0.02] px-2 py-1.5 text-white/70 transition hover:bg-white/[0.06]"
-                    aria-label={discoveryCopy.shareByEmail}
-                  >
-                    <Share2 className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    onClick={() => toggleSet(setExpandedGear, featuredGear.id)}
-                    className="rounded-xl border border-white/12 bg-white/[0.02] px-2 py-1.5 text-white/70 transition hover:bg-white/[0.06]"
-                    aria-label="View gear details"
-                  >
-                    <Info className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-                {expandedGear.has(featuredGear.id) && (
-                  <p className="mx-3 mb-3 mt-2 rounded-lg border border-white/10 bg-black/20 px-2.5 py-2 text-sm leading-relaxed text-white/75">
-                    {discoveryCopy.detailPrefix}: {featuredGear.brand} • {copy.gearLabel(featuredGear.category)}.
+                <div className="flex flex-col gap-3 px-3 py-3 sm:px-4 sm:py-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[0.58rem] font-bold uppercase tracking-[0.22em] text-fuchsia-100/75">
+                      GEAR
+                    </span>
+                    <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[0.56rem] font-medium uppercase tracking-[0.15em] text-white/70">
+                      {discoveryCopy.newModel}
+                    </span>
+                  </div>
+
+                  <div className="flex items-start gap-3">
+                    <div
+                      className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-[10px] border border-black/10 bg-white text-[0.8rem] font-black text-slate-800 shadow-[0_8px_18px_rgba(0,0,0,0.12)] sm:h-12 sm:w-12"
+                    >
+                      {featuredGear.image ? (
+                        <img
+                          src={featuredGear.image}
+                          alt={`${featuredGear.title} visual`}
+                          className="h-full w-full object-contain p-1.25 sm:p-1.5"
+                          onError={(e) => handleImageError(e, gearFallbackImage(featuredGear))}
+                        />
+                      ) : (
+                        <span>{initials(featuredGear.title)}</span>
+                      )}
+                    </div>
+
+                    <h3 className="min-w-0 flex-1 text-[clamp(0.95rem,1.6vw,1.5rem)] font-black uppercase leading-[1.04] tracking-[-0.06em] text-white/95">
+                      {featuredGear.title}
+                    </h3>
+                  </div>
+
+                  <p className="max-w-[68ch] text-[clamp(0.72rem,1.2vw,0.98rem)] leading-[1.28] text-white/85">
+                    {featuredGear.summary}
                   </p>
-                )}
+
+                  <div className="flex items-center justify-end">
+                    <button
+                      type="button"
+                      onClick={() => window.open(featuredGear.ctaUrl, "_blank", "noopener,noreferrer")}
+                      className="inline-flex items-center justify-center rounded-[12px] px-4 py-2 text-[0.72rem] font-bold text-white shadow-[0_6px_0_rgba(0,0,0,0.18)] transition hover:translate-y-[-1px] sm:px-5 sm:py-2.5"
+                      style={{ background: "var(--brand-from)" }}
+                    >
+                      Read more
+                    </button>
+                  </div>
+                </div>
               </motion.article>
               ))() : null}
             </div>

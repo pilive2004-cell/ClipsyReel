@@ -70,14 +70,24 @@ let mobilenetModule: typeof mobilenetTypes | null = null;
 type FaceMeshTfjsModule = { load(config: MediaPipeFaceMeshTfjsModelConfig): Promise<FaceLandmarksDetector> };
 let faceLandmarksTfjsModule: FaceMeshTfjsModule | null = null;
 
-let cocoModelPromise: Promise<cocoSsdTypes.ObjectDetection> | null = null;
-let faceDetectorPromise: Promise<FaceLandmarksDetector> | null = null;
-let mobilenetModelPromise: Promise<mobilenetTypes.MobileNet> | null = null;
+let cocoModelPromise: Promise<cocoSsdTypes.ObjectDetection | null> | null = null;
+let faceDetectorPromise: Promise<FaceLandmarksDetector | null> | null = null;
+let mobilenetModelPromise: Promise<mobilenetTypes.MobileNet | null> | null = null;
+
+const modelLoadWarnings = new Set<string>();
 
 /** True once all models have successfully finished loading at least once. */
 let mlReady = false;
 export function isMlDetectionReady(): boolean {
   return mlReady;
+}
+
+function logModelLoadIssue(modelName: string, error: unknown): void {
+  const key = `${modelName}:${error instanceof Error ? error.name : String(error)}`;
+  if (!modelLoadWarnings.has(key)) {
+    modelLoadWarnings.add(key);
+    console.debug(`[ml-detection] ${modelName} unavailable; falling back to pixel heuristics.`, error);
+  }
 }
 
 async function ensureCoreModules(): Promise<void> {
@@ -91,45 +101,69 @@ async function ensureCoreModules(): Promise<void> {
   }
 }
 
-function loadCocoModel(): Promise<cocoSsdTypes.ObjectDetection> {
+function loadCocoModel(): Promise<cocoSsdTypes.ObjectDetection | null> {
   if (!cocoModelPromise) {
     cocoModelPromise = (async () => {
-      await ensureCoreModules();
-      await tf!.ready();
-      // "lite_mobilenet_v2" trades a little accuracy for speed — this runs
-      // once per sampled frame (up to ~36 per video), so keeping it fast
-      // matters more than squeezing out a few extra points of mAP.
-      return cocoSsdModule!.load({ base: "lite_mobilenet_v2" });
+      try {
+        await ensureCoreModules();
+        await tf!.ready();
+        // "lite_mobilenet_v2" trades a little accuracy for speed — this runs
+        // once per sampled frame (up to ~36 per video), so keeping it fast
+        // matters more than squeezing out a few extra points of mAP.
+        const model = await cocoSsdModule!.load({ base: "lite_mobilenet_v2" });
+        mlReady = true;
+        return model;
+      } catch (error) {
+        logModelLoadIssue("COCO-SSD", error);
+        cocoModelPromise = null;
+        return null;
+      }
     })();
   }
   return cocoModelPromise;
 }
 
-function loadFaceDetector(): Promise<FaceLandmarksDetector> {
+function loadFaceDetector(): Promise<FaceLandmarksDetector | null> {
   if (!faceDetectorPromise) {
     faceDetectorPromise = (async () => {
-      await ensureCoreModules();
-      await tf!.ready();
-      return faceLandmarksTfjsModule!.load({
-        runtime: "tfjs",
-        refineLandmarks: false,
-        maxFaces: 1,
-      });
+      try {
+        await ensureCoreModules();
+        await tf!.ready();
+        const detector = await faceLandmarksTfjsModule!.load({
+          runtime: "tfjs",
+          refineLandmarks: false,
+          maxFaces: 1,
+        });
+        mlReady = true;
+        return detector;
+      } catch (error) {
+        logModelLoadIssue("Face landmarks", error);
+        faceDetectorPromise = null;
+        return null;
+      }
     })();
   }
   return faceDetectorPromise;
 }
 
-function loadMobilenetModel(): Promise<mobilenetTypes.MobileNet> {
+function loadMobilenetModel(): Promise<mobilenetTypes.MobileNet | null> {
   if (!mobilenetModelPromise) {
     mobilenetModelPromise = (async () => {
-      await ensureCoreModules();
-      await tf!.ready();
-      // v1/alpha 0.25 is the smallest/fastest MobileNet variant — this is a
-      // coarse "is there a recognizable landmark/scenic vista in this frame"
-      // signal, not the primary subject detector, so favoring speed over the
-      // last few points of top-1 accuracy is the right tradeoff here too.
-      return mobilenetModule!.load({ version: 1, alpha: 0.25 });
+      try {
+        await ensureCoreModules();
+        await tf!.ready();
+        // v1/alpha 0.25 is the smallest/fastest MobileNet variant — this is a
+        // coarse "is there a recognizable landmark/scenic vista in this frame"
+        // signal, not the primary subject detector, so favoring speed over the
+        // last few points of top-1 accuracy is the right tradeoff here too.
+        const model = await mobilenetModule!.load({ version: 1, alpha: 0.25 });
+        mlReady = true;
+        return model;
+      } catch (error) {
+        logModelLoadIssue("MobileNet", error);
+        mobilenetModelPromise = null;
+        return null;
+      }
     })();
   }
   return mobilenetModelPromise;
@@ -142,8 +176,7 @@ function loadMobilenetModel(): Promise<mobilenetTypes.MobileNet> {
  * to pixel heuristics automatically per-frame).
  */
 export async function warmupMlDetection(): Promise<void> {
-  await Promise.all([loadCocoModel(), loadFaceDetector(), loadMobilenetModel()]);
-  mlReady = true;
+  await Promise.allSettled([loadCocoModel(), loadFaceDetector(), loadMobilenetModel()]);
 }
 
 /** Runs COCO-SSD on a canvas/image frame. Returns `null` (never throws) if the model isn't available/failed. */
@@ -154,6 +187,7 @@ export async function detectObjectsOnFrame(
 ): Promise<MlDetectedObject[] | null> {
   try {
     const model = await loadCocoModel();
+    if (!model) return null;
     const predictions = await model.detect(source, 10);
     mlReady = true;
     return predictions.map((p) => ({
@@ -167,7 +201,7 @@ export async function detectObjectsOnFrame(
       },
     }));
   } catch (error) {
-    console.warn("COCO-SSD detection failed for this frame, falling back to pixel heuristics", error);
+    logModelLoadIssue("COCO-SSD frame detection", error);
     return null;
   }
 }
@@ -187,6 +221,7 @@ export async function detectFaceExpression(
 ): Promise<FaceExpressionResult | null> {
   try {
     const detector = await loadFaceDetector();
+    if (!detector) return null;
     const faces = await detector.estimateFaces(source);
     mlReady = true;
     if (!faces || faces.length === 0) {
@@ -228,7 +263,7 @@ export async function detectFaceExpression(
 
     return { present: true, smileScore, centerBias, area: Math.max(0, Math.min(1, area)) };
   } catch (error) {
-    console.warn("Face expression detection failed for this frame, falling back to pixel heuristics", error);
+    logModelLoadIssue("Face expression detection", error);
     return null;
   }
 }
@@ -237,11 +272,12 @@ export async function detectFaceExpression(
 export async function classifySceneOnFrame(source: HTMLCanvasElement): Promise<SceneClassification[] | null> {
   try {
     const model = await loadMobilenetModel();
+    if (!model) return null;
     const predictions = await model.classify(source, 5);
     mlReady = true;
     return predictions;
   } catch (error) {
-    console.warn("MobileNet scene classification failed for this frame, skipping landmark boost", error);
+    logModelLoadIssue("MobileNet scene classification", error);
     return null;
   }
 }

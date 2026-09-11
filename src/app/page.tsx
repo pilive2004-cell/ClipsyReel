@@ -28,6 +28,7 @@ import { computeRouteMetrics } from "@/modules/route3d/routeMetrics";
 import RouteStoryPlayer from "@/modules/route3d/RouteStoryPlayer";
 import { generateGearSummaryClip, GearSummaryClip } from "@/lib/gear-summary-clip";
 import { filterCoherentDisplayTexts, isCoherentDisplayText } from "@/lib/display-text";
+import { buildSportHookSequence } from "@/lib/sport-style";
 import { buildAnalysisResult, generateMockAnalysisMulti } from "@/data/mock";
 import { buildMontage, preloadRenderPipeline, qualityForPlan } from "@/lib/video-engine";
 import { buildGearSummaryEntries, DEFAULT_GEAR_SELECTIONS } from "@/data/gearCatalog";
@@ -37,6 +38,7 @@ const STEP_ORDER: AppStep[] = ["upload", "style", "analyze", "render", "preview"
 const NO_HOOK_ID = "__no_hook__";
 const CUSTOM_HOOK_ID = "__custom_hook__";
 const CUSTOM_CAPTION_ID = "__custom_caption__";
+let activeRenderSignature: string | null = null;
 
 function cinematicProfileForStyle(style: ReelStyle | null): RouteCinematicProfile {
   if (style === "luxury" || style === "cinematic") return "earth-studio";
@@ -100,11 +102,11 @@ export default function Home() {
   const [gearSelections, setGearSelections] = useState(DEFAULT_GEAR_SELECTIONS);
   const [gearPortraitFile, setGearPortraitFile] = useState<File | null>(null);
   const [reelTitle, setReelTitle] = useState("");
-  const [reelTitleFont, setReelTitleFont] = useState<ReelTitleFont>("cinematic");
+  const [reelTitleFont, setReelTitleFont] = useState<ReelTitleFont>("bold");
   const [reelTitleSize, setReelTitleSize] = useState<ReelTitleSize>("md");
   const [reelTitleColor, setReelTitleColor] = useState<ReelTitleColor>("white");
   const [overlayTexts, setOverlayTexts] = useState<[string, string, string]>(["", "", ""]);
-  const [overlayFonts, setOverlayFonts] = useState<[ReelTitleFont, ReelTitleFont, ReelTitleFont]>(["cinematic", "cinematic", "cinematic"]);
+  const [overlayFonts, setOverlayFonts] = useState<[ReelTitleFont, ReelTitleFont, ReelTitleFont]>(["bold", "bold", "bold"]);
   const [overlaySizes, setOverlaySizes] = useState<[ReelTitleSize, ReelTitleSize, ReelTitleSize]>(["md", "md", "md"]);
   const [overlayColors, setOverlayColors] = useState<[ReelTitleColor, ReelTitleColor, ReelTitleColor]>(["white", "white", "white"]);
   const [routeIntroClip, setRouteIntroClip] = useState<RouteIntroClip | null>(null);
@@ -137,6 +139,7 @@ export default function Home() {
   // weekly/monthly Reel credit — regenerating just to bake in a new hook
   // choice must not cost the user a second credit.
   const [creditConsumed, setCreditConsumed] = useState(false);
+  const renderInProgressRef = useRef(false);
 
   const [pricingOpen, setPricingOpen] = useState(false);
   const [upgradePrompt, setUpgradePrompt] = useState<{ title: string; message: string } | null>(null);
@@ -173,6 +176,21 @@ export default function Home() {
     window.addEventListener("resize", handleResize);
 
     return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      const reason = event.reason;
+      const message = reason instanceof Error ? reason.message : String(reason ?? "");
+      if (!/ErrnoError:\s*FS error/i.test(message)) return;
+      // ffmpeg.wasm can emit late FS rejections during internal cleanup while
+      // a recovery pass is already running; treat these as non-fatal so the
+      // runtime overlay does not interrupt a successful retry.
+      event.preventDefault();
+    };
+    window.addEventListener("unhandledrejection", handleUnhandledRejection);
+    return () => window.removeEventListener("unhandledrejection", handleUnhandledRejection);
   }, []);
 
   useEffect(() => {
@@ -242,9 +260,17 @@ export default function Home() {
   };
 
   const equipmentSummary = buildGearSummaryEntries(gearSelections);
+  const shouldRenderGearSummary = style === "sport" || equipmentSummary.length > 0 || !!gearPortraitFile;
+  const selectedHookTextRaw = analysis?.hooks.find((h) => h.id === selectedHookId)?.text ?? "";
   const selectedOverlayTexts = filterCoherentDisplayTexts(overlayTexts);
-  const sportOverlayTexts = style === "sport" ? [] : selectedOverlayTexts;
-  const selectedOverlayTextKey = selectedOverlayTexts.join("\n");
+  const customHookTextFromInputs = customHookText || selectedOverlayTexts[0] || "";
+  const selectedHookText = customHookTextFromInputs || (isCoherentDisplayText(selectedHookTextRaw) ? selectedHookTextRaw : "");
+  const sportHookBeats = useMemo(
+    () => buildSportHookSequence({ routeLabel, gpxStats, sportTelemetry, fallbackText: selectedHookText, customTexts: selectedOverlayTexts }),
+    [gpxStats, routeLabel, selectedHookText, selectedOverlayTexts, sportTelemetry]
+  );
+  const sportOverlayTexts = style === "sport" ? sportHookBeats.map((beat) => beat.text) : selectedOverlayTexts;
+  const selectedOverlayTextKey = sportOverlayTexts.join("\n");
   const reelTitleKey = `${reelTitle.trim()}|${reelTitleFont}|${reelTitleSize}|${reelTitleColor}`;
   const adventureOverlay = buildAdventureReelOverlay(adventureSetup);
   const adventureOverlaySignature = adventureOverlay ? `${adventureOverlay.title}|${adventureOverlay.lines.join("|")}` : "";
@@ -260,7 +286,7 @@ export default function Home() {
   useEffect(() => {
     let cancelled = false;
 
-    if (equipmentSummary.length === 0 && !gearPortraitFile) return;
+    if (!shouldRenderGearSummary) return;
 
     queueMicrotask(() => {
       if (cancelled) return;
@@ -287,7 +313,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [equipmentSummary.length, gearSelections, gearPortraitFile, locale]);
+  }, [shouldRenderGearSummary, gearSelections, gearPortraitFile, locale]);
 
   useEffect(() => {
     return () => {
@@ -297,15 +323,15 @@ export default function Home() {
 
   useEffect(() => {
     if (step !== "render") {
-      setRenderGateTimedOut(false);
-      return;
+      const resetTimeout = window.setTimeout(() => setRenderGateTimedOut(false), 0);
+      return () => window.clearTimeout(resetTimeout);
     }
 
     const introPending = hasRouteIntro && routeIntroStatus === "rendering";
-    const gearPending = equipmentSummary.length > 0 && gearSummaryStatus === "rendering";
+    const gearPending = shouldRenderGearSummary && gearSummaryStatus === "rendering";
     if (!introPending && !gearPending) {
-      setRenderGateTimedOut(false);
-      return;
+      const resetTimeout = window.setTimeout(() => setRenderGateTimedOut(false), 0);
+      return () => window.clearTimeout(resetTimeout);
     }
 
     const timeout = window.setTimeout(() => {
@@ -314,7 +340,7 @@ export default function Home() {
     }, 15000);
 
     return () => window.clearTimeout(timeout);
-  }, [step, hasRouteIntro, routeIntroStatus, gearSummaryStatus, equipmentSummary.length]);
+  }, [step, hasRouteIntro, routeIntroStatus, gearSummaryStatus, shouldRenderGearSummary]);
 
   useEffect(() => {
     return () => {
@@ -343,15 +369,33 @@ export default function Home() {
   useEffect(() => {
     if (step !== "render" || videos.length === 0 || !analysis || !style) return;
     const introReady = !hasRouteIntro || routeIntroStatus === "ready" || routeIntroStatus === "error" || renderGateTimedOut;
-    const gearReady = equipmentSummary.length === 0 || gearSummaryStatus === "ready" || gearSummaryStatus === "error" || gearSummaryStatus === "idle" || renderGateTimedOut;
+    const gearReady = !shouldRenderGearSummary || gearSummaryStatus === "ready" || gearSummaryStatus === "error" || gearSummaryStatus === "idle" || renderGateTimedOut;
+    const renderSignature = [
+      style,
+      videos.map((video) => `${video.name}:${video.durationSeconds.toFixed(2)}:${video.keepAudio ? "a" : "m"}`).join("|"),
+      analysis.bestMoments.map((moment) => `${moment.sourceIndex}:${moment.startSeconds.toFixed(2)}-${moment.endSeconds.toFixed(2)}`).join("|"),
+      routeIntroClip ? `${routeIntroClip.durationSeconds.toFixed(2)}:${hasRouteIntro}` : "no-intro",
+      gearSummaryClip ? `${gearSummaryClip.durationSeconds.toFixed(2)}` : "no-gear",
+      reelTitleKey,
+      selectedOverlayTextKey,
+      shouldRenderGearSummary ? "gear" : "no-gear",
+    ].join("||");
 
     if (!introReady || !gearReady) {
       return;
     }
+    if (renderInProgressRef.current || activeRenderSignature === renderSignature) {
+      return;
+    }
 
     let cancelled = false;
+    activeRenderSignature = renderSignature;
+    renderInProgressRef.current = true;
     const hookTextForThisRender = selectedHookText;
     const storyTextsForThisRender = storyTexts;
+    const sportAudioDisabled = style === "sport";
+    const renderSpeedProfile: "standard" | "fast" = style === "sport" ? "standard" : "fast";
+    const videoAudioEnabled = sportAudioDisabled ? videos.map(() => false) : videos.map((v) => v.keepAudio);
     const baseParams = {
       files: videos.map((v) => v.file),
       videoDurations: videos.map((v) => v.durationSeconds),
@@ -362,9 +406,10 @@ export default function Home() {
       introClip: routeIntroClip ?? undefined,
       outroClip: gearSummaryClip ?? undefined,
       quality: qualityForPlan(),
-      renderSpeedProfile: "fast" as const,
+      renderSpeedProfile,
       watermark: isFree,
-      videoAudioEnabled: videos.map((v) => v.keepAudio),
+      videoAudioEnabled,
+      keepOriginalAudio: !sportAudioDisabled,
       reelTitle: {
         text: reelTitle.trim(),
         font: reelTitleFont,
@@ -372,12 +417,15 @@ export default function Home() {
         color: reelTitleColor,
       },
       overlayTexts: sportOverlayTexts,
+      overlayFonts,
+      overlaySizes,
+      overlayColors,
       gpxStats,
       gpxPoints,
       routeFocusPoints,
       routeLabel,
       sportTelemetry,
-      preserveRouteIntro: true,
+      preserveRouteIntro: false,
       openerHookText: hookTextForThisRender,
       customTextOverlays: storyTextsForThisRender,
       metadataCardLines,
@@ -390,17 +438,69 @@ export default function Home() {
       setRenderError(null);
 
       try {
-        const result = await buildMontage({
-          ...baseParams,
-          onProgress: (ratio) => {
+        const progressCallbacks = {
+          onProgress: (ratio: number) => {
             if (cancelled) return;
-            setRenderProgress(ratio);
+            setRenderProgress((current) => {
+              const previous = typeof current === "number" && Number.isFinite(current) ? current : 0;
+              const next = Number.isFinite(ratio) ? Math.max(previous, ratio) : previous;
+              return next;
+            });
           },
-          onPhaseChange: (label) => {
+          onPhaseChange: (label: string) => {
             if (cancelled) return;
             setRenderPhase(label);
           },
-        });
+        };
+
+        let result: Awaited<ReturnType<typeof buildMontage>> | null = null;
+        let lastError: unknown = null;
+
+        try {
+          result = await buildMontage({
+            ...baseParams,
+            ...progressCallbacks,
+          });
+        } catch (error) {
+          lastError = error;
+        }
+
+        if (!result && (routeIntroClip || gearSummaryClip)) {
+          setRenderPhase("Recovering render without optional intro/outro clips…");
+          try {
+            result = await buildMontage({
+              ...baseParams,
+              introClip: undefined,
+              outroClip: undefined,
+              preserveRouteIntro: false,
+              ...progressCallbacks,
+            });
+          } catch (error) {
+            lastError = error;
+          }
+        }
+
+        if (!result) {
+          setRenderPhase("Recovering render without source audio…");
+          try {
+            result = await buildMontage({
+              ...baseParams,
+              keepOriginalAudio: false,
+              videoAudioEnabled: videos.map(() => false),
+              ...progressCallbacks,
+            });
+          } catch (error) {
+            lastError = error;
+          }
+        }
+
+        if (!result) {
+          const fallbackMessage = lastError instanceof Error ? lastError.message : "Unknown render error.";
+          const wrappedError = new Error(`Montage render failed. ${fallbackMessage}`);
+          console.error("[render] buildMontage failed", lastError ?? wrappedError);
+          throw wrappedError;
+        }
+
         if (cancelled) return;
         setMontage(result);
         setRenderedHookText(hookTextForThisRender);
@@ -413,82 +513,27 @@ export default function Home() {
         setRenderFallbackNotice(null);
         setStep("preview");
       } catch (e) {
-        console.error("Primary montage render failed", e);
         if (cancelled) return;
-        try {
-          setRenderPhase("Retrying with lighter export settings…");
-          setRenderProgress(0.05);
-          const lightResult = await buildMontage({
-            ...baseParams,
-            introClip: undefined,
-            preserveRouteIntro: false,
-            quality: "720p",
-            maxReelSeconds: 45,
-            reelTitle: undefined,
-            onProgress: (ratio) => {
-              if (cancelled) return;
-              setRenderPhase("Finishing lighter export…");
-              setRenderProgress(ratio);
-            },
-          });
-          if (cancelled) return;
-          setMontage(lightResult);
-          setRenderedHookText(hookTextForThisRender);
-          setRenderedStoryTexts(storyTextsForThisRender);
-          setRenderedAdventureOverlaySignature(adventureOverlaySignature);
-          if (!creditConsumed) {
-            consumeReelCredit();
-            setCreditConsumed(true);
-          }
-          setRenderFallbackNotice("Heavy cinematic export failed on this device — generated a lighter optimized montage instead.");
-          setStep("preview");
-        } catch (retryError) {
-          console.error("Light fallback montage render failed", retryError);
-          if (cancelled) return;
-          try {
-            setRenderPhase("Switching to ultra-light mobile-safe export…");
-            setRenderProgress(0.1);
-            const ultraLightResult = await buildMontage({
-              ...baseParams,
-              introClip: undefined,
-              preserveRouteIntro: false,
-              quality: "720p",
-              maxReelSeconds: 32,
-              reelTitle: undefined,
-              onProgress: (ratio) => {
-                if (cancelled) return;
-                setRenderPhase("Finalizing ultra-light export…");
-                setRenderProgress(ratio);
-              },
-            });
-            if (cancelled) return;
-            setMontage(ultraLightResult);
-            setRenderedHookText(hookTextForThisRender);
-            setRenderedStoryTexts(storyTextsForThisRender);
-            setRenderedAdventureOverlaySignature(adventureOverlaySignature);
-            if (!creditConsumed) {
-              consumeReelCredit();
-              setCreditConsumed(true);
-            }
-            setRenderFallbackNotice("Your device switched to ultra-light mode for reliability — storyboard flow is preserved with simplified effects.");
-            setStep("preview");
-          } catch (ultraError) {
-            console.error("Ultra-light fallback montage render failed", ultraError);
-            if (cancelled) return;
-            setMontage(null);
-            setRenderError(null);
-            setRenderFallbackNotice("Couldn't render the montage on this device, so we're showing the raw clip instead.");
-            setStep("preview");
-          }
-        }
+        setMontage(null);
+        const errorMessage = e instanceof Error ? e.message : String(e);
+        setRenderError(`Le montage n’a pas pu être rendu sur cet appareil. (${errorMessage})`);
+        setRenderFallbackNotice(`Couldn't render the montage on this device. (${errorMessage})`);
+        setStep("render");
       }
-    })();
+    })().finally(() => {
+      renderInProgressRef.current = false;
+      if (activeRenderSignature === renderSignature) {
+        activeRenderSignature = null;
+      }
+    });
 
     return () => {
-      cancelled = true;
+      if (!renderInProgressRef.current) {
+        cancelled = true;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, videos, analysis, style, routeIntroClip, hasRouteIntro, routeIntroStatus, gearSummaryClip, isFree, equipmentSummary.length, gearSummaryStatus, renderGateTimedOut, selectedOverlayTextKey, reelTitleKey]);
+  }, [step, videos, analysis, style, routeIntroClip, hasRouteIntro, routeIntroStatus, gearSummaryClip, isFree, shouldRenderGearSummary, gearSummaryStatus, renderGateTimedOut, selectedOverlayTextKey, reelTitleKey]);
 
   // Re-runs the render with whatever hook text is currently selected —
   // used when the user changes their hook pick/custom text on the Preview
@@ -600,15 +645,13 @@ export default function Home() {
     });
   };
 
-  const selectedHookTextRaw = analysis?.hooks.find((h) => h.id === selectedHookId)?.text ?? "";
-  const selectedHookText = isCoherentDisplayText(selectedHookTextRaw) ? selectedHookTextRaw : "";
   const previewUrl = montage?.url ?? videos[0]?.previewUrl ?? "";
   const combinedName = videos.length > 1 ? `${videos.length}-clips-montage` : videos[0]?.name ?? "reel";
   const requiresMapIntro = hasRouteIntro;
   const renderPhaseLabel =
     hasRouteIntro && routeIntroStatus === "rendering" && routeIntroClip === null
       ? copy.render.processingRoute
-      : equipmentSummary.length > 0 && gearSummaryStatus === "rendering" && gearSummaryClip === null
+      : shouldRenderGearSummary && gearSummaryStatus === "rendering" && gearSummaryClip === null
       ? copy.render.processingGear
       : renderPhase
         ? renderPhase
@@ -818,7 +861,7 @@ export default function Home() {
       </StepContent>
 
       <StepContent isVisible={step === "analyze"}>
-        <AIAnalysisPanel videos={videos} onComplete={handleAnalysisComplete} />
+        <AIAnalysisPanel videos={videos} onComplete={handleAnalysisComplete} gpxPoints={gpxPoints} />
       </StepContent>
 
       <StepContent isVisible={step === "render" && style !== null}>
@@ -827,10 +870,6 @@ export default function Home() {
             <RenderPanel
               progress={renderProgress}
               phaseLabel={renderPhaseLabel}
-              styleLabel={style ? copy.style(style).label : ""}
-              style={style}
-              videoNames={videos.map((video) => video.name)}
-              gearSelections={gearSelections}
             />
             {hasRouteIntro && (
               <div className="space-y-2 rounded-2xl border border-cyan-300/20 bg-cyan-400/[0.06] px-4 py-3 text-xs text-cyan-100/90">
@@ -888,7 +927,7 @@ export default function Home() {
                 overlaySizes={overlaySizes}
                 overlayColors={overlayColors}
                 introDurationSeconds={routeIntroClip?.durationSeconds ?? 0}
-                outroDurationSeconds={gearSummaryClip?.durationSeconds ?? 0}
+                outroDurationSeconds={analysis.style === "sport" ? Math.min(gearSummaryClip?.durationSeconds ?? 0, 3) : gearSummaryClip?.durationSeconds ?? 0}
                 montageInfo={montage ? { clipCount: montage.clipCount, durationSeconds: montage.durationSeconds } : undefined}
                 routeLabel={routeLabel}
                 sportTelemetry={sportTelemetry}

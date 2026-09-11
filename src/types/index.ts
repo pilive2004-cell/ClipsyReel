@@ -178,6 +178,14 @@ export interface GpxRouteStats {
   highestPointM: number | null;
 }
 
+export interface SportTelemetry {
+  distanceKm: number;
+  durationLabel: string;
+  elevationGainM: number;
+  highestPointM: number | null;
+  maxSpeedKmh: number | null;
+}
+
 export type AdventureEquipmentCategory = "motorcycle" | "helmet" | "camera" | "drone" | "luggage" | "tires";
 
 export type PartnerStatus = "standard" | "verified_partner" | "featured_partner";

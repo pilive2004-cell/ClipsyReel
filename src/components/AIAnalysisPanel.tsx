@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { CheckCircle2, Loader2, Sparkles } from "lucide-react";
-import { analyzeAllVideos } from "@/lib/video-analysis";
+import { analyzeAllVideos, estimateAnalysisBudgetMs } from "@/lib/video-analysis";
 import { BestMoment, UploadedVideo } from "@/types";
 import { useLocale } from "@/lib/i18n";
 
@@ -28,7 +28,7 @@ export default function AIAnalysisPanel({ videos, onComplete, gpxPoints }: AIAna
     let finishTimer: number | null = null;
     const startedAt = Date.now();
     const MIN_VISIBLE_MS = 1800;
-    const ANALYSIS_TIMEOUT_MS = 35000;
+    const ANALYSIS_TIMEOUT_MS = estimateAnalysisBudgetMs(videos);
     let latestRealRatio = 0;
     // If the real (in-browser ML) analysis doesn't finish before the
     // timeout, we move on with fallback moments — but without this signal
@@ -50,31 +50,34 @@ export default function AIAnalysisPanel({ videos, onComplete, gpxPoints }: AIAna
 
     (async () => {
       let moments: BestMoment[] | null = null;
+      let timedOut = false;
+      let timeoutId: number | null = null;
       try {
-        moments = await Promise.race([
-          analyzeAllVideos(
-            videos.map((v) => ({ file: v.file, durationSeconds: v.durationSeconds })),
-            (ratio) => {
-              latestRealRatio = Math.max(latestRealRatio, ratio);
-              if (!cancelled) setProgress((prev) => Math.max(prev, ratio));
-            },
-            gpxPoints,
-            abortController.signal
-          ),
-          new Promise<BestMoment[] | null>((_, reject) => {
-            window.setTimeout(() => reject(new Error("analysis timeout")), ANALYSIS_TIMEOUT_MS);
-          }),
-        ]);
-      } catch (e) {
-        if (e instanceof Error && e.message === "analysis timeout") {
-          console.warn("Real analysis timed out, continuing with fallback moments");
+        timeoutId = window.setTimeout(() => {
+          timedOut = true;
           abortController.abort();
-        } else {
-          console.warn("Real video analysis failed, falling back to mock moments", e);
-        }
+        }, ANALYSIS_TIMEOUT_MS);
+        moments = await analyzeAllVideos(
+          videos.map((v) => ({ file: v.file, durationSeconds: v.durationSeconds })),
+          (ratio) => {
+            latestRealRatio = Math.max(latestRealRatio, ratio);
+            if (!cancelled) setProgress((prev) => Math.max(prev, ratio));
+          },
+          gpxPoints,
+          abortController.signal
+        );
+      } catch (e) {
+        console.warn("Real video analysis failed, falling back to mock moments", e);
         moments = null;
       } finally {
+        if (timeoutId !== null) window.clearTimeout(timeoutId);
         if (watchdogTimer !== null) window.clearInterval(watchdogTimer);
+      }
+      if (timedOut) {
+        console.warn("Real analysis exceeded its time budget, using partial real moments where available", {
+          timeoutMs: ANALYSIS_TIMEOUT_MS,
+          returnedMoments: moments?.length ?? 0,
+        });
       }
       if (cancelled) return;
       const elapsed = Date.now() - startedAt;

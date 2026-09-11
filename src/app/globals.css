@@ -15,6 +15,113 @@
 
   --pro-from: #fbbf24;
   --pro-to: #f97316;
+
+  --app-shell-bg-top: #07070f;
+  --app-shell-bg-mid: #0b0a14;
+  --app-shell-bg-mid-2: #171028;
+  --app-shell-bg-glow: #22133a;
+  --app-shell-bg-mid-3: #171128;
+  --app-shell-bg-bottom: #07070f;
+  --app-shell-glow-a: rgba(124, 58, 237, 0.13);
+  --app-shell-glow-b: rgba(217, 70, 239, 0.1);
+  --header-bg: rgba(0, 0, 0, 0.4);
+  --control-bg: rgba(255, 255, 255, 0.05);
+  --control-bg-hover: rgba(255, 255, 255, 0.1);
+  --control-border: rgba(255, 255, 255, 0.1);
+  --menu-bg: #0b0d13;
+  --panel-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+}
+
+:root[data-palette="earth"] {
+  --background: #000000;
+  --foreground: #fafafa;
+  --surface: #675845;
+  --surface-alt: #8d7961;
+  --border-subtle: rgba(250, 250, 250, 0.12);
+
+  --brand-from: rgb(241, 92, 5);
+  --brand-via: #ff9a60;
+  --brand-to: #fafafa;
+
+  --pro-from: #d5d1c8;
+  --pro-to: #8d7961;
+
+  --app-shell-bg-top: #000000;
+  --app-shell-bg-mid: #090705;
+  --app-shell-bg-mid-2: #120c08;
+  --app-shell-bg-glow: #2b1d15;
+  --app-shell-bg-mid-3: #120c08;
+  --app-shell-bg-bottom: #000000;
+  --app-shell-glow-a: rgba(250, 92, 1, 0.16);
+  --app-shell-glow-b: rgba(141, 121, 97, 0.12);
+  --header-bg: rgba(0, 0, 0, 0.5);
+  --control-bg: rgba(103, 88, 69, 0.28);
+  --control-bg-hover: rgba(141, 121, 97, 0.36);
+  --control-border: rgba(214, 209, 200, 0.22);
+  --menu-bg: #120d09;
+  --panel-bg: linear-gradient(180deg, rgba(141, 121, 97, 0.2), rgba(103, 88, 69, 0.12));
+}
+
+:root[data-palette="night"] {
+  --background: #1c1f2a;
+  --foreground: #ffffff;
+  --surface: #232634;
+  --surface-alt: #2a2d3a;
+  --border-subtle: rgba(208, 220, 222, 0.14);
+
+  --brand-from: #ff5000;
+  --brand-via: #ff5000;
+  --brand-to: #ffffff;
+
+  --pro-from: #d0dcde;
+  --pro-to: #ffffff;
+
+  --app-shell-bg-top: #1c1f2a;
+  --app-shell-bg-mid: #181b25;
+  --app-shell-bg-mid-2: #141722;
+  --app-shell-bg-glow: #26293a;
+  --app-shell-bg-mid-3: #141722;
+  --app-shell-bg-bottom: #1c1f2a;
+  --app-shell-glow-a: rgba(255, 80, 0, 0.16);
+  --app-shell-glow-b: rgba(208, 220, 222, 0.1);
+  --header-bg: rgba(16, 18, 28, 0.76);
+  --control-bg: rgba(255, 255, 255, 0.04);
+  --control-bg-hover: rgba(255, 255, 255, 0.09);
+  --control-border: rgba(208, 220, 222, 0.16);
+  --menu-bg: #151826;
+  --panel-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.018));
+}
+
+:root[data-palette="bold"] {
+  --background: #0f172a;
+  --foreground: #ffffff;
+  --surface: #111827;
+  --surface-alt: #1e293b;
+  --border-subtle: rgba(255, 214, 10, 0.18);
+
+  --brand-from: #ffd60a;
+  --brand-via: #ffd60a;
+  --brand-to: #ffd60a;
+
+  --pro-from: #ffd60a;
+  --pro-to: #ffd60a;
+
+  --app-shell-bg-top: #0f172a;
+  --app-shell-bg-mid: #0f172a;
+  --app-shell-bg-mid-2: #0f172a;
+  --app-shell-bg-glow: #0f172a;
+  --app-shell-bg-mid-3: #0f172a;
+  --app-shell-bg-bottom: #0f172a;
+  --app-shell-glow-a: rgba(255, 214, 10, 0.0);
+  --app-shell-glow-b: rgba(255, 214, 10, 0.0);
+  --header-bg: #0f172a;
+  --control-bg: #111827;
+  --control-bg-hover: #1e293b;
+  --control-border: rgba(255, 214, 10, 0.22);
+  --menu-bg: #111827;
+  --panel-bg: #111827;
+  --bold-long-shadow: 10px 10px 0 rgba(0, 0, 0, 0.22);
+  --bold-long-shadow-soft: 8px 8px 0 rgba(0, 0, 0, 0.14);
 }
 
 @theme inline {
@@ -66,9 +173,43 @@ body {
 }
 
 .glass-card {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+  background: var(--panel-bg);
   border: 1px solid var(--border-subtle);
   backdrop-filter: blur(20px);
+}
+
+.palette-control {
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+}
+
+.palette-control:hover {
+  background: var(--control-bg-hover);
+}
+
+:root[data-palette="bold"] .brand-gradient,
+:root[data-palette="bold"] .pro-gradient {
+  background: var(--brand-from);
+  box-shadow: var(--bold-long-shadow);
+}
+
+:root[data-palette="bold"] .brand-gradient-text {
+  background: none;
+  -webkit-background-clip: initial;
+  background-clip: initial;
+  color: var(--brand-from);
+  text-shadow: var(--bold-long-shadow-soft);
+}
+
+:root[data-palette="bold"] .palette-control,
+:root[data-palette="bold"] .glass-card,
+:root[data-palette="bold"] button[class*="brand-gradient"],
+:root[data-palette="bold"] .bg-\[\#111827\] {
+  box-shadow: var(--bold-long-shadow);
+}
+
+:root[data-palette="bold"] header {
+  box-shadow: 0 10px 0 rgba(0, 0, 0, 0.18);
 }
 
 .no-scrollbar::-webkit-scrollbar {
@@ -122,7 +263,7 @@ body {
 
 .maplibregl-map {
   font-family: var(--font-sans), Arial, Helvetica, sans-serif;
-  background: #05050a;
+  background: var(--background);
 }
 
 .maplibregl-canvas {
@@ -131,7 +272,7 @@ body {
 
 .maplibregl-ctrl-group,
 .maplibregl-ctrl-attrib {
-  background: rgba(5, 5, 10, 0.7) !important;
+  background: color-mix(in srgb, var(--background) 76%, transparent) !important;
   border: 1px solid rgba(255, 255, 255, 0.08) !important;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25) !important;
   backdrop-filter: blur(14px);

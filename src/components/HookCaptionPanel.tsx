@@ -92,7 +92,7 @@ function getPreviewFontFamily(font: ReelTitleFont): string {
 
 export default function HookCaptionPanel({
   overlayTexts,
-  overlayFonts = ["cinematic", "cinematic", "cinematic"],
+  overlayFonts = ["bold", "bold", "bold"],
   overlaySizes = ["md", "md", "md"],
   overlayColors = ["white", "white", "white"],
   onChangeOverlayFont,
