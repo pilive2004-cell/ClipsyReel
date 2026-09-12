@@ -4,8 +4,9 @@ import "leaflet/dist/leaflet.css";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { PlanProvider } from "@/lib/plan-context";
 import { LocaleProvider } from "@/lib/i18n";
+import { getSiteUrl } from "@/lib/site-url";
 
-const SITE_URL = "https://clipsyreel.netlify.app";
+const SITE_URL = getSiteUrl();
 const SITE_NAME = "ClipsyReel";
 const SITE_TITLE = "ClipsyReel — Turn videos into scroll-stopping Instagram Reels";
 const SITE_DESCRIPTION =
@@ -20,6 +21,10 @@ const jsonLd = {
 
 export const metadata: Metadata = {
   title: "ClipsyReel",
+  metadataBase: new URL(SITE_URL),
+  alternates: {
+    canonical: "/",
+  },
   description:
     "Upload your MP4, let AI find the best moments, and export a ready-to-post 9:16 Instagram Reel with hook, caption, hashtags and music suggestions.",
 };
