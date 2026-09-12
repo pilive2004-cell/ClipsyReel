@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { planReelSegments, shouldUseCompactConcatFallback, type Segment } from "../video-engine";
+import { getComposeClipCap, planReelSegments, shouldUseCompactConcatFallback, type Segment } from "../video-engine";
 import { buildSportHookSequence, planSportHookWindows } from "../sport-style";
 import { STYLE_RECIPES } from "@/data/styleRecipes";
 import type { BestMoment } from "@/types";
@@ -125,6 +125,13 @@ describe("planReelSegments", () => {
     expect(shouldUseCompactConcatFallback("sport", 2)).toBe(false);
     expect(shouldUseCompactConcatFallback("viral", 7)).toBe(false);
     expect(shouldUseCompactConcatFallback("viral", 8)).toBe(true);
+  });
+
+  it("does not trim compact sport renders back down to five final clips", () => {
+    expect(getComposeClipCap("sport", 3)).toBeNull();
+    expect(getComposeClipCap("sport", 12)).toBeNull();
+    expect(getComposeClipCap("sport", 2)).toBe(5);
+    expect(getComposeClipCap("viral", 7)).toBe(6);
   });
 
   it("keeps the sport hook wording user-driven and strips extra editorial labels", () => {

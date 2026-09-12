@@ -118,6 +118,11 @@ export function shouldUseCompactConcatFallback(style: ReelStyle, clipCount: numb
   return clipCount >= 8;
 }
 
+export function getComposeClipCap(style: ReelStyle, clipCount: number): number | null {
+  if (shouldUseCompactConcatFallback(style, clipCount)) return null;
+  return style === "sport" ? 5 : 6;
+}
+
 export async function detectVideoHasAudio(file: File | Blob): Promise<boolean> {
   const url = URL.createObjectURL(file);
   const video = document.createElement("video");
@@ -2135,12 +2140,13 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     const finalClipNames = [...(introName ? [introName] : []), ...segmentClipNames, ...(outroName ? [outroName] : [])];
     let finalDurations = [...(introName ? [introDuration] : []), ...segmentDurations, ...(outroName ? [outroDuration] : [])];
 
-    // SPORT mode is the most FS-sensitive path in ffmpeg.wasm, but the reel also
-    // needs enough distinct clips to preserve the planned narrative (intro -> action
-    // beats -> outro). Keep the final graph compact without collapsing the montage to
-    // a single-shot fallback or stripping the required title/hook/outro sequence.
-    const composeCap = style === "sport" ? 5 : 6;
-    if (finalClipNames.length > composeCap) {
+    // Only cap the late-stage composition inputs when we are about to run the
+    // heavier transition graph. In compact-concat mode the final pass works on
+    // one pre-joined base video, so trimming SPORT down to five inputs here
+    // would incorrectly shorten the reel and can drop one of the uploaded
+    // sources from the final cut.
+    const composeCap = getComposeClipCap(style, finalClipNames.length);
+    if (composeCap !== null && finalClipNames.length > composeCap) {
       const preferIntro = introName ? finalClipNames.indexOf(introName) : -1;
       const preferOutro = outroName ? finalClipNames.lastIndexOf(outroName) : -1;
       const keepIndexes = new Set<number>();
