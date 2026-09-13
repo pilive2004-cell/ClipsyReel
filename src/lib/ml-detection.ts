@@ -75,6 +75,23 @@ let faceDetectorPromise: Promise<FaceLandmarksDetector | null> | null = null;
 let mobilenetModelPromise: Promise<mobilenetTypes.MobileNet | null> | null = null;
 
 const modelLoadWarnings = new Set<string>();
+const MODEL_TIMEOUT_MS = 4500;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
 
 /** True once all models have successfully finished loading at least once. */
 let mlReady = false;
@@ -106,11 +123,11 @@ function loadCocoModel(): Promise<cocoSsdTypes.ObjectDetection | null> {
     cocoModelPromise = (async () => {
       try {
         await ensureCoreModules();
-        await tf!.ready();
+        await withTimeout(tf!.ready(), MODEL_TIMEOUT_MS, "TFJS ready");
         // "lite_mobilenet_v2" trades a little accuracy for speed — this runs
         // once per sampled frame (up to ~36 per video), so keeping it fast
         // matters more than squeezing out a few extra points of mAP.
-        const model = await cocoSsdModule!.load({ base: "lite_mobilenet_v2" });
+        const model = await withTimeout(cocoSsdModule!.load({ base: "lite_mobilenet_v2" }), MODEL_TIMEOUT_MS, "COCO-SSD load");
         mlReady = true;
         return model;
       } catch (error) {
@@ -128,12 +145,16 @@ function loadFaceDetector(): Promise<FaceLandmarksDetector | null> {
     faceDetectorPromise = (async () => {
       try {
         await ensureCoreModules();
-        await tf!.ready();
-        const detector = await faceLandmarksTfjsModule!.load({
-          runtime: "tfjs",
-          refineLandmarks: false,
-          maxFaces: 1,
-        });
+        await withTimeout(tf!.ready(), MODEL_TIMEOUT_MS, "TFJS ready");
+        const detector = await withTimeout(
+          faceLandmarksTfjsModule!.load({
+            runtime: "tfjs",
+            refineLandmarks: false,
+            maxFaces: 1,
+          }),
+          MODEL_TIMEOUT_MS,
+          "Face landmark detector load"
+        );
         mlReady = true;
         return detector;
       } catch (error) {
@@ -151,12 +172,16 @@ function loadMobilenetModel(): Promise<mobilenetTypes.MobileNet | null> {
     mobilenetModelPromise = (async () => {
       try {
         await ensureCoreModules();
-        await tf!.ready();
+        await withTimeout(tf!.ready(), MODEL_TIMEOUT_MS, "TFJS ready");
         // v1/alpha 0.25 is the smallest/fastest MobileNet variant — this is a
         // coarse "is there a recognizable landmark/scenic vista in this frame"
         // signal, not the primary subject detector, so favoring speed over the
         // last few points of top-1 accuracy is the right tradeoff here too.
-        const model = await mobilenetModule!.load({ version: 1, alpha: 0.25 });
+        const model = await withTimeout(
+          mobilenetModule!.load({ version: 1, alpha: 0.25 }),
+          MODEL_TIMEOUT_MS,
+          "MobileNet load"
+        );
         mlReady = true;
         return model;
       } catch (error) {
@@ -188,7 +213,7 @@ export async function detectObjectsOnFrame(
   try {
     const model = await loadCocoModel();
     if (!model) return null;
-    const predictions = await model.detect(source, 10);
+    const predictions = await withTimeout(model.detect(source, 10), MODEL_TIMEOUT_MS, "COCO-SSD frame detection");
     mlReady = true;
     return predictions.map((p) => ({
       label: p.class,
@@ -222,7 +247,7 @@ export async function detectFaceExpression(
   try {
     const detector = await loadFaceDetector();
     if (!detector) return null;
-    const faces = await detector.estimateFaces(source);
+    const faces = await withTimeout(detector.estimateFaces(source), MODEL_TIMEOUT_MS, "Face landmark estimation");
     mlReady = true;
     if (!faces || faces.length === 0) {
       return { present: false, smileScore: 0, centerBias: 0, area: 0 };
@@ -273,7 +298,7 @@ export async function classifySceneOnFrame(source: HTMLCanvasElement): Promise<S
   try {
     const model = await loadMobilenetModel();
     if (!model) return null;
-    const predictions = await model.classify(source, 5);
+    const predictions = await withTimeout(model.classify(source, 5), MODEL_TIMEOUT_MS, "MobileNet scene classification");
     mlReady = true;
     return predictions;
   } catch (error) {

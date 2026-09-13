@@ -1575,6 +1575,19 @@ export default function RouteMapIntro({
             await new Promise((resolve) => window.setTimeout(resolve, 16));
             if (performance.now() - preloadStartAt > TILE_GLOBAL_PRELOAD_TIMEOUT_MS) break;
           }
+          // Keep the animation locked to actual map readiness so the camera does
+          // not start moving before the route image is fully present on screen.
+          if (!cancelled && map) {
+            let readyFrames = 0;
+            const readyStart = performance.now();
+            while (!cancelled && readyFrames < 10) {
+              map.triggerRepaint();
+              if (areTilesLoadedSafe()) readyFrames += 1;
+              else readyFrames = 0;
+              await new Promise((resolve) => window.setTimeout(resolve, 32));
+              if (performance.now() - readyStart > 1_500) break;
+            }
+          }
           setPreloadProgress(1);
         }
         if (cancelled || !map) return;

@@ -20,6 +20,7 @@ import {
 const ENABLE_MT_FFMPEG = process.env.NEXT_PUBLIC_ENABLE_MT_FFMPEG === "true";
 const INTRO_TRANSCODE_TIMEOUT_MS_FAST = 75_000;
 const INTRO_TRANSCODE_TIMEOUT_MS_QUALITY = 110_000;
+const COMPACT_EXPORT_TIMEOUT_MS = 75_000;
 
 /** Clone file data to prevent ArrayBuffer detachment issues with FFmpeg worker. */
 async function getFileDataForFFmpeg(file: File | Blob): Promise<Uint8Array> {
@@ -1326,7 +1327,7 @@ async function generateReelTitlePng(frameWidth: number, frameHeight: number, tit
   ctx.clearRect(0, 0, frameWidth, frameHeight);
   ctx.beginPath();
   roundRectPath(ctx, boxX, boxY, boxWidth, boxHeight, Math.max(18, Math.round(fontSize * 0.28)));
-  ctx.fillStyle = "rgba(0,0,0,0)";
+  ctx.fillStyle = "rgba(255,255,255,0.2)";
   ctx.fill();
   ctx.strokeStyle = titleColor;
   ctx.lineWidth = Math.max(1.5, Math.round(fontSize * 0.05));
@@ -1358,8 +1359,8 @@ function planReelTitleWindow(totalDuration: number, introDuration: number, outro
   const available = endBoundary - start;
   if (available < 1.4) return null;
   const duration = style === "sport"
-    ? clamp(available * 0.18, 1.9, 3.3)
-    : clamp(available * 0.2, 1.2, 2.2);
+    ? clamp(available * 0.22, 2.3, 4.4)
+    : clamp(available * 0.24, 1.5, 3.0);
   return { start, end: Math.min(endBoundary, start + duration) };
 }
 
@@ -2412,13 +2413,16 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       await ffmpeg.writeFile(concatManifestName, buildConcatManifest(finalClipNames));
       tempFiles.push(concatManifestName);
       try {
-        await ffmpeg.exec([
-          "-f", "concat",
-          "-safe", "0",
-          "-i", concatManifestName,
-          "-c", "copy",
-          baseOutputName,
-        ]);
+        await withTimeout(
+          ffmpeg.exec([
+            "-f", "concat",
+            "-safe", "0",
+            "-i", concatManifestName,
+            "-c", "copy",
+            baseOutputName,
+          ]),
+          COMPACT_EXPORT_TIMEOUT_MS
+        );
       } catch (error) {
         console.warn("[video-engine] compact-concat copy join failed; falling back to re-encode concat", error);
         const concatFilterParts: string[] = [];
@@ -2437,7 +2441,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
           baseOutputName
         );
         try {
-          await ffmpeg.exec(baseExecArgs);
+          await withTimeout(ffmpeg.exec(baseExecArgs), COMPACT_EXPORT_TIMEOUT_MS);
         } catch (fallbackError) {
           console.error("[video-engine] compact-concat base composition failed", fallbackError);
           throw fallbackError;
@@ -2515,10 +2519,10 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       );
 
       try {
-        await finalStageFFmpeg.exec(overlayExecArgs);
+        await withTimeout(finalStageFFmpeg.exec(overlayExecArgs), COMPACT_EXPORT_TIMEOUT_MS);
       } catch (error) {
-        console.error("[video-engine] compact-concat overlay composition failed", error);
-        throw error;
+        console.warn("[video-engine] compact-concat overlay composition timed out or failed; falling back to base concat output.", error);
+        return finaliseOutput(baseOutputName, renderDuration, finalClipNames.length);
       }
       completedUnits++;
       mark("phase2-done");
