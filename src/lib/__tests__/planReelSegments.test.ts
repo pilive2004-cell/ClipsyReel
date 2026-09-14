@@ -120,6 +120,26 @@ describe("planReelSegments", () => {
     expect(plannedDuration).toBeGreaterThanOrEqual(45);
   });
 
+  it("never leaves the same source shot immediately after itself when only nearby moments exist", () => {
+    const moments: BestMoment[] = [
+      moment("repeat-a", 0, 12, 96),
+      moment("repeat-b", 0, 14.2, 95),
+      moment("repeat-c", 0, 29, 94),
+      moment("repeat-d", 0, 44, 93),
+      moment("repeat-e", 0, 59, 92),
+    ];
+
+    const recipe = STYLE_RECIPES.sport;
+    const segments: Segment[] = planReelSegments(moments, recipe, [90], 40);
+
+    for (let i = 1; i < segments.length; i++) {
+      const previous = segments[i - 1];
+      const current = segments[i];
+      if (previous.sourceIndex !== current.sourceIndex) continue;
+      expect(Math.abs((previous.start ?? 0) - (current.start ?? 0))).toBeGreaterThanOrEqual(2.8);
+    }
+  });
+
   it("uses the compact concat path for sport reels as soon as three clips are in play", () => {
     expect(shouldUseCompactConcatFallback("sport", 3)).toBe(true);
     expect(shouldUseCompactConcatFallback("sport", 2)).toBe(false);

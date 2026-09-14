@@ -1,4 +1,4 @@
-import { GEAR_LABELS, GearCategoryKey } from "@/data/gearCatalog";
+import { GearCategoryKey } from "@/data/gearCatalog";
 
 export interface GearDiscoveryItem {
   id: string;
@@ -16,79 +16,63 @@ export interface GearDiscoveryItem {
   image: string;
 }
 
-type BrandNewsTemplate = {
-  launches: string[];
-  update: string;
-  url: string;
-};
+interface AdventureNewsApiItem {
+  id: string;
+  brand: string;
+  category: GearCategoryKey;
+  title: string;
+  subtitle: string;
+  summary: string;
+  description: string;
+  ctaLabel: string;
+  ctaUrl: string;
+  kind: "brand-news";
+  featured?: boolean;
+  image: string | null;
+}
 
-const BRAND_NEWS: Record<string, BrandNewsTemplate> = {
-  AdvRider: {
-    launches: ["Adventure riding news", "Route stories", "Gear inspiration"],
-    update: "Latest adventure bike coverage, overland route inspiration and rider-tested gear from AdvRider.",
-    url: "https://www.advrider.com/?utm_source=google&utm_medium=organic",
+const ADVENTURE_NEWS_FALLBACKS: AdventureNewsApiItem[] = [
+  {
+    id: "adventuremotorcycle-feed",
+    brand: "Adventure Motorcycle",
+    category: "motorcycle",
+    title: "Adventure Motorcycle RSS",
+    subtitle: "Adventure Motorcycle • RSS feed",
+    summary: "Open the Adventure Motorcycle feed for the latest stories and route inspiration.",
+    description: "Fallback source card when the live RSS feed is unavailable from the current network.",
+    ctaLabel: "Open feed",
+    ctaUrl: "https://adventuremotorcycle.com/feed",
+    kind: "brand-news",
+    featured: true,
+    image: null,
   },
-  BMW: {
-    launches: ["R 1300 GS Adventure", "M 1000 XR M Competition", "GS Rallye GTX 2"],
-    update: "Adaptive riding assist and premium touring updates.",
-    url: "https://www.bmw-motorrad.com/",
+  {
+    id: "rideapart-rss-directory",
+    brand: "RideApart",
+    category: "motorcycle",
+    title: "RideApart RSS directory",
+    subtitle: "RideApart • RSS feeds",
+    summary: "Browse RideApart's feed directory for motorcycle and adventure coverage.",
+    description: "Fallback source card for the RideApart RSS directory.",
+    ctaLabel: "Open RSS",
+    ctaUrl: "https://www.rideapart.com/rss/",
+    kind: "brand-news",
+    image: null,
   },
-  KTM: {
-    launches: ["990 Adventure R", "390 Enduro R", "890 Adventure Tech Pack"],
-    update: "Rally-focused chassis revisions and suspension updates.",
-    url: "https://www.ktm.com/",
+  {
+    id: "rideapart-articles-all",
+    brand: "RideApart",
+    category: "motorcycle",
+    title: "RideApart latest articles",
+    subtitle: "RideApart • all articles",
+    summary: "Open the RideApart all-articles feed for the latest motorcycle headlines.",
+    description: "Fallback source card for the RideApart article feed.",
+    ctaLabel: "Open feed",
+    ctaUrl: "https://www.rideapart.com/rss/articles/all/",
+    kind: "brand-news",
+    image: null,
   },
-  Ducati: {
-    launches: ["Multistrada V4 RS", "DesertX Rally Tech", "Hypermotard 698 RVE"],
-    update: "Performance package refresh for road and mixed terrain.",
-    url: "https://www.ducati.com/",
-  },
-  Yamaha: {
-    launches: ["Ténéré 700 World Raid+", "Tracer 9 GT+ Touring Pack", "MT-09 SP 2"],
-    update: "Connected cockpit enhancements and touring refinements.",
-    url: "https://www.yamaha-motor.eu/",
-  },
-  Honda: {
-    launches: ["Africa Twin Adventure Sports ES", "CRF Rally Pro", "XL750 Transalp Touring"],
-    update: "Adventure electronics and long-distance comfort upgrades.",
-    url: "https://www.honda.com/",
-  },
-  Michelin: {
-    launches: ["Anakee Adventure Evo", "Road 7", "Anakee Wild 2"],
-    update: "New dual-compound endurance profile announced.",
-    url: "https://www.michelin.com/",
-  },
-  Pirelli: {
-    launches: ["Scorpion Trail IV", "Scorpion Rally STR Evo", "Diablo Trackday Pro"],
-    update: "Sport/adventure grip update for mixed surface use.",
-    url: "https://www.pirelli.com/",
-  },
-  Garmin: {
-    launches: ["zūmo XT3", "GPSMAP Moto Edition", "inReach Mini 3"],
-    update: "Route synchronization and satellite safety improvements.",
-    url: "https://www.garmin.com/",
-  },
-  DJI: {
-    launches: ["Action 6 Pro", "Mini 5 Adventure", "Avata 3"],
-    update: "Stabilization and low-light capture upgrades.",
-    url: "https://www.dji.com/",
-  },
-  GoPro: {
-    launches: ["HERO14 Black", "MAX 2", "Helmet HUD Link"],
-    update: "Enhanced horizon lock and ride telemetry overlays.",
-    url: "https://www.gopro.com/",
-  },
-  Touratech: {
-    launches: ["ZEGA Evo X", "Adventure Rack 2.0", "Travel Cockpit GPS Pro"],
-    update: "Overland luggage and long-distance equipment updates.",
-    url: "https://www.touratech.com/",
-  },
-  Leatt: {
-    launches: ["ADV 9.5 Carbon", "Enduro 4.0 line", "HydraDri travel armor"],
-    update: "Protective gear refresh focused on ventilation and impact safety.",
-    url: "https://leatt.com/",
-  },
-};
+];
 
 function brandLogoImage(brand: string): string {
   const hue = Math.abs(brand.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0)) % 360;
@@ -114,90 +98,75 @@ function brandLogoImage(brand: string): string {
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
 }
 
-function buildWebsiteScreenshotUrl(url: string): string {
-  const fallbackBrand = url.includes("advrider") ? "AdvRider" : url.includes("bikeexif") ? "Bike EXIF" : url.includes("off-road") ? "Off-Road.com" : url.includes("motorcyclenews") ? "Motorcycle News" : "Adventure";
-  return brandLogoImage(fallbackBrand);
+function buildLogoFallbackImage(
+  title: string,
+  subtitle: string,
+  logoSrc: string | null | undefined,
+  colors: [string, string],
+): string {
+  const safeTitle = escapeSvgText(title);
+  const safeSubtitle = escapeSvgText(subtitle);
+  const safeLogoSrc = logoSrc ? escapeSvgText(logoSrc) : "";
+  const logoBlock = safeLogoSrc
+    ? `<rect x="438" y="160" width="324" height="180" rx="26" fill="rgba(15,23,42,0.34)"/>
+<image href="${safeLogoSrc}" x="462" y="180" width="276" height="140" preserveAspectRatio="xMidYMid meet"/>`
+    : "";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800">
+<defs>
+<linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+<stop offset="0%" stop-color="${colors[0]}"/>
+<stop offset="100%" stop-color="${colors[1]}"/>
+</linearGradient>
+</defs>
+<rect width="1200" height="800" fill="#0b1220"/>
+<rect width="1200" height="800" fill="url(#g)" opacity="0.35"/>
+<circle cx="980" cy="140" r="220" fill="${colors[1]}" opacity="0.18"/>
+<circle cx="180" cy="120" r="200" fill="${colors[0]}" opacity="0.16"/>
+${logoBlock}
+<text x="64" y="650" fill="#f8fafc" font-size="62" font-family="Arial, sans-serif" font-weight="700">${safeTitle}</text>
+<text x="64" y="712" fill="#cbd5e1" font-size="36" font-family="Arial, sans-serif">${safeSubtitle}</text>
+</svg>`;
+  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
 }
 
-const EDITORIAL_NEWS_SOURCES: Array<{
-  id: string;
-  brand: string;
-  category: GearCategoryKey;
-  title: string;
-  subtitle: string;
-  summary: string;
-  description: string;
-  ctaLabel: string;
-  url: string;
-  featured?: boolean;
-}> = [
-  {
-    id: "advrider-adventure-riding-news",
-    brand: "AdvRider",
-    category: "motorcycle",
-    title: "Latest adventure riding news",
-    subtitle: "Moto • Editorial coverage",
-    summary: "Fresh route inspiration, rider stories and gear updates from AdvRider.",
-    description: "Official adventure riding coverage from AdvRider, focused on long-distance travel, bike reviews, gear and overland inspiration.",
-    ctaLabel: "Read AdvRider",
-    url: "https://www.advrider.com/?utm_source=google&utm_medium=organic",
-    featured: true,
-  },
-  {
-    id: "bikeexif-custom-builds",
-    brand: "Bike EXIF",
-    category: "helmet",
-    title: "Custom builds & motorcycle culture",
-    subtitle: "Style • Design stories",
-    summary: "Cafe racer, scrambler and custom builds from one of the most visual moto communities.",
-    description: "Bike EXIF brings a premium design lens to custom motorcycles, cafe racers, scramblers and rider culture reporting.",
-    ctaLabel: "Browse Bike EXIF",
-    url: "https://www.bikeexif.com/",
-    featured: true,
-  },
-  {
-    id: "offroad-all-terrain-news",
-    brand: "Off-Road.com",
-    category: "navigation",
-    title: "Off-road route & terrain news",
-    subtitle: "Navigation • Trail coverage",
-    summary: "Technical trail reports, off-road destinations and rider-safe adventure updates.",
-    description: "Off-Road.com offers a practical, trail-focused editorial angle for adventure riders and overlanders planning bigger routes.",
-    ctaLabel: "Read Off-Road",
-    url: "https://www.off-road.com/",
-  },
-  {
-    id: "motorcyclenews-rider-updates",
-    brand: "Motorcycle News",
-    category: "tires",
-    title: "Bike tests & rider updates",
-    subtitle: "Moto • Reviews",
-    summary: "Current news, product tests and practical riding updates from a trusted motorcycle media source.",
-    description: "Motorcycle News keeps the feed grounded in review-driven coverage, model launches and rider-focused updates.",
-    ctaLabel: "Open MCN",
-    url: "https://www.motorcyclenews.com/",
-  },
-];
+function escapeSvgText(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
 
-const EDITORIAL_NEWS_ITEMS: GearDiscoveryItem[] = [...EDITORIAL_NEWS_SOURCES]
-  .sort((a, b) => Number(Boolean(b.featured)) - Number(Boolean(a.featured)))
-  .map((source) => ({
-    id: source.id,
-    brand: source.brand,
-    brandLogo: brandLogoImage(source.brand),
-    category: source.category,
-    title: source.title,
-    subtitle: source.subtitle,
-    summary: source.summary,
-    description: source.description,
-    ctaLabel: source.ctaLabel,
-    ctaUrl: source.url,
-    kind: "brand-news",
-    featured: source.featured,
-    image: buildWebsiteScreenshotUrl(source.url),
-  }));
+function normalizeItems(items: AdventureNewsApiItem[]): GearDiscoveryItem[] {
+  return items.map((item) => {
+    const brandLogo = brandLogoImage(item.brand);
+    return {
+      ...item,
+      brandLogo,
+      image: item.image || buildLogoFallbackImage(item.title, item.subtitle, brandLogo, ["#38bdf8", "#ec4899"]),
+    };
+  });
+}
 
 export async function loadGearDiscoveryItems(): Promise<GearDiscoveryItem[]> {
-  await new Promise((resolve) => setTimeout(resolve, 180));
-  return EDITORIAL_NEWS_ITEMS;
+  try {
+    const response = await fetch("/api/adventure-news", {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      throw new Error(`Adventure news request failed with ${response.status}`);
+    }
+
+    const payload = (await response.json()) as { items?: AdventureNewsApiItem[] };
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    if (items.length > 0) {
+      return normalizeItems(items);
+    }
+  } catch (error) {
+    console.error("[gear-discovery] adventure news RSS loading failed", error);
+  }
+
+  return normalizeItems(ADVENTURE_NEWS_FALLBACKS);
 }

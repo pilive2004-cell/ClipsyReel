@@ -477,15 +477,13 @@ export function planReelSegments(
     const previous = segments[segments.length - 1];
     if (previous) {
       const sameSourceConsecutive = sourceDiversity > 1 && previous.sourceIndex === candidate.sourceIndex;
-      const tooSimilarConsecutive =
-        previous.sourceIndex === candidate.sourceIndex &&
-        Math.abs(previous.start - candidate.start) < Math.max(recipe === STYLE_RECIPES.sport ? 0.45 : 1.2, recipe.clipDuration * 0.38);
+      const tooSimilarConsecutive = isImmediatelyRepeatedShot(previous, candidate);
       if (sameSourceConsecutive || tooSimilarConsecutive) continue;
     }
     segments.push(candidate);
   }
 
-  let dedupedSegments = enforceSameSourceSpread(segments, videoDurations, recipe);
+  let dedupedSegments = avoidBackToBackSameSource(removeNearDuplicateSegments(enforceSameSourceSpread(segments, videoDurations, recipe)));
   dedupedSegments = dedupedSegments.slice(0, maxSegments);
 
   if (recipe === STYLE_RECIPES.sport && videoDurations.length > 1) {
@@ -544,7 +542,8 @@ export function planReelSegments(
     dedupedSegments = avoidBackToBackSameSource(removeNearDuplicateSegments(merged));
   }
 
-  return applySlowMoToStandoutMoments(dedupedSegments.slice(0, maxSegments), baseMoments);
+  dedupedSegments = avoidBackToBackSameSource(removeNearDuplicateSegments(dedupedSegments)).slice(0, maxSegments);
+  return applySlowMoToStandoutMoments(dedupedSegments, baseMoments);
 }
 
 function enforceSameSourceSpread(segments: Segment[], videoDurations: number[], recipe: StyleRecipe): Segment[] {
@@ -595,6 +594,13 @@ function enforceSameSourceSpread(segments: Segment[], videoDurations: number[], 
  * later same-source-free candidate wherever one exists, without changing
  * the overall multiset of chosen segments.
  */
+function isImmediatelyRepeatedShot<T extends { sourceIndex: number; start?: number; length?: number }>(previous: T, candidate: T): boolean {
+  if (previous.sourceIndex !== candidate.sourceIndex) return false;
+  if (typeof previous.start !== "number" || typeof candidate.start !== "number") return true;
+  const repetitionWindow = Math.max(previous.length ?? 0, candidate.length ?? 0, 1.8) * 1.6;
+  return Math.abs(previous.start - candidate.start) < repetitionWindow;
+}
+
 function avoidBackToBackSameSource<T extends { sourceIndex: number; start?: number; length?: number }>(segments: T[]): T[] {
   const out = [...segments];
   for (let i = 1; i < out.length; i++) {
@@ -607,11 +613,15 @@ function avoidBackToBackSameSource<T extends { sourceIndex: number; start?: numb
     // can, so treat every same-source repeat as something to avoid.
     if (current.sourceIndex !== prev.sourceIndex) continue;
     for (let j = i + 1; j < out.length; j++) {
-      if (out[j].sourceIndex !== prev.sourceIndex) {
+      if (out[j].sourceIndex !== prev.sourceIndex || !isImmediatelyRepeatedShot(prev, out[j])) {
         const [swap] = out.splice(j, 1);
         out.splice(i, 0, swap);
         break;
       }
+    }
+    if (isImmediatelyRepeatedShot(prev, out[i])) {
+      out.splice(i, 1);
+      i--;
     }
   }
   return out;
@@ -1717,7 +1727,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
   let reelTitleName: string | null = null;
   if (cleanedReelTitle) {
     reelTitleName = `reel_title_${stamp}.png`;
-    const reelTitleCacheKey = await buildRenderCacheKey("reel-title-v1", [
+    const reelTitleCacheKey = await buildRenderCacheKey("reel-title-v2", [
       w,
       h,
       cleanedReelTitle.text,

@@ -39,7 +39,7 @@ export const STYLE_TRANSITIONS: Record<ReelStyle, TransitionPool> = {
   },
   adventure: {
     names: ["fade"],
-    durationRange: [0.24, 0.34],
+    durationRange: [0.42, 0.62],
   },
   cinematic: {
     names: ["fade"],

@@ -172,10 +172,10 @@ const CLIP_DURATION_SECONDS = 18;
 const MAP_WIDTH = 720;
 const MAP_HEIGHT = 1280;
 const RECORD_FPS = 30;
-const TILE_PRELOAD_VIEWS = 6;
+const TILE_PRELOAD_VIEWS = 8;
 const TILE_IDLE_TIMEOUT_MS = 1_200;
 const TILE_READY_STABLE_FRAMES = 8;
-const TILE_GLOBAL_PRELOAD_TIMEOUT_MS = 9_000;
+const TILE_GLOBAL_PRELOAD_TIMEOUT_MS = 12_000;
 const ENABLE_TERRAIN_DEM = true;
 const ROUTE_INTRO_HARD_TIMEOUT_MS = 45_000;
 const MAP_LOAD_TIMEOUT_MS = 12_000;
@@ -198,6 +198,7 @@ const T_OVERVIEW  = 2.0;  // s — strict static full-route hold
 const T_ZOOMIN    = 5.8; // s — smooth cinematic dive from overview to start
 const T_DRAW      = 15.0; // s — route draw & scenic tracking
 const T_HOLD      = 16.2; // s — rise / arrival hold
+const T_OVERVIEW_RETURN = 16.9; // s — complete zoom-out back to the whole route
 // Phase 4: T_HOLD → CLIP_DURATION_SECONDS
 
 const CINEMATIC_ROUTE_TONE = {
@@ -890,6 +891,7 @@ function drawTitleCard(
   elapsed: number,
   startName: string,
   endName: string,
+  routeStats: GpxRouteStats | null | undefined,
   w: number,
   h: number,
 ) {
@@ -971,6 +973,14 @@ function drawTitleCard(
   ctx.shadowBlur = 0;
   ctx.textBaseline = "alphabetic";
   ctx.fillText("• ROUTE •", cx, startY - startSize - 14);
+
+  if (routeStats && Number.isFinite(routeStats.distanceKm)) {
+    const distanceLabel = `${routeStats.distanceKm.toFixed(1)} KM`;
+    const distanceSize = Math.round(w * 0.03);
+    ctx.font = `700 ${distanceSize}px ${fontStack}`;
+    ctx.fillStyle = "rgba(255,255,255,0.88)";
+    ctx.fillText(distanceLabel, cx, startY - startSize - 14 - microSize - 12);
+  }
 
   ctx.restore();
 }
@@ -1673,6 +1683,7 @@ export default function RouteMapIntro({
         let labelZoomActive = false;
         let cityOverlay = { name: "", alpha: 0 };
         let recapAlpha = 0;
+        let timelineElapsed = 0;
         const recapLocations = [
           majorLabelData.map((l) => l.name).slice(0, 3).join(" · "),
           visitedCountries ? `Pays: ${visitedCountries}` : "",
@@ -1693,11 +1704,11 @@ export default function RouteMapIntro({
           // corner even though MapLibre placed it perfectly at centre.
           compositeCtx.drawImage(mapCanvas, 0, 0, MAP_WIDTH, MAP_HEIGHT);
           if (startTime !== null) {
-            const elapsedSec = (performance.now() - startTime) / 1000;
+            const elapsedSec = timelineElapsed;
             drawCinematicTone(compositeCtx, MAP_WIDTH, MAP_HEIGHT, elapsedSec);
             drawCityHighlight(compositeCtx, cityOverlay.name, cityOverlay.alpha, MAP_WIDTH, MAP_HEIGHT);
             drawJourneyRecap(compositeCtx, recapAlpha, routeStats, recapLocations, MAP_WIDTH, MAP_HEIGHT);
-            drawTitleCard(compositeCtx, elapsedSec, startLabelName, endLabelName, MAP_WIDTH, MAP_HEIGHT);
+            drawTitleCard(compositeCtx, elapsedSec, startLabelName, endLabelName, routeStats, MAP_WIDTH, MAP_HEIGHT);
           }
         });
 
@@ -1711,6 +1722,7 @@ export default function RouteMapIntro({
             if ((warmupFrames >= 12 && areTilesLoadedSafe()) || warmupFrames >= 30) {
               startTime = now;
               prevFrameTime = now;
+              timelineElapsed = 0;
               setPreloadLabel("Capture cinématique");
               setPreloadProgress(1);
               recorder.start(200);
@@ -1724,7 +1736,14 @@ export default function RouteMapIntro({
           const dt = Math.min((now - (prevFrameTime ?? now)) / 1000, 0.08);
           prevFrameTime = now;
 
-          const elapsed = (now - startTime) / 1000;
+          const tilesLoadedForTimeline = areTilesLoadedSafe();
+          const timelineRate = timelineElapsed < T_ZOOMIN
+            ? (tilesLoadedForTimeline ? 1 : 0.4)
+            : timelineElapsed < T_DRAW
+              ? (tilesLoadedForTimeline ? 1 : 0.58)
+              : (tilesLoadedForTimeline ? 1 : 0.82);
+          timelineElapsed = Math.min(CLIP_DURATION_SECONDS, timelineElapsed + dt * timelineRate);
+          const elapsed = timelineElapsed;
 
           if (elapsed >= CLIP_DURATION_SECONDS) {
             cancelAnimationFrame(raf);
@@ -1921,20 +1940,33 @@ export default function RouteMapIntro({
               : lerp(Math.max(10, profile.phase3StartPitch * 0.45), Math.max(6, profile.phase3EndPitch * 0.45), t);
             targetBearing = normalizeDeg((routeHeadingRad(resampled, 0.99) * 180) / Math.PI - 90) * profile.bearingFollowStrength;
             cityOverlay = { name: endLabelName, alpha: easeInOut(clamp(t * 1.2, 0, 1)) * 0.92 };
-            recapAlpha = 0;
+            recapAlpha = easeInOut(clamp((t - 0.22) / 0.58, 0, 1)) * 0.9;
           }
 
-          // ── Phase 4 (T_HOLD – end): Final zoom-out overview ───────────────
-          // Camera eases back to full-route overview. Pitch returns to 0°.
-          else {
-            const t = easeInOut((elapsed - T_HOLD) / (CLIP_DURATION_SECONDS - T_HOLD));
+          // ── Phase 4a (T_HOLD – T_OVERVIEW_RETURN): Final zoom-out overview ─
+          // Camera eases back to full-route overview.
+          else if (elapsed < T_OVERVIEW_RETURN) {
+            const t = easeInOut((elapsed - T_HOLD) / (T_OVERVIEW_RETURN - T_HOLD));
             targetLat   = lerp(routeEndLat, overviewCenter.lat, t);
             targetLng   = lerp(routeEndLng, overviewCenter.lng, t);
             targetZoom  = lerp(profile.detailZoom, overviewZoom, t);
             targetPitch = lerp(terrain3dEnabled ? profile.phase4StartPitch : Math.max(8, profile.phase4StartPitch * 0.45), 0, t);
             targetBearing = lerp(cam.bearing, 0, t);
             cityOverlay = { name: "", alpha: 0 };
-            recapAlpha = easeInOut(clamp((t - 0.05) / 0.9, 0, 1));
+            recapAlpha = 0.9;
+          }
+
+          // ── Phase 4b (T_OVERVIEW_RETURN – end): Hold whole route for reading ─
+          else {
+            const t = easeInOut((elapsed - T_OVERVIEW_RETURN) / Math.max(0.001, CLIP_DURATION_SECONDS - T_OVERVIEW_RETURN));
+            targetLat = overviewCenter.lat;
+            targetLng = overviewCenter.lng;
+            targetZoom = overviewZoom;
+            targetPitch = 0;
+            targetBearing = lerp(cam.bearing, 0, Math.min(1, t * 1.2));
+            cityOverlay = { name: "", alpha: 0 };
+            const fadeOut = t > 0.72 ? 1 - easeInOut(clamp((t - 0.72) / 0.28, 0, 1)) : 1;
+            recapAlpha = 0.9 * fadeOut;
           }
 
           // ── Exponential smoothing — the anti-jitter core ─────────────────

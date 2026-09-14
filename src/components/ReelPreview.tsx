@@ -99,10 +99,10 @@ export default function ReelPreview({
     const available = endBoundary - start;
     if (available < 1.1 || reelTitle.trim().length === 0) return null;
     if (style === "sport") {
-      const duration = Math.min(3.3, Math.max(1.9, available * 0.18));
+      const duration = Math.min(4.4, Math.max(2.3, available * 0.22));
       return { start, end: Math.min(endBoundary, start + duration) };
     }
-    const duration = Math.min(2.2, Math.max(1.2, available * 0.2));
+    const duration = Math.min(3.0, Math.max(1.5, available * 0.24));
     return { start, end: Math.min(endBoundary, start + duration) };
   }, [introDurationSeconds, montageInfo?.durationSeconds, outroDurationSeconds, reelTitle, style]);
   const sportHookBeats = useMemo(
@@ -495,7 +495,7 @@ export default function ReelPreview({
             <motion.div
               initial={{ opacity: 0, y: -6 }}
               animate={{ opacity: 1, y: 0 }}
-              className="inline-flex items-center justify-center rounded-xl border border-[1.5px] bg-transparent px-3 py-1.5 shadow-[0_0_0_1px_rgba(255,255,255,0.04)]"
+              className="inline-flex items-center justify-center rounded-xl border border-[1.5px] bg-white/20 px-3 py-1.5 shadow-[0_0_0_1px_rgba(255,255,255,0.04)]"
               style={{ borderColor: titleFrameColor }}
             >
               <p className={`text-center leading-tight drop-shadow-[0_2px_6px_rgba(0,0,0,0.8)] ${titleColorClass} ${titleFontClass} ${titleSizeClass}`}>

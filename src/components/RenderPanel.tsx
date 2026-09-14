@@ -51,12 +51,12 @@ const RENDER_DISCOVERY_COPY: Record<
     complete: "Terminé",
     upcomingTitle: "Aventures à venir",
     upcomingSubtitle: "Découvre ta prochaine ride pendant le rendu",
-    gearTitle: "Gear & Brand News",
-    gearSubtitle: "Basé sur ta Adventure Card",
+    gearTitle: "Adventure News",
+    gearSubtitle: "Flux RSS adventure & moto",
     personalized: "PERSONNALISÉ",
     startsIn: "Commence dans",
     discoverEvent: "DÉCOUVRIR L'ÉVÉNEMENT",
-    selectGearHint: "Sélectionne des marques/modèles dans ton Adventure Card pour débloquer l'actualité gear personnalisée.",
+    selectGearHint: "Les flux RSS adventure sont temporairement indisponibles.",
     newModel: "NOUVEAU MODÈLE",
     brandNews: "NEWS MARQUE",
     community: "COMMUNAUTÉ",
@@ -72,12 +72,12 @@ const RENDER_DISCOVERY_COPY: Record<
     complete: "Fertig",
     upcomingTitle: "Bevorstehende Abenteuer",
     upcomingSubtitle: "Entdecke deinen nächsten Ride während des Renderings",
-    gearTitle: "Gear & Brand News",
-    gearSubtitle: "Basierend auf deiner Adventure Card",
+    gearTitle: "Adventure News",
+    gearSubtitle: "Adventure News",
     personalized: "PERSONALISIERT",
     startsIn: "Startet in",
     discoverEvent: "EVENT ENTDECKEN",
-    selectGearHint: "Wähle Marken/Modelle in deiner Adventure Card, um personalisierte Gear-News zu sehen.",
+    selectGearHint: "Die Adventure-RSS-Feeds sind momentan nicht verfügbar.",
     newModel: "NEUES MODELL",
     brandNews: "MARKEN-NEWS",
     community: "COMMUNITY",
@@ -93,12 +93,12 @@ const RENDER_DISCOVERY_COPY: Record<
     complete: "Complete",
     upcomingTitle: "Upcoming Adventures",
     upcomingSubtitle: "Discover your next ride while rendering",
-    gearTitle: "Gear & Brand News",
-    gearSubtitle: "Updates based on your Adventure Card",
+    gearTitle: "Adventure News",
+    gearSubtitle: "Adventure & motorcycle RSS feeds",
     personalized: "PERSONALIZED",
     startsIn: "Starts in",
     discoverEvent: "DISCOVER EVENT",
-    selectGearHint: "Select brand/model items in your Adventure Card to unlock personalized gear news.",
+    selectGearHint: "Adventure RSS feeds are temporarily unavailable.",
     newModel: "NEW MODEL",
     brandNews: "BRAND NEWS",
     community: "COMMUNITY",
@@ -114,12 +114,12 @@ const RENDER_DISCOVERY_COPY: Record<
     complete: "Completado",
     upcomingTitle: "Próximas aventuras",
     upcomingSubtitle: "Descubre tu próxima ruta mientras se renderiza",
-    gearTitle: "Gear & Brand News",
-    gearSubtitle: "Actualizaciones basadas en tu Adventure Card",
+    gearTitle: "Adventure News",
+    gearSubtitle: "Feeds RSS de aventura y moto",
     personalized: "PERSONALIZADO",
     startsIn: "Empieza en",
     discoverEvent: "DESCUBRIR EVENTO",
-    selectGearHint: "Selecciona marcas/modelos en tu Adventure Card para desbloquear noticias de equipamiento personalizadas.",
+    selectGearHint: "Los feeds RSS de aventura no están disponibles temporalmente.",
     newModel: "NUEVO MODELO",
     brandNews: "NOTICIAS DE MARCA",
     community: "COMUNIDAD",
@@ -135,12 +135,12 @@ const RENDER_DISCOVERY_COPY: Record<
     complete: "Completato",
     upcomingTitle: "Prossime avventure",
     upcomingSubtitle: "Scopri il tuo prossimo ride durante il rendering",
-    gearTitle: "Gear & Brand News",
-    gearSubtitle: "Aggiornamenti basati sulla tua Adventure Card",
+    gearTitle: "Adventure News",
+    gearSubtitle: "Feed RSS adventure e moto",
     personalized: "PERSONALIZZATO",
     startsIn: "Inizia tra",
     discoverEvent: "SCOPRI EVENTO",
-    selectGearHint: "Seleziona marca/modello nella tua Adventure Card per sbloccare news gear personalizzate.",
+    selectGearHint: "I feed RSS adventure sono temporaneamente non disponibili.",
     newModel: "NUOVO MODELLO",
     brandNews: "NEWS BRAND",
     community: "COMMUNITY",
@@ -156,12 +156,12 @@ const RENDER_DISCOVERY_COPY: Record<
     complete: "完成",
     upcomingTitle: "即将到来的冒险活动",
     upcomingSubtitle: "渲染期间发现你的下一次骑行",
-    gearTitle: "Gear & Brand News",
-    gearSubtitle: "基于你的 Adventure Card 的更新",
+    gearTitle: "Adventure News",
+    gearSubtitle: "Adventure News",
     personalized: "个性化",
     startsIn: "开始于",
     discoverEvent: "探索活动",
-    selectGearHint: "在 Adventure Card 中选择品牌/型号以解锁个性化装备资讯。",
+    selectGearHint: "Adventure RSS 信息流暂时不可用。",
     newModel: "新车型",
     brandNews: "品牌资讯",
     community: "社区",
@@ -424,7 +424,7 @@ export default function RenderPanel({
                        className="inline-flex items-center justify-center rounded-[12px] px-4 py-2 text-[0.72rem] font-bold text-white shadow-[0_6px_0_rgba(0,0,0,0.18)] transition hover:translate-y-[-1px] sm:px-5 sm:py-2.5"
                        style={{ background: "var(--brand-from)" }}
                      >
-                       Read more
+                       {discoveryCopy.discoverEvent}
                      </button>
                    </div>
                  </div>
@@ -464,7 +464,7 @@ export default function RenderPanel({
                  <ChevronRight className="h-3.5 w-3.5" />
                </button>
                <span className="rounded-full border border-fuchsia-300/20 bg-fuchsia-400/10 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.12em] text-fuchsia-100/90">
-                 {discoveryCopy.personalized}
+                 RSS LIVE
                </span>
               </div>
             )}
@@ -490,35 +490,49 @@ export default function RenderPanel({
                 <div className="flex flex-col gap-3 px-3 py-3 sm:px-4 sm:py-4">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[0.58rem] font-bold uppercase tracking-[0.22em] text-fuchsia-100/75">
-                      GEAR
+                      ADVENTURE NEWS
                     </span>
                     <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[0.56rem] font-medium uppercase tracking-[0.15em] text-white/70">
-                      {discoveryCopy.newModel}
+                      RSS
                     </span>
                   </div>
+
+                  <MaskedLabImage
+                    className="h-[220px] w-full sm:h-[252px]"
+                    image={featuredGear.image}
+                    fallback={gearFallbackImage(featuredGear)}
+                    title={featuredGear.title}
+                    subtitle={featuredGear.subtitle}
+                    onError={(e) => handleImageError(e, gearFallbackImage(featuredGear))}
+                  />
 
                   <div className="flex items-start gap-3">
                     <div
                       className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-[10px] border border-black/10 bg-white text-[0.8rem] font-black text-slate-800 shadow-[0_8px_18px_rgba(0,0,0,0.12)] sm:h-12 sm:w-12"
                     >
-                      {featuredGear.image ? (
+                      {featuredGear.brandLogo ? (
                         <img
-                          src={featuredGear.image}
-                          alt={`${featuredGear.title} visual`}
+                          src={featuredGear.brandLogo}
+                          alt={`${featuredGear.brand} logo`}
                           className="h-full w-full object-contain p-1.25 sm:p-1.5"
                           onError={(e) => handleImageError(e, gearFallbackImage(featuredGear))}
                         />
                       ) : (
-                        <span>{initials(featuredGear.title)}</span>
+                        <span>{initials(featuredGear.brand)}</span>
                       )}
                     </div>
 
-                    <h3 className="min-w-0 flex-1 text-[clamp(0.95rem,1.6vw,1.5rem)] font-black uppercase leading-[1.04] tracking-[-0.06em] text-white/95">
-                      {featuredGear.title}
-                    </h3>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[0.62rem] font-bold uppercase tracking-[0.18em] text-fuchsia-100/75">
+                        {featuredGear.subtitle}
+                      </p>
+                      <h3 className="mt-1 text-[clamp(1rem,1.7vw,1.65rem)] font-black uppercase leading-[1.04] tracking-[-0.05em] text-white/95">
+                        {featuredGear.title}
+                      </h3>
+                    </div>
                   </div>
 
-                  <p className="max-w-[68ch] text-[clamp(0.72rem,1.2vw,0.98rem)] leading-[1.28] text-white/85">
+                  <p className="max-w-[72ch] text-[clamp(0.78rem,1.25vw,1.02rem)] leading-[1.35] text-white/85">
                     {featuredGear.summary}
                   </p>
 
@@ -529,7 +543,7 @@ export default function RenderPanel({
                       className="inline-flex items-center justify-center rounded-[12px] px-4 py-2 text-[0.72rem] font-bold text-white shadow-[0_6px_0_rgba(0,0,0,0.18)] transition hover:translate-y-[-1px] sm:px-5 sm:py-2.5"
                       style={{ background: "var(--brand-from)" }}
                     >
-                      Read more
+                      {featuredGear.ctaLabel}
                     </button>
                   </div>
                 </div>
