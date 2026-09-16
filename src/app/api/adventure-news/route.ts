@@ -60,6 +60,13 @@ const FEED_SOURCES: FeedSource[] = [
     category: "motorcycle",
     subtitle: "RideApart • latest articles",
   },
+  {
+    id: "enduro21",
+    brand: "Enduro21",
+    url: "https://enduro21.com/feed",
+    category: "motorcycle",
+    subtitle: "Enduro21 • RSS",
+  },
 ];
 
 const MAX_ITEMS = 8;

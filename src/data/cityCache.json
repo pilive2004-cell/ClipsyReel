@@ -1,0 +1,25 @@
+{
+  "description": "Pre-cached city coordinates for common routes. Format: [lat,lng] -> {city, country, region}",
+  "cache": {
+    "43.87,4.77": {"city": "Arles", "country": "France", "region": "Provence-Alpes-Côte d'Azur"},
+    "43.87254,4.75041": {"city": "Arles", "country": "France", "region": "Provence-Alpes-Côte d'Azur"},
+    "43.9,4.8": {"city": "Les Saintes-Maries-de-la-Mer", "country": "France", "region": "Provence-Alpes-Côte d'Azur"},
+    "43.85,4.7": {"city": "Arles", "country": "France", "region": "Provence-Alpes-Côte d'Azur"},
+    "48.8,2.35": {"city": "Paris", "country": "France", "region": "Île-de-France"},
+    "45.76,4.84": {"city": "Lyon", "country": "France", "region": "Auvergne-Rhône-Alpes"},
+    "43.29,5.37": {"city": "Marseille", "country": "France", "region": "Provence-Alpes-Côte d'Azur"},
+    "42.7,2.89": {"city": "Perpignan", "country": "France", "region": "Occitanie"},
+    "51.51,-0.13": {"city": "London", "country": "United Kingdom", "region": "England"},
+    "48.86,2.35": {"city": "Paris", "country": "France", "region": "Île-de-France"},
+    "50.85,4.35": {"city": "Brussels", "country": "Belgium", "region": "Brussels"},
+    "52.52,13.40": {"city": "Berlin", "country": "Germany", "region": "Berlin"},
+    "48.21,16.37": {"city": "Vienna", "country": "Austria", "region": "Vienna"},
+    "45.46,9.19": {"city": "Milan", "country": "Italy", "region": "Lombardy"},
+    "43.77,-11.25": {"city": "Florence", "country": "Italy", "region": "Tuscany"},
+    "41.90,12.50": {"city": "Rome", "country": "Italy", "region": "Lazio"},
+    "40.72,-74.01": {"city": "New York", "country": "United States", "region": "New York"},
+    "34.05,-118.24": {"city": "Los Angeles", "country": "United States", "region": "California"},
+    "35.68,139.69": {"city": "Tokyo", "country": "Japan", "region": "Tokyo"},
+    "39.91,116.41": {"city": "Beijing", "country": "China", "region": "Beijing"}
+  }
+}
