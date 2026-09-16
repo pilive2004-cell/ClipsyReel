@@ -171,14 +171,15 @@ interface RouteMapIntroProps {
 const CLIP_DURATION_SECONDS = 18;
 const MAP_WIDTH = 720;
 const MAP_HEIGHT = 1280;
+const TITLE_CARD_VISIBLE_SECONDS = 12;
 const RECORD_FPS = 30;
-const TILE_PRELOAD_VIEWS = 8;
-const TILE_IDLE_TIMEOUT_MS = 1_200;
-const TILE_READY_STABLE_FRAMES = 8;
-const TILE_GLOBAL_PRELOAD_TIMEOUT_MS = 12_000;
-const ENABLE_TERRAIN_DEM = true;
-const ROUTE_INTRO_HARD_TIMEOUT_MS = 45_000;
-const MAP_LOAD_TIMEOUT_MS = 12_000;
+const TILE_PRELOAD_VIEWS = 4;
+const TILE_IDLE_TIMEOUT_MS = 300;  // Reduced from 600ms for faster iteration
+const TILE_READY_STABLE_FRAMES = 4;
+const TILE_GLOBAL_PRELOAD_TIMEOUT_MS = 4_000;  // Reduced from 8s — tiles will load during animation
+const ENABLE_TERRAIN_DEM = false;
+const ROUTE_INTRO_HARD_TIMEOUT_MS = 75_000;
+const MAP_LOAD_TIMEOUT_MS = 15_000;
 
 /**
  * 5-phase cinematic timeline (all values in seconds):
@@ -195,10 +196,10 @@ const MAP_LOAD_TIMEOUT_MS = 12_000;
  *   Phase 4 (T_HOLD → end)       Smooth zoom-out back to full-route overview.
  */
 const T_OVERVIEW  = 2.0;  // s — strict static full-route hold
-const T_ZOOMIN    = 5.8; // s — smooth cinematic dive from overview to start
-const T_DRAW      = 15.0; // s — route draw & scenic tracking
-const T_HOLD      = 16.2; // s — rise / arrival hold
-const T_OVERVIEW_RETURN = 16.9; // s — complete zoom-out back to the whole route
+const T_ZOOMIN    = 5.4; // s — smooth cinematic dive from overview to start (compressed for longer draw)
+const T_DRAW      = 16.4; // s — route draw & scenic tracking (extended to let the head reach 100%)
+const T_HOLD      = 16.8; // s — rise / arrival hold
+const T_OVERVIEW_RETURN = 17.2; // s — complete zoom-out back to the whole route
 // Phase 4: T_HOLD → CLIP_DURATION_SECONDS
 
 const CINEMATIC_ROUTE_TONE = {
@@ -895,32 +896,23 @@ function drawTitleCard(
   w: number,
   h: number,
 ) {
-  // Alpha envelope — smooth fade-in/out at phase transitions
-  // Title is fully visible for ~3 seconds before the zoom-in begins.
+  // Keep the route metadata fully readable for the first 12 seconds of the intro,
+  // matching the reference card layout and the brief that the info must remain
+  // visible from the beginning of the animation.
   let alpha = 0;
-  if (elapsed < 1.4) {
-    alpha = easeInOut(elapsed / 1.4);                                          // fade in 0→1
-  } else if (elapsed < T_OVERVIEW - 1.0) {
-    alpha = 1;                                                                  // hold (1.4s → 4.0s = 2.6s full visibility)
-  } else if (elapsed < T_OVERVIEW + 0.8) {
-    alpha = easeInOut(Math.max(0, (T_OVERVIEW + 0.8 - elapsed) / 1.8));        // fade out
-  } else if (elapsed > T_HOLD + 1.0 && elapsed < CLIP_DURATION_SECONDS - 0.8) {
-    // Phase-4 reprise: fade in → hold → fade out
-    const repriseLen = CLIP_DURATION_SECONDS - 0.8 - (T_HOLD + 1.0);
-    const t = (elapsed - (T_HOLD + 1.0)) / repriseLen;
-    alpha = easeInOut(Math.min(1, t < 0.3 ? t / 0.3 : t > 0.7 ? (1 - t) / 0.3 : 1));
+  if (elapsed <= TITLE_CARD_VISIBLE_SECONDS) {
+    alpha = 1;
+  } else if (elapsed < TITLE_CARD_VISIBLE_SECONDS + 1.2) {
+    alpha = easeInOut(Math.max(0, (TITLE_CARD_VISIBLE_SECONDS + 1.2 - elapsed) / 1.2));
   }
   if (alpha < 0.01) return;
 
   ctx.save();
   ctx.globalAlpha = alpha;
 
-  // Maximum text width — both left and right edges are protected by TITLE_SAFE_X
   const maxTextW = w - TITLE_SAFE_X * 2;
   const fontStack = `-apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif`;
 
-  // Dark gradient fills the bottom 28% of the frame as a semi-transparent
-  // overlay. The route line is visible through it (gradient starts at 0 alpha).
   const gradH = Math.round(h * 0.28);
   const grad = ctx.createLinearGradient(0, h - gradH, 0, h);
   grad.addColorStop(0, "rgba(0,0,0,0)");
@@ -932,20 +924,42 @@ function drawTitleCard(
   const cx = w / 2;
   ctx.textAlign = "center";
 
-  // ── Destination (large, 800-weight) — font size auto-reduced to fit safe area
-  const destIdeal = Math.round(w * 0.078);
-  const destSize = fitFontSize(ctx, endName.toUpperCase(), "800", destIdeal, 28, maxTextW, fontStack);
-  const destY = h - Math.round(h * 0.072);
-  ctx.font = `800 ${destSize}px ${fontStack}`;
-  ctx.textBaseline = "alphabetic";
-  ctx.shadowColor = "rgba(0,0,0,0.95)";
-  ctx.shadowBlur = 20;
-  ctx.fillStyle = "#FFFFFF";
-  ctx.fillText(endName.toUpperCase(), cx, destY);
+  const distanceValue = routeStats && Number.isFinite(routeStats.distanceKm)
+    ? (Number.isInteger(routeStats.distanceKm) ? String(routeStats.distanceKm) : routeStats.distanceKm.toFixed(1))
+    : "--";
+  const elevationLabel = routeStats && Number.isFinite(routeStats.elevationGainM) && routeStats.elevationGainM > 0
+    ? `D+${Math.round(routeStats.elevationGainM)} m`
+    : null;
 
-  // ── Red separator line
-  const sepY = destY - destSize - 12;
-  const sepHalfW = Math.round(w * 0.11);
+  const destinationText = (endName || "DESTINATION").toUpperCase();
+  const originText = (startName || "START").toUpperCase();
+
+  const metricSize = Math.round(w * 0.046);
+  const metricY = Math.round(h * 0.74);
+  ctx.textAlign = "center";
+  ctx.font = `700 ${metricSize}px ${fontStack}`;
+  ctx.textBaseline = "alphabetic";
+  ctx.shadowColor = "rgba(0,0,0,0.8)";
+  ctx.shadowBlur = 12;
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fillText(`${distanceValue} Km`, cx, metricY);
+
+  if (elevationLabel) {
+    const elevationY = metricY + metricSize + 8;
+    ctx.font = `700 ${metricSize}px ${fontStack}`;
+    ctx.fillStyle = "#FF3B30";
+    ctx.fillText(elevationLabel, cx, elevationY);
+  }
+
+  const upperCityText = destinationText;
+  const upperCitySize = fitFontSize(ctx, upperCityText, "800", Math.round(w * 0.085), 28, maxTextW, fontStack);
+  const upperCityY = (elevationLabel ? metricY + metricSize + 56 : metricY + 52);
+  ctx.font = `800 ${upperCitySize}px ${fontStack}`;
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fillText(upperCityText, cx, upperCityY);
+
+  const sepY = upperCityY + 28;
+  const sepHalfW = Math.round(w * 0.14);
   ctx.shadowBlur = 0;
   ctx.strokeStyle = "#FF3B30";
   ctx.lineWidth = 3;
@@ -955,32 +969,13 @@ function drawTitleCard(
   ctx.lineTo(cx + sepHalfW, sepY);
   ctx.stroke();
 
-  // ── Departure (medium, lighter) — also auto-sized
-  const startIdeal = Math.round(w * 0.044);
-  const startSize = fitFontSize(ctx, startName.toUpperCase(), "300", startIdeal, 20, maxTextW, fontStack);
-  const startY = sepY - 14;
-  ctx.font = `300 ${startSize}px ${fontStack}`;
-  ctx.textBaseline = "alphabetic";
-  ctx.fillStyle = "rgba(255,255,255,0.65)";
-  ctx.shadowColor = "rgba(0,0,0,0.8)";
-  ctx.shadowBlur = 12;
-  ctx.fillText(startName.toUpperCase(), cx, startY);
-
-  // ── "• ROUTE •" micro-label
-  const microSize = Math.round(w * 0.025);
-  ctx.font = `600 ${microSize}px ${fontStack}`;
-  ctx.fillStyle = "rgba(255,59,48,0.85)";
-  ctx.shadowBlur = 0;
-  ctx.textBaseline = "alphabetic";
-  ctx.fillText("• ROUTE •", cx, startY - startSize - 14);
-
-  if (routeStats && Number.isFinite(routeStats.distanceKm)) {
-    const distanceLabel = `${routeStats.distanceKm.toFixed(1)} KM`;
-    const distanceSize = Math.round(w * 0.03);
-    ctx.font = `700 ${distanceSize}px ${fontStack}`;
-    ctx.fillStyle = "rgba(255,255,255,0.88)";
-    ctx.fillText(distanceLabel, cx, startY - startSize - 14 - microSize - 12);
-  }
+  const lowerCityText = originText;
+  const lowerCityIdeal = Math.round(w * 0.12);
+  const lowerCitySize = fitFontSize(ctx, lowerCityText, "800", lowerCityIdeal, 34, maxTextW, fontStack);
+  const lowerCityY = sepY + 92;
+  ctx.font = `800 ${lowerCitySize}px ${fontStack}`;
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fillText(lowerCityText, cx, lowerCityY);
 
   ctx.restore();
 }
@@ -1379,9 +1374,9 @@ export default function RouteMapIntro({
         // ones when their bounding boxes happen to touch.
         const LABEL_SIZE_EXPR: maplibregl.ExpressionSpecification = [
           "interpolate", ["linear"], ["zoom"],
-          8,  ["case", ["any", ["get", "isStart"], ["get", "isEnd"]] as maplibregl.ExpressionSpecification, 22, 14],
-          12, ["case", ["any", ["get", "isStart"], ["get", "isEnd"]] as maplibregl.ExpressionSpecification, 32, 22],
-          14, ["case", ["any", ["get", "isStart"], ["get", "isEnd"]] as maplibregl.ExpressionSpecification, 42, 30],
+          8,  ["case", ["any", ["get", "isStart"], ["get", "isEnd"]] as maplibregl.ExpressionSpecification, 28, 18],
+          12, ["case", ["any", ["get", "isStart"], ["get", "isEnd"]] as maplibregl.ExpressionSpecification, 40, 28],
+          14, ["case", ["any", ["get", "isStart"], ["get", "isEnd"]] as maplibregl.ExpressionSpecification, 52, 38],
         ];
         const LABEL_VARIABLE_ANCHOR = ["top", "bottom", "left", "right"] as Array<"top" | "bottom" | "left" | "right">;
         const LABEL_LAYOUT_COMMON = {
@@ -1389,8 +1384,8 @@ export default function RouteMapIntro({
           "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
           "text-size": LABEL_SIZE_EXPR,
           "text-variable-anchor": LABEL_VARIABLE_ANCHOR,
-          "text-radial-offset": 1.1,
-          "text-max-width": 10,
+          "text-radial-offset": 1.2,
+          "text-max-width": 12,
           "text-allow-overlap": false,
           "text-ignore-placement": false,
           "text-transform": "uppercase" as const,
@@ -1400,9 +1395,9 @@ export default function RouteMapIntro({
         };
         const MAJOR_LABEL_SIZE_EXPR: maplibregl.ExpressionSpecification = [
           "interpolate", ["linear"], ["zoom"],
-          8, 28,
-          11, 40,
-          13, 52,
+          8, 36,
+          11, 48,
+          13, 64,
         ];
 
         map.addSource("place-labels", { type: "geojson", data: buildLabelsGeoJSON([]) });
@@ -1415,8 +1410,8 @@ export default function RouteMapIntro({
           layout: LABEL_LAYOUT_COMMON,
           paint: {
             "text-color": "rgba(0,0,0,0)",
-            "text-halo-color": "rgba(255,255,255,0.97)",
-            "text-halo-width": 8,
+            "text-halo-color": "rgba(255,255,255,0.98)",
+            "text-halo-width": 10,
             "text-halo-blur": 1,
           },
         });
@@ -1429,9 +1424,9 @@ export default function RouteMapIntro({
           layout: LABEL_LAYOUT_COMMON,
           paint: {
             "text-color": ["case",
-              ["get", "isEnd"]   as maplibregl.ExpressionSpecification, "#b91c1c",
-              ["get", "isStart"] as maplibregl.ExpressionSpecification, "#15803d",
-              "#111827",
+              ["get", "isEnd"]   as maplibregl.ExpressionSpecification, "#dc2626",
+              ["get", "isStart"] as maplibregl.ExpressionSpecification, "#16a34a",
+              "#000000",
             ] as maplibregl.ExpressionSpecification,
             "text-halo-color": "rgba(255,255,255,0.5)",
             "text-halo-width": 2,
@@ -1449,8 +1444,8 @@ export default function RouteMapIntro({
             "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
             "text-size": MAJOR_LABEL_SIZE_EXPR,
             "text-variable-anchor": LABEL_VARIABLE_ANCHOR,
-            "text-radial-offset": 1.3,
-            "text-max-width": 10,
+            "text-radial-offset": 1.4,
+            "text-max-width": 12,
             "text-allow-overlap": false,
             "text-ignore-placement": false,
             "text-transform": "uppercase" as const,
@@ -1458,9 +1453,9 @@ export default function RouteMapIntro({
           },
           paint: {
             "text-color": "#ffffff",
-            "text-halo-color": "rgba(2,6,23,0.9)",
-            "text-halo-width": 3.2,
-            "text-halo-blur": 0.4,
+            "text-halo-color": "rgba(2,6,23,0.95)",
+            "text-halo-width": 4.2,
+            "text-halo-blur": 0.5,
             "text-opacity": [
               "interpolate",
               ["linear"],
@@ -1468,7 +1463,7 @@ export default function RouteMapIntro({
               8.8,
               1,
               10.6,
-              0.55,
+              0.7,
               10.9,
               0,
             ] as maplibregl.ExpressionSpecification,
@@ -1499,7 +1494,7 @@ export default function RouteMapIntro({
           source: "journey-endpoints",
           paint: {
             "circle-radius": ["case", ["==", ["get", "kind"], "start"], 10, 12] as maplibregl.ExpressionSpecification,
-            "circle-color": ["case", ["==", ["get", "kind"], "start"], "#22c55e", "#ef4444"] as maplibregl.ExpressionSpecification,
+            "circle-color": "#FF3B30",
             "circle-stroke-color": "#ffffff",
             "circle-stroke-width": 2.5,
           },
@@ -1577,26 +1572,11 @@ export default function RouteMapIntro({
 
         if (!cancelled && map) {
           setPreloadLabel("Validation finale");
-          let stableFrames = 0;
-          while (!cancelled && stableFrames < TILE_READY_STABLE_FRAMES) {
+          // Brief warmup: just trigger a few repaints to get initial tiles streaming
+          for (let i = 0; i < 3; i++) {
+            if (cancelled || !map) break;
             map.triggerRepaint();
-            if (areTilesLoadedSafe()) stableFrames += 1;
-            else stableFrames = 0;
-            await new Promise((resolve) => window.setTimeout(resolve, 16));
-            if (performance.now() - preloadStartAt > TILE_GLOBAL_PRELOAD_TIMEOUT_MS) break;
-          }
-          // Keep the animation locked to actual map readiness so the camera does
-          // not start moving before the route image is fully present on screen.
-          if (!cancelled && map) {
-            let readyFrames = 0;
-            const readyStart = performance.now();
-            while (!cancelled && readyFrames < 10) {
-              map.triggerRepaint();
-              if (areTilesLoadedSafe()) readyFrames += 1;
-              else readyFrames = 0;
-              await new Promise((resolve) => window.setTimeout(resolve, 32));
-              if (performance.now() - readyStart > 1_500) break;
-            }
+            await new Promise((resolve) => window.setTimeout(resolve, 32));
           }
           setPreloadProgress(1);
         }

@@ -63,9 +63,9 @@ export default function ReelPreview({
   sportTelemetry,
 }: ReelPreviewProps) {
   const { copy } = useLocale();
-  const HOOK_FADE_IN_SECONDS = 0.72;
-  const HOOK_HOLD_SECONDS = 2.35;
-  const HOOK_FADE_OUT_SECONDS = 0.72;
+  const HOOK_FADE_IN_SECONDS = 1.1;
+  const HOOK_HOLD_SECONDS = 4.2;
+  const HOOK_FADE_OUT_SECONDS = 1.4;
   const HOOK_CYCLE_SECONDS = HOOK_FADE_IN_SECONDS + HOOK_HOLD_SECONDS + HOOK_FADE_OUT_SECONDS;
   const styleDef = STYLES.find((s) => s.id === style)!;
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -222,12 +222,12 @@ export default function ReelPreview({
   const coherentHookText = isCoherentDisplayText(trimmedHookText) ? trimmedHookText : "";
   const hookTextLength = coherentHookText.length;
   const hookTextSizeClass = hookTextLength <= 20
-    ? "text-[26px] leading-[1.08]"
+    ? "text-[40px] leading-[1.0]"
     : hookTextLength <= 36
-      ? "text-[22px] leading-[1.14]"
+      ? "text-[34px] leading-[1.06]"
       : hookTextLength <= 52
-        ? "text-[18px] leading-[1.18]"
-        : "text-[16px] leading-[1.2]";
+        ? "text-[28px] leading-[1.1]"
+        : "text-[24px] leading-[1.14]";
   const easeInOut = (value: number) => value * value * (3 - 2 * value);
   const hookTimeline = useMemo(() => {
     if (!showPreviewChrome || hookTextLength === 0) {
@@ -506,7 +506,7 @@ export default function ReelPreview({
         )}
         {showPreviewChrome && style !== "sport" && !montageInfo && hookTextLength > 0 && overlayWindows.length === 0 && (
           <div className="pointer-events-none absolute inset-x-4 top-[30%] flex justify-center" style={{ opacity: hookTimeline.opacity, transition: "opacity 120ms linear" }}>
-            <p className={`relative max-w-[82%] text-center font-extrabold tracking-[0.01em] text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.9)] ${hookTextSizeClass}`}>
+            <p className={`relative max-w-[95%] text-center font-extrabold tracking-[0.01em] text-white drop-shadow-[0_2px_14px_rgba(0,0,0,0.92)] ${hookTextSizeClass}`}>
               <span className="invisible">{trimmedHookText}</span>
               <span className="absolute inset-0">{typedHookText}</span>
             </p>
