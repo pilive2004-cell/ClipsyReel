@@ -144,7 +144,7 @@ describe("planReelSegments", () => {
     expect(shouldUseCompactConcatFallback("sport", 3)).toBe(true);
     expect(shouldUseCompactConcatFallback("sport", 2)).toBe(false);
     expect(shouldUseCompactConcatFallback("viral", 7)).toBe(false);
-    expect(shouldUseCompactConcatFallback("viral", 8)).toBe(true);
+    expect(shouldUseCompactConcatFallback("viral", 8)).toBe(false);
   });
 
   it("does not trim compact sport renders back down to five final clips", () => {

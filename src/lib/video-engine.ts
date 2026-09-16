@@ -21,6 +21,7 @@ const ENABLE_MT_FFMPEG = process.env.NEXT_PUBLIC_ENABLE_MT_FFMPEG === "true";
 const INTRO_TRANSCODE_TIMEOUT_MS_FAST = 75_000;
 const INTRO_TRANSCODE_TIMEOUT_MS_QUALITY = 110_000;
 const COMPACT_EXPORT_TIMEOUT_MS = 75_000;
+const COMPACT_TEXT_OVERLAY_TIMEOUT_MS = 150_000;
 
 /** Clone file data to prevent ArrayBuffer detachment issues with FFmpeg worker. */
 async function getFileDataForFFmpeg(file: File | Blob): Promise<Uint8Array> {
@@ -116,7 +117,7 @@ export function capTransitionDuration(baseTransitionDuration: number, prevClipLe
 
 export function shouldUseCompactConcatFallback(style: ReelStyle, clipCount: number): boolean {
   if (style === "sport") return clipCount >= 3;
-  return clipCount >= 8;
+  return false;
 }
 
 export function getComposeClipCap(style: ReelStyle, clipCount: number): number | null {
@@ -1361,20 +1362,23 @@ async function generateReelTitlePng(frameWidth: number, frameHeight: number, tit
   return new Uint8Array(await blob.arrayBuffer());
 }
 
-function planReelTitleWindow(totalDuration: number, introDuration: number, outroDuration: number, style: ReelStyle) {
+export function planReelTitleWindow(totalDuration: number, introDuration: number, outroDuration: number, style: ReelStyle) {
   const start = style === "sport"
     ? Math.max(0.3, introDuration + 0.28)
     : Math.max(0.35, introDuration + 0.35);
   const endBoundary = Math.max(start, totalDuration - Math.max(0.35, outroDuration + 0.35));
   const available = endBoundary - start;
-  if (available < 1.4) return null;
+  const shortNonSportReel = style !== "sport" && totalDuration <= 6.5;
+  if (available < (shortNonSportReel ? 0.7 : 1.4)) return null;
   const duration = style === "sport"
     ? clamp(available * 0.22, 2.3, 4.4)
-    : clamp(available * 0.24, 1.5, 3.0);
+    : shortNonSportReel
+      ? clamp(available * 0.28, 0.72, 0.95)
+      : clamp(available * 0.24, 1.5, 3.0);
   return { start, end: Math.min(endBoundary, start + duration) };
 }
 
-function planOverlayTextWindows(
+export function planOverlayTextWindows(
   texts: string[],
   totalDuration: number,
   introDuration: number,
@@ -1384,6 +1388,7 @@ function planOverlayTextWindows(
 ) {
   if (texts.length === 0) return [];
 
+  const shortNonSportReel = style !== "sport" && totalDuration <= 6.5;
   const startBoundary = style === "sport"
     ? Math.max(0.14, minimumStartSeconds)
     : Math.max(0.35, introDuration + 0.35, minimumStartSeconds);
@@ -1391,16 +1396,23 @@ function planOverlayTextWindows(
     ? Math.max(startBoundary, Math.min(totalDuration, 3.05))
     : Math.max(startBoundary, totalDuration - Math.max(0.35, outroDuration + 0.35));
   const available = endBoundary - startBoundary;
-  if (available < 1.2) return [];
+  if (available < (shortNonSportReel ? 0.7 : 1.2)) return [];
 
-  const gap = texts.length > 1 ? (style === "sport" ? 0.08 : 0.45) : 0;
-  const rawDuration = (available - gap * Math.max(0, texts.length - 1)) / texts.length;
-  const overlayDuration = style === "sport" ? clamp(rawDuration, 0.55, 0.95) : clamp(rawDuration, 2.8, 5.2);
-  const totalNeeded = overlayDuration * texts.length + gap * Math.max(0, texts.length - 1);
+  const gap = texts.length > 1 ? (style === "sport" ? 0.08 : shortNonSportReel ? 0.14 : 0.45) : 0;
+  const minDuration = style === "sport" ? 0.55 : shortNonSportReel ? 0.72 : 2.8;
+  const maxDuration = style === "sport" ? 0.95 : shortNonSportReel ? 1.35 : 5.2;
+  const requestedTextCount = shortNonSportReel
+    ? Math.max(1, Math.min(texts.length, Math.floor((available + gap) / (minDuration + gap)) || 1))
+    : texts.length;
+  const visibleTexts = texts.slice(0, requestedTextCount);
+  const effectiveGap = visibleTexts.length > 1 ? gap : 0;
+  const rawDuration = (available - effectiveGap * Math.max(0, visibleTexts.length - 1)) / visibleTexts.length;
+  const overlayDuration = clamp(rawDuration, minDuration, maxDuration);
+  const totalNeeded = overlayDuration * visibleTexts.length + effectiveGap * Math.max(0, visibleTexts.length - 1);
   const offset = Math.max(0, (available - totalNeeded) / 2);
 
-  return texts.map((text, index) => {
-    const start = startBoundary + offset + index * (overlayDuration + gap);
+  return visibleTexts.map((text, index) => {
+    const start = startBoundary + offset + index * (overlayDuration + effectiveGap);
     const end = Math.min(endBoundary, start + overlayDuration);
     return { text, start, end };
   });
@@ -2510,29 +2522,57 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         return finaliseOutput(baseOutputName, renderDuration, finalClipNames.length);
       }
 
-      console.log("[video-engine] compact-overlay debug", {
-        baseOutputName,
-        outputName: `out_${stamp}.mp4`,
-        inputs: overlayExecArgs,
-        filterComplex: overlayFilterParts.join(";"),
-      });
       const outputName = `out_${stamp}.mp4`;
-      overlayExecArgs.push(
+      const overlayFilterArgs = [
         "-filter_complex", overlayFilterParts.join(";"),
         "-map", `[${finalLabel}]`,
         "-an",
+      ];
+      const overlayEncodingArgs = [
         "-r", String(RENDER_FPS),
         ...encoderArgs,
         "-pix_fmt", "yuv420p",
         "-threads", "0",
-        outputName
-      );
+      ];
+      console.log("[video-engine] compact-overlay debug", {
+        baseOutputName,
+        outputName,
+        inputs: overlayExecArgs,
+        filterComplex: overlayFilterParts.join(";"),
+      });
+      overlayExecArgs.push(...overlayFilterArgs, ...overlayEncodingArgs, outputName);
 
       try {
         await withTimeout(finalStageFFmpeg.exec(overlayExecArgs), COMPACT_EXPORT_TIMEOUT_MS);
       } catch (error) {
-        console.warn("[video-engine] compact-concat overlay composition timed out or failed; falling back to base concat output.", error);
-        return finaliseOutput(baseOutputName, renderDuration, finalClipNames.length);
+        console.warn("[video-engine] compact-concat overlay composition timed out or failed; retrying with faster text-burn settings.", error);
+        const retryOutputName = `out_fast_${stamp}.mp4`;
+        try {
+          const overlayInputArgs = overlayExecArgs.slice(
+            0,
+            overlayExecArgs.length - overlayFilterArgs.length - overlayEncodingArgs.length - 1,
+          );
+          await withTimeout(
+            finalStageFFmpeg.exec([
+              ...overlayInputArgs,
+              ...overlayFilterArgs,
+              "-r", String(RENDER_FPS),
+              ...phase1EncoderArgs,
+              "-pix_fmt", "yuv420p",
+              "-threads", "0",
+              retryOutputName,
+            ]),
+            COMPACT_TEXT_OVERLAY_TIMEOUT_MS,
+          );
+        } catch (retryError) {
+          console.warn("[video-engine] compact-concat fast overlay retry failed; falling back to base concat output.", retryError);
+          return finaliseOutput(baseOutputName, renderDuration, finalClipNames.length);
+        }
+        completedUnits++;
+        mark("phase2-done");
+        console.log(`[video-engine] Phase 2 (compact-concat compose): ${elapsed("phase2-start", "phase2-done")}`);
+        tempFiles.push(retryOutputName);
+        return finaliseOutput(retryOutputName, renderDuration, finalClipNames.length, finalStageFFmpeg);
       }
       completedUnits++;
       mark("phase2-done");

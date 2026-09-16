@@ -648,10 +648,24 @@ export default function Home() {
   const previewUrl = montage?.url ?? videos[0]?.previewUrl ?? "";
   const combinedName = videos.length > 1 ? `${videos.length}-clips-montage` : videos[0]?.name ?? "reel";
   const requiresMapIntro = hasRouteIntro;
+  const waitingForOptionalAssetsAsPrimaryPhase =
+    step === "render" &&
+    renderProgress === null &&
+    !renderGateTimedOut;
+  const routeIntroSkippedForCurrentRender =
+    step === "render" &&
+    renderGateTimedOut &&
+    hasRouteIntro &&
+    routeIntroClip === null;
+  const gearSummarySkippedForCurrentRender =
+    step === "render" &&
+    renderGateTimedOut &&
+    shouldRenderGearSummary &&
+    gearSummaryClip === null;
   const renderPhaseLabel =
-    hasRouteIntro && routeIntroStatus === "rendering" && routeIntroClip === null
+    waitingForOptionalAssetsAsPrimaryPhase && hasRouteIntro && routeIntroStatus === "rendering" && routeIntroClip === null
       ? copy.render.processingRoute
-      : shouldRenderGearSummary && gearSummaryStatus === "rendering" && gearSummaryClip === null
+      : waitingForOptionalAssetsAsPrimaryPhase && shouldRenderGearSummary && gearSummaryStatus === "rendering" && gearSummaryClip === null
       ? copy.render.processingGear
       : renderPhase
         ? renderPhase
@@ -875,11 +889,22 @@ export default function Home() {
               <div className="space-y-2 rounded-2xl border border-cyan-300/20 bg-cyan-400/[0.06] px-4 py-3 text-xs text-cyan-100/90">
                 <p className="font-semibold uppercase tracking-[0.12em] text-cyan-100/85">Map intro</p>
                 <p>
-                  {routeIntroStatus === "rendering" && "Generating route map clip…"}
-                  {routeIntroStatus === "ready" && "Route map clip is ready and will be included at the beginning of the reel."}
-                  {routeIntroStatus === "error" && "Route map clip failed to render."}
-                  {routeIntroStatus === "idle" && "Waiting for route map generation."}
+                  {routeIntroSkippedForCurrentRender
+                    ? "Route map clip took too long and is being skipped for this export."
+                    : routeIntroStatus === "rendering"
+                    ? "Generating route map clip…"
+                    : routeIntroStatus === "ready"
+                    ? "Route map clip is ready and will be included at the beginning of the reel."
+                    : routeIntroStatus === "error"
+                    ? "Route map clip failed to render."
+                    : "Waiting for route map generation."}
                 </p>
+              </div>
+            )}
+            {gearSummarySkippedForCurrentRender && (
+              <div className="space-y-2 rounded-2xl border border-amber-300/20 bg-amber-400/[0.06] px-4 py-3 text-xs text-amber-100/90">
+                <p className="font-semibold uppercase tracking-[0.12em] text-amber-100/85">Gear summary</p>
+                <p>Equipment summary took too long and is being skipped for this export.</p>
               </div>
             )}
             {renderError && (
@@ -949,7 +974,7 @@ export default function Home() {
       </StepContent>
 
       <PricingModal open={pricingOpen} onClose={() => setPricingOpen(false)} />
-      {routeIntroPoints && routeIntroPoints.length > 1 && (
+      {routeIntroPoints && routeIntroPoints.length > 1 && !routeIntroSkippedForCurrentRender && (
         <RouteMapIntro
           key={`${routeIntroGeneration}-${routeIntroCinematicProfile}`}
           points={routeIntroPoints}

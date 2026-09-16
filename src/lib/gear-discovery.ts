@@ -31,49 +31,6 @@ interface AdventureNewsApiItem {
   image: string | null;
 }
 
-const ADVENTURE_NEWS_FALLBACKS: AdventureNewsApiItem[] = [
-  {
-    id: "adventuremotorcycle-feed",
-    brand: "Adventure Motorcycle",
-    category: "motorcycle",
-    title: "Adventure Motorcycle RSS",
-    subtitle: "Adventure Motorcycle • RSS feed",
-    summary: "Open the Adventure Motorcycle feed for the latest stories and route inspiration.",
-    description: "Fallback source card when the live RSS feed is unavailable from the current network.",
-    ctaLabel: "Open feed",
-    ctaUrl: "https://adventuremotorcycle.com/feed",
-    kind: "brand-news",
-    featured: true,
-    image: null,
-  },
-  {
-    id: "rideapart-rss-directory",
-    brand: "RideApart",
-    category: "motorcycle",
-    title: "RideApart RSS directory",
-    subtitle: "RideApart • RSS feeds",
-    summary: "Browse RideApart's feed directory for motorcycle and adventure coverage.",
-    description: "Fallback source card for the RideApart RSS directory.",
-    ctaLabel: "Open RSS",
-    ctaUrl: "https://www.rideapart.com/rss/",
-    kind: "brand-news",
-    image: null,
-  },
-  {
-    id: "rideapart-articles-all",
-    brand: "RideApart",
-    category: "motorcycle",
-    title: "RideApart latest articles",
-    subtitle: "RideApart • all articles",
-    summary: "Open the RideApart all-articles feed for the latest motorcycle headlines.",
-    description: "Fallback source card for the RideApart article feed.",
-    ctaLabel: "Open feed",
-    ctaUrl: "https://www.rideapart.com/rss/articles/all/",
-    kind: "brand-news",
-    image: null,
-  },
-];
-
 function brandLogoImage(brand: string): string {
   const hue = Math.abs(brand.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0)) % 360;
   const safeBrand = brand
@@ -168,5 +125,5 @@ export async function loadGearDiscoveryItems(): Promise<GearDiscoveryItem[]> {
     console.error("[gear-discovery] adventure news RSS loading failed", error);
   }
 
-  return normalizeItems(ADVENTURE_NEWS_FALLBACKS);
+  return [];
 }

@@ -187,42 +187,17 @@ function shuffleArray<T>(items: T[]): T[] {
   return next;
 }
 
-function buildSourceFallback(source: FeedSource): AdventureNewsItem {
-  return {
-    id: `${source.id}-source-fallback`,
-    sourceId: source.id,
-    brand: source.brand,
-    category: source.category,
-    title: `${source.brand} source`,
-    subtitle: `${source.subtitle} • source temporarily unavailable`,
-    summary: `This source was provided for the Adventure News section, but it is currently blocked or unavailable from the local environment.`,
-    description: `This source was provided for the Adventure News section, but it is currently blocked or unavailable from the local environment.`,
-    ctaLabel: "Open source",
-    ctaUrl: source.url,
-    kind: "brand-news",
-    featured: false,
-    image: null,
-    publishedAt: null,
-  };
-}
-
 function mixSources(sourceEntries: Array<{ source: FeedSource; items: AdventureNewsItem[] }>): AdventureNewsItem[] {
-  const brandsWithLiveItems = new Set(
-    sourceEntries
-      .filter(({ items }) => items.length > 0)
-      .map(({ source }) => source.brand),
-  );
   const queues = shuffleArray(
     sourceEntries.flatMap(({ source, items }) => {
       const deduped = dedupeItems(items);
       const sorted = sortFeedItems(deduped);
-      if (sorted.length === 0 && brandsWithLiveItems.has(source.brand)) {
+      if (sorted.length === 0) {
         return [];
       }
-      const liveItems = sorted.length > 0 ? sorted : [buildSourceFallback(source)];
-      const prioritized = liveItems.length > 1
-        ? [...shuffleArray(liveItems.slice(0, Math.min(3, liveItems.length))), ...liveItems.slice(Math.min(3, liveItems.length))]
-        : liveItems;
+      const prioritized = sorted.length > 1
+        ? [...shuffleArray(sorted.slice(0, Math.min(3, sorted.length))), ...sorted.slice(Math.min(3, sorted.length))]
+        : sorted;
       return [{
         source,
         items: prioritized,

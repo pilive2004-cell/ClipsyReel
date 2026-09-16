@@ -494,7 +494,7 @@ export async function detectRouteLabels(
   const cum = buildCumDist(points);
   const totalKm = cum[cum.length - 1];
 
-  if (options?.knownWaypoints && options.knownWaypoints.length >= 2) {
+  if (options?.knownWaypoints && options.knownWaypoints.length > 0) {
     return normalizeRouteLabels(
       options.knownWaypoints.map((wp) =>
         createRouteLabelForWaypoint(points, wp, {

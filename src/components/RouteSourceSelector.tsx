@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 
 import { usePlan } from "@/lib/plan-context";
-import { computeRouteStatsFromPoints, parseGpxPointsFromText } from "@/lib/gpx";
+import { computeRouteStatsFromPoints, parseGpxNamedWaypointsFromText, parseGpxPointsFromText } from "@/lib/gpx";
 import { matchVideosToRoute } from "@/lib/video-location-matcher";
 import type { GpxRouteStats, GpxTrackPoint, RouteLabel, UploadedVideo } from "@/types";
 import type { PlaceSuggestion, VehicleType, Waypoint } from "@/lib/route-service";
@@ -240,6 +240,7 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
       if (typeof reader.result !== "string") return;
       setGpxText(reader.result);
       const pts = parseGpxPointsFromText(reader.result);
+      const embeddedWaypoints = parseGpxNamedWaypointsFromText(reader.result);
       const stats = pts.length > 1 ? computeRouteStatsFromPoints(pts) : null;
       const activePoints = pts.length > 1 ? pts : null;
       setGpxPoints(activePoints);
@@ -251,7 +252,16 @@ export default function RouteSourceSelector({ videos, onRouteDataChange, onLocke
         setLabelsStatus("detecting");
         try {
           const { detectRouteLabels } = await import("@/lib/route-service");
-          const labels = await detectRouteLabels(activePoints);
+          const labels = await detectRouteLabels(activePoints, {
+            knownWaypoints: embeddedWaypoints.map((waypoint) => ({
+              name: waypoint.name,
+              label: waypoint.name,
+              lat: waypoint.lat,
+              lng: waypoint.lng,
+              region: null,
+              country: null,
+            })),
+          });
           setRouteLabels(labels);
           setLabelsStatus("ready");
           onRouteDataChange?.({ points: activePoints, stats, labels });

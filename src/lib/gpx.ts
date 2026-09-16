@@ -1,6 +1,12 @@
 import type L from "leaflet";
 import { GpxRouteStats, GpxTrackPoint } from "@/types";
 
+export interface GpxNamedWaypoint {
+  name: string;
+  lat: number;
+  lng: number;
+}
+
 /** Great-circle distance between two lat/lng points, in meters. */
 export function haversineMeters(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
   const R = 6371000;
@@ -179,4 +185,31 @@ export function parseGpxPointsFromText(gpxText: string): GpxTrackPoint[] {
   }
 
   return points;
+}
+
+/** Extracts named GPX waypoints / route points so we can prefer author-provided place names. */
+export function parseGpxNamedWaypointsFromText(gpxText: string): GpxNamedWaypoint[] {
+  const doc = new DOMParser().parseFromString(gpxText, "application/xml");
+  if (doc.querySelector("parsererror")) return [];
+
+  const nodes = Array.from(doc.querySelectorAll("wpt, rtept, trkpt"));
+  const seen = new Set<string>();
+  const waypoints: GpxNamedWaypoint[] = [];
+
+  for (const node of nodes) {
+    const name = node.querySelector("name")?.textContent?.trim() ?? "";
+    if (!name) continue;
+
+    const lat = Number(node.getAttribute("lat"));
+    const lng = Number(node.getAttribute("lon") ?? node.getAttribute("lng"));
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+
+    const key = `${name.toLowerCase()}@${lat.toFixed(5)},${lng.toFixed(5)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    waypoints.push({ name, lat, lng });
+  }
+
+  return waypoints;
 }

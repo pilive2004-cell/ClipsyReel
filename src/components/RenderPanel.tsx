@@ -439,119 +439,115 @@ export default function RenderPanel({
           </div>
         </div>
 
-        <div className="overflow-hidden rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(15,23,42,0.32))] px-4 py-4 shadow-[0_22px_55px_rgba(2,6,23,0.42)] backdrop-blur-xl">
-          <div className="mb-3 flex items-center justify-between">
-            <div className="space-y-1">
-              <p className="text-[10px] uppercase tracking-[0.18em] text-fuchsia-100/75">{discoveryCopy.gearTitle}</p>
-              <p className="text-base font-semibold text-white/92">{discoveryCopy.gearSubtitle}</p>
+        {gearNews.length > 0 && (
+          <div className="overflow-hidden rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(15,23,42,0.32))] px-4 py-4 shadow-[0_22px_55px_rgba(2,6,23,0.42)] backdrop-blur-xl">
+            <div className="mb-3 flex items-center justify-between">
+             <div className="space-y-1">
+               <p className="text-[10px] uppercase tracking-[0.18em] text-fuchsia-100/75">{discoveryCopy.gearTitle}</p>
+               <p className="text-base font-semibold text-white/92">{discoveryCopy.gearSubtitle}</p>
+             </div>
+             {gearNews.length > 1 && (
+               <div className="flex items-center gap-2">
+                 <button
+                   type="button"
+                   onClick={() => cycleStory("gear", -1)}
+                   className="rounded-full border border-white/12 bg-white/[0.04] p-1.5 text-white/75 transition hover:bg-white/[0.1]"
+                   aria-label={discoveryCopy.previous}
+                 >
+                   <ChevronLeft className="h-3.5 w-3.5" />
+                 </button>
+                 <button
+                   type="button"
+                   onClick={() => cycleStory("gear", 1)}
+                   className="rounded-full border border-white/12 bg-white/[0.04] p-1.5 text-white/75 transition hover:bg-white/[0.1]"
+                   aria-label={discoveryCopy.next}
+                 >
+                   <ChevronRight className="h-3.5 w-3.5" />
+                 </button>
+                 <span className="rounded-full border border-fuchsia-300/20 bg-fuchsia-400/10 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.12em] text-fuchsia-100/90">
+                   RSS LIVE
+                 </span>
+               </div>
+             )}
             </div>
-            {gearNews.length > 1 && (
-              <div className="flex items-center gap-2">
-               <button
-                 type="button"
-                 onClick={() => cycleStory("gear", -1)}
-                 className="rounded-full border border-white/12 bg-white/[0.04] p-1.5 text-white/75 transition hover:bg-white/[0.1]"
-                 aria-label={discoveryCopy.previous}
-               >
-                 <ChevronLeft className="h-3.5 w-3.5" />
-               </button>
-               <button
-                 type="button"
-                 onClick={() => cycleStory("gear", 1)}
-                 className="rounded-full border border-white/12 bg-white/[0.04] p-1.5 text-white/75 transition hover:bg-white/[0.1]"
-                 aria-label={discoveryCopy.next}
-               >
-                 <ChevronRight className="h-3.5 w-3.5" />
-               </button>
-               <span className="rounded-full border border-fuchsia-300/20 bg-fuchsia-400/10 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.12em] text-fuchsia-100/90">
-                 RSS LIVE
-               </span>
-              </div>
-            )}
-          </div>
-          {gearNews.length === 0 ? (
-            <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-4 text-center text-[12px] text-white/65">
-              {discoveryCopy.selectGearHint}
-            </div>
-          ) : (
             <div className="space-y-3">
-              {featuredGear ? (() => (
-              <motion.article
-                key={featuredGear.id}
-                className="group relative w-full max-w-[1100px] overflow-hidden rounded-[24px] border border-white/10 shadow-[0_18px_38px_rgba(15,23,42,0.34)] sm:max-w-full"
-                whileHover={{ y: -2 }}
-                style={{
-                  backgroundColor: "var(--surface)",
-                  backgroundImage:
-                    "linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px)",
-                  backgroundSize: "24px 24px",
-                }}
-              >
-                <div className="flex flex-col gap-3 px-3 py-3 sm:px-4 sm:py-4">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[0.58rem] font-bold uppercase tracking-[0.22em] text-fuchsia-100/75">
-                      ADVENTURE NEWS
-                    </span>
-                    <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[0.56rem] font-medium uppercase tracking-[0.15em] text-white/70">
-                      RSS
-                    </span>
-                  </div>
+             {featuredGear ? (() => (
+               <motion.article
+                 key={featuredGear.id}
+                 className="group relative w-full max-w-[1100px] overflow-hidden rounded-[24px] border border-white/10 shadow-[0_18px_38px_rgba(15,23,42,0.34)] sm:max-w-full"
+                 whileHover={{ y: -2 }}
+                 style={{
+                   backgroundColor: "var(--surface)",
+                   backgroundImage:
+                     "linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px)",
+                   backgroundSize: "24px 24px",
+                 }}
+               >
+                 <div className="flex flex-col gap-3 px-3 py-3 sm:px-4 sm:py-4">
+                   <div className="flex items-center justify-between gap-2">
+                     <span className="text-[0.58rem] font-bold uppercase tracking-[0.22em] text-fuchsia-100/75">
+                       ADVENTURE NEWS
+                     </span>
+                     <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-[0.56rem] font-medium uppercase tracking-[0.15em] text-white/70">
+                       RSS
+                     </span>
+                   </div>
 
-                  <MaskedLabImage
-                    className="h-[220px] w-full sm:h-[252px]"
-                    image={featuredGear.image}
-                    fallback={gearFallbackImage(featuredGear)}
-                    title={featuredGear.title}
-                    subtitle={featuredGear.subtitle}
-                    onError={(e) => handleImageError(e, gearFallbackImage(featuredGear))}
-                  />
+                   <MaskedLabImage
+                     className="h-[220px] w-full sm:h-[252px]"
+                     image={featuredGear.image}
+                     fallback={gearFallbackImage(featuredGear)}
+                     title={featuredGear.title}
+                     subtitle={featuredGear.subtitle}
+                     onError={(e) => handleImageError(e, gearFallbackImage(featuredGear))}
+                   />
 
-                  <div className="flex items-start gap-3">
-                    <div
-                      className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-[10px] border border-black/10 bg-white text-[0.8rem] font-black text-slate-800 shadow-[0_8px_18px_rgba(0,0,0,0.12)] sm:h-12 sm:w-12"
-                    >
-                      {featuredGear.brandLogo ? (
-                        <img
-                          src={featuredGear.brandLogo}
-                          alt={`${featuredGear.brand} logo`}
-                          className="h-full w-full object-contain p-1.25 sm:p-1.5"
-                          onError={(e) => handleImageError(e, gearFallbackImage(featuredGear))}
-                        />
-                      ) : (
-                        <span>{initials(featuredGear.brand)}</span>
-                      )}
-                    </div>
+                   <div className="flex items-start gap-3">
+                     <div
+                       className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-[10px] border border-black/10 bg-white text-[0.8rem] font-black text-slate-800 shadow-[0_8px_18px_rgba(0,0,0,0.12)] sm:h-12 sm:w-12"
+                     >
+                       {featuredGear.brandLogo ? (
+                         <img
+                           src={featuredGear.brandLogo}
+                           alt={`${featuredGear.brand} logo`}
+                           className="h-full w-full object-contain p-1.25 sm:p-1.5"
+                           onError={(e) => handleImageError(e, gearFallbackImage(featuredGear))}
+                         />
+                       ) : (
+                         <span>{initials(featuredGear.brand)}</span>
+                       )}
+                     </div>
 
-                    <div className="min-w-0 flex-1">
-                      <p className="text-[0.62rem] font-bold uppercase tracking-[0.18em] text-fuchsia-100/75">
-                        {featuredGear.subtitle}
-                      </p>
-                      <h3 className="mt-1 text-[clamp(1rem,1.7vw,1.65rem)] font-black uppercase leading-[1.04] tracking-[-0.05em] text-white/95">
-                        {featuredGear.title}
-                      </h3>
-                    </div>
-                  </div>
+                     <div className="min-w-0 flex-1">
+                       <p className="text-[0.62rem] font-bold uppercase tracking-[0.18em] text-fuchsia-100/75">
+                         {featuredGear.subtitle}
+                       </p>
+                       <h3 className="mt-1 text-[clamp(1rem,1.7vw,1.65rem)] font-black uppercase leading-[1.04] tracking-[-0.05em] text-white/95">
+                         {featuredGear.title}
+                       </h3>
+                     </div>
+                   </div>
 
-                  <p className="max-w-[72ch] text-[clamp(0.78rem,1.25vw,1.02rem)] leading-[1.35] text-white/85">
-                    {featuredGear.summary}
-                  </p>
+                   <p className="max-w-[72ch] text-[clamp(0.78rem,1.25vw,1.02rem)] leading-[1.35] text-white/85">
+                     {featuredGear.summary}
+                   </p>
 
-                  <div className="flex items-center justify-end">
-                    <button
-                      type="button"
-                      onClick={() => window.open(featuredGear.ctaUrl, "_blank", "noopener,noreferrer")}
-                      className="inline-flex items-center justify-center rounded-[12px] px-4 py-2 text-[0.72rem] font-bold text-white shadow-[0_6px_0_rgba(0,0,0,0.18)] transition hover:translate-y-[-1px] sm:px-5 sm:py-2.5"
-                      style={{ background: "var(--brand-from)" }}
-                    >
-                      {featuredGear.ctaLabel}
-                    </button>
-                  </div>
-                </div>
-              </motion.article>
-              ))() : null}
+                   <div className="flex items-center justify-end">
+                     <button
+                       type="button"
+                       onClick={() => window.open(featuredGear.ctaUrl, "_blank", "noopener,noreferrer")}
+                       className="inline-flex items-center justify-center rounded-[12px] px-4 py-2 text-[0.72rem] font-bold text-white shadow-[0_6px_0_rgba(0,0,0,0.18)] transition hover:translate-y-[-1px] sm:px-5 sm:py-2.5"
+                       style={{ background: "var(--brand-from)" }}
+                     >
+                       {featuredGear.ctaLabel}
+                     </button>
+                   </div>
+                 </div>
+               </motion.article>
+             ))() : null}
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );
