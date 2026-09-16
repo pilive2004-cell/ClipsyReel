@@ -489,17 +489,16 @@ function computeProgressPerPoint(points: GpxTrackPoint[]): number[] {
 async function reverseGeocode(lat: number, lng: number): Promise<string> {
   try {
     const ctrl = new AbortController();
-    const tid = window.setTimeout(() => ctrl.abort(), 3_500);
+    const tid = window.setTimeout(() => ctrl.abort(), 4_000);
     const res = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=jsonv2`,
+      `/api/reverse-geocode?lat=${lat}&lon=${lng}`,
       { signal: ctrl.signal, headers: { Accept: "application/json" } },
     );
     window.clearTimeout(tid);
     if (!res.ok) return `${lat.toFixed(2)}, ${lng.toFixed(2)}`;
-    const data: { address?: Record<string, string> } = await res.json();
-    const a = data.address ?? {};
-    const city = a.city ?? a.town ?? a.village ?? a.municipality ?? a.county ?? "";
-    const country = a.country ?? "";
+    const data: { city?: string; country?: string } = await res.json();
+    const city = data.city ?? "";
+    const country = data.country ?? "";
     return [city, country].filter(Boolean).join(", ") || `${lat.toFixed(2)}, ${lng.toFixed(2)}`;
   } catch {
     return `${lat.toFixed(2)}, ${lng.toFixed(2)}`;

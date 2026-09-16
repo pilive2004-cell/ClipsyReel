@@ -404,18 +404,17 @@ async function reverseGeocodeLabel(
     const ctrl = new AbortController();
     const tid = window.setTimeout(() => ctrl.abort(), 4_000);
     const res = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=jsonv2`,
+      `/api/reverse-geocode?lat=${lat}&lon=${lng}`,
       { signal: ctrl.signal, headers: { Accept: "application/json" } },
     );
     window.clearTimeout(tid);
     if (!res.ok) return null;
-    const data: { address?: Record<string, string> } = await res.json();
-    const a = data.address ?? {};
-    const name = a.city ?? a.town ?? a.borough ?? a.suburb ?? a.village ?? a.municipality ?? a.county ?? "";
+    const data: { city?: string; region?: string | null; country?: string } = await res.json();
+    const name = data.city ?? "";
     if (!name) return null;
-    const region = pickRegion(a);
-    const country = a.country ?? null;
-    const priority: "major" | "minor" = (a.city || a.town || a.borough) ? "major" : "minor";
+    const region = data.region ?? null;
+    const country = data.country ?? null;
+    const priority: "major" | "minor" = name ? "major" : "minor";
     return { name, region, country, priority };
   } catch {
     return null;
