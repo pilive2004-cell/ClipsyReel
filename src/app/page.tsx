@@ -32,6 +32,7 @@ import { buildSportHookSequence } from "@/lib/sport-style";
 import { buildAnalysisResult, generateMockAnalysisMulti } from "@/data/mock";
 import { buildMontage, preloadRenderPipeline, qualityForPlan } from "@/lib/video-engine";
 import { buildGearSummaryEntries, DEFAULT_GEAR_SELECTIONS } from "@/data/gearCatalog";
+import { useMusicGen } from "@/lib/musicgen-hooks";
 import { AdventureSetup, AppStep, BestMoment, GpxRouteStats, GpxTrackPoint, MontageResult, ReelAnalysisResult, ReelStyle, ReelTitleColor, ReelTitleFont, ReelTitleSize, RouteLabel, UploadedVideo } from "@/types";
 
 const STEP_ORDER: AppStep[] = ["upload", "style", "analyze", "render", "preview"];
@@ -125,6 +126,9 @@ export default function Home() {
   const [renderPhase, setRenderPhase] = useState<string>("");
   const [renderError, setRenderError] = useState<string | null>(null);
   const [renderFallbackNotice, setRenderFallbackNotice] = useState<string | null>(null);
+  // Generated background music (during render)
+  const [backgroundMusic, setBackgroundMusic] = useState<Blob | null>(null);
+  const [musicGenerationProgress, setMusicGenerationProgress] = useState<"idle" | "generating" | "ready" | "error">("idle");
   // The hook text that was actually baked into the last successful render —
   // compared against the live `selectedHookText` below so the Preview screen
   // can prompt the user to regenerate whenever they pick/type a different
@@ -152,6 +156,19 @@ export default function Home() {
   });
   const renderPipelineWarmedRef = useRef(false);
   const routeIntroCinematicProfile = cinematicProfileForStyle(style);
+  const previewMusicUrl = useMemo(
+    () => (backgroundMusic ? URL.createObjectURL(backgroundMusic) : null),
+    [backgroundMusic]
+  );
+
+  useEffect(() => {
+    return () => {
+      if (previewMusicUrl) {
+        URL.revokeObjectURL(previewMusicUrl);
+      }
+    };
+  }, [previewMusicUrl]);
+
   const sportTelemetry = useMemo(() => {
     if (!routeIntroPoints || routeIntroPoints.length < 2) return null;
     const metrics = computeRouteMetrics(routeIntroPoints, Math.min(routeIntroPoints.length, 240));
@@ -401,7 +418,7 @@ export default function Home() {
       videoDurations: videos.map((v) => v.durationSeconds),
       style,
       mode: "reel" as const,
-      maxReelSeconds: 60,
+      maxReelSeconds: 90,
       bestMoments: analysis.bestMoments,
       introClip: routeIntroClip ?? undefined,
       outroClip: gearSummaryClip ?? undefined,
@@ -436,6 +453,8 @@ export default function Home() {
     (async () => {
       setRenderProgress(null);
       setRenderError(null);
+      setBackgroundMusic(null);
+      setMusicGenerationProgress("idle");
 
       try {
         const progressCallbacks = {
@@ -452,6 +471,29 @@ export default function Home() {
             setRenderPhase(label);
           },
         };
+
+        // Generate music in parallel while rendering
+        const musicPromise = (async () => {
+          try {
+            setMusicGenerationProgress("generating");
+            const { generateBackgroundMusic } = await import("@/lib/music-generation");
+            const totalVideoDuration = videos.reduce((sum, video) => sum + video.durationSeconds, 0);
+            const estimatedDuration = Math.min(Math.max(Math.round(totalVideoDuration), 8), 10);
+            
+            const musicBlob = await generateBackgroundMusic(style, estimatedDuration);
+            if (!cancelled && musicBlob) {
+              setBackgroundMusic(musicBlob);
+              setMusicGenerationProgress("ready");
+            } else if (!cancelled) {
+              setMusicGenerationProgress("error");
+            }
+          } catch (error) {
+            if (!cancelled) {
+              console.warn("Background music generation failed; continuing without soundtrack.", error);
+              setMusicGenerationProgress("error");
+            }
+          }
+        })();
 
         let result: Awaited<ReturnType<typeof buildMontage>> | null = null;
         let lastError: unknown = null;
@@ -939,6 +981,7 @@ export default function Home() {
               <ReelPreview
                 videoUrl={previewUrl}
                 videoBlob={montage?.blob}
+                backgroundMusicUrl={previewMusicUrl}
                 style={analysis.style}
                 hookText={selectedHookText}
                 bestMoments={analysis.bestMoments}
@@ -959,7 +1002,14 @@ export default function Home() {
               />
 
               <Section title={copy.common.exportLabel}>
-                <ExportPanel videoUrl={previewUrl} videoBlob={montage?.blob ?? null} videoName={combinedName} onLockedClick={() => setPricingOpen(true)} />
+                <ExportPanel
+                  videoUrl={previewUrl}
+                  videoBlob={montage?.blob ?? null}
+                  videoName={combinedName}
+                  audioBlob={backgroundMusic}
+                  musicGenerationProgress={musicGenerationProgress}
+                  onLockedClick={() => setPricingOpen(true)}
+                />
               </Section>
 
               <button

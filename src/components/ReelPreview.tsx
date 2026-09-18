@@ -14,6 +14,7 @@ import { BestMoment, ReelStyle, ReelTitleColor, ReelTitleFont, ReelTitleSize, Sp
 interface ReelPreviewProps {
   videoUrl: string;
   videoBlob?: Blob;
+  backgroundMusicUrl?: string | null;
   style: ReelStyle;
   hookText: string;
   bestMoments: BestMoment[];
@@ -44,6 +45,7 @@ interface ReelPreviewProps {
 export default function ReelPreview({
   videoUrl,
   videoBlob,
+  backgroundMusicUrl,
   style,
   hookText,
   bestMoments,
@@ -69,6 +71,7 @@ export default function ReelPreview({
   const HOOK_CYCLE_SECONDS = HOOK_FADE_IN_SECONDS + HOOK_HOLD_SECONDS + HOOK_FADE_OUT_SECONDS;
   const styleDef = STYLES.find((s) => s.id === style)!;
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const backgroundAudioRef = useRef<HTMLAudioElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const previousTypedLengthRef = useRef(0);
   const [fallbackState, setFallbackState] = useState<{ source: string; url: string } | null>(null);
@@ -280,6 +283,77 @@ export default function ReelPreview({
   }, [fallbackState]);
 
   useEffect(() => {
+    const video = videoRef.current;
+    const audio = backgroundAudioRef.current;
+    if (!video || !audio) return;
+
+    video.defaultMuted = false;
+    video.muted = false;
+    video.volume = backgroundMusicUrl ? 0.38 : 1;
+
+    if (!backgroundMusicUrl) {
+      audio.pause();
+      audio.src = "";
+      return;
+    }
+
+    if (audio.src !== backgroundMusicUrl) {
+      audio.src = backgroundMusicUrl;
+    }
+
+    const syncAudioToVideo = () => {
+      if (Math.abs(audio.currentTime - video.currentTime) > 0.25) {
+        audio.currentTime = video.currentTime;
+      }
+      audio.playbackRate = video.playbackRate || 1;
+    };
+
+    const playAudio = async () => {
+      try {
+        syncAudioToVideo();
+        audio.volume = 0.62;
+        await audio.play();
+      } catch {
+        // Autoplay can be blocked until user interaction; the preview will still show the video.
+      }
+    };
+
+    const handlePlay = () => {
+      void playAudio();
+    };
+    const handlePause = () => {
+      audio.pause();
+    };
+    const handleSeek = () => {
+      syncAudioToVideo();
+    };
+    const handleVolumeRefresh = () => {
+      video.volume = backgroundMusicUrl ? 0.38 : 1;
+    };
+
+    video.addEventListener("play", handlePlay);
+    video.addEventListener("pause", handlePause);
+    video.addEventListener("seeking", handleSeek);
+    video.addEventListener("seeked", handleSeek);
+    video.addEventListener("ratechange", handleSeek);
+    video.addEventListener("volumechange", handleVolumeRefresh);
+
+    if (!video.paused) {
+      void playAudio();
+    }
+
+    return () => {
+      video.removeEventListener("play", handlePlay);
+      video.removeEventListener("pause", handlePause);
+      video.removeEventListener("seeking", handleSeek);
+      video.removeEventListener("seeked", handleSeek);
+      video.removeEventListener("ratechange", handleSeek);
+      video.removeEventListener("volumechange", handleVolumeRefresh);
+      audio.pause();
+    };
+  }, [backgroundMusicUrl]);
+
+  useEffect(() => {
     return () => {
       if (audioContextRef.current) {
         void audioContextRef.current.close();
@@ -350,13 +424,13 @@ export default function ReelPreview({
 
   return (
     <div className="flex flex-col items-center gap-4">
+      <audio ref={backgroundAudioRef} loop autoPlay playsInline preload="auto" className="hidden" />
       <div className="relative aspect-[9/16] w-full max-w-[260px] overflow-hidden rounded-[28px] border border-white/10 bg-black shadow-2xl shadow-black/50">
         <video
           key={effectiveVideoUrl}
           ref={videoRef}
           src={effectiveVideoUrl}
           className="h-full w-full object-cover"
-          muted
           loop
           autoPlay
           playsInline

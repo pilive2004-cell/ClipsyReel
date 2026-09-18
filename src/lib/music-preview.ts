@@ -312,11 +312,17 @@ export class RealTrackPreviewPlayer {
   private audio: HTMLAudioElement | null = null;
   private fallback: MusicPreviewEngine | null = null;
   private usingFallback = false;
-  readonly track = PIXABAY_TRACKS[this.style];
+  readonly track = PIXABAY_TRACKS[this.style]?.[0] ?? null;
 
   constructor(private style: ReelStyle) {}
 
   async start() {
+    if (!this.track) {
+      this.usingFallback = true;
+      this.fallback ??= new MusicPreviewEngine(this.style);
+      await this.fallback.start();
+      return;
+    }
     if (this.usingFallback) {
       await this.fallback?.start();
       return;

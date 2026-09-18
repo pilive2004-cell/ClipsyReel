@@ -41,10 +41,10 @@ function buildConcatManifest(fileNames: string[]): Uint8Array {
   return new TextEncoder().encode(`${manifest}\n`);
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+function withTimeout<T>(promise: Promise<T>, ms: number, reason?: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timeout = window.setTimeout(() => {
-      reject(new Error(`Timed out after ${ms}ms`));
+      reject(new Error(reason ?? `Timed out after ${ms}ms`));
     }, ms);
 
     promise.then(
@@ -108,6 +108,28 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
+function getSourceClusterWindow(videoDuration: number): number {
+  return Math.max(1.25, Math.min(10, videoDuration * 0.06));
+}
+
+function getSameSourceSpreadMinGap(videoDuration: number, recipe: StyleRecipe, activeSourceCount: number): number {
+  if (recipe === STYLE_RECIPES.sport) {
+    return Math.max(0.75, videoDuration * 0.008);
+  }
+  if (activeSourceCount <= 1) {
+    return Math.max(1.2, videoDuration * 0.06);
+  }
+  return Math.max(3, videoDuration * 0.12);
+}
+
+export function isMobileRenderDevice(): boolean {
+  if (typeof window === "undefined" || typeof navigator === "undefined") return false;
+  const userAgent = navigator.userAgent || "";
+  const isMobileUA = /Android|iPhone|iPad|iPod|Mobile/i.test(userAgent) || (navigator.maxTouchPoints ?? 0) > 1;
+  const smallViewport = window.innerWidth <= 768 || window.innerHeight <= 820;
+  return isMobileUA || smallViewport;
+}
+
 export function capTransitionDuration(baseTransitionDuration: number, prevClipLength: number, nextClipLength: number): number {
   const safeBase = Number.isFinite(baseTransitionDuration) ? Math.max(0, baseTransitionDuration) : 0;
   const safePrev = Number.isFinite(prevClipLength) ? Math.max(0, prevClipLength) : 0;
@@ -122,7 +144,28 @@ export function shouldUseCompactConcatFallback(style: ReelStyle, clipCount: numb
 
 export function getComposeClipCap(style: ReelStyle, clipCount: number): number | null {
   if (shouldUseCompactConcatFallback(style, clipCount)) return null;
-  return style === "sport" ? 5 : 6;
+  // A 60s export needs room for more than 6 cuts. Before this change the
+  // final composition was silently trimmed back to ~34s, which is why the
+  // hook cards disappeared immediately.
+  return style === "sport" ? null : 12;
+}
+
+export function resolveReelContentBudget({
+  maxReelSeconds,
+  introDuration,
+  outroDuration,
+  hookTextCount,
+}: {
+  maxReelSeconds: number;
+  introDuration: number;
+  outroDuration: number;
+  hookTextCount: number;
+}): number {
+  const contentBudgetCap = 90;
+  const minimumRenderDuration = 60;
+  const baseContentTarget = Math.max(12, Math.min(contentBudgetCap, maxReelSeconds) - introDuration - outroDuration);
+  const hookFloor = hookTextCount >= 3 ? 22 : hookTextCount >= 2 ? 16 : 12;
+  return Math.max(baseContentTarget, hookFloor, minimumRenderDuration);
 }
 
 export async function detectVideoHasAudio(file: File | Blob): Promise<boolean> {
@@ -134,42 +177,48 @@ export async function detectVideoHasAudio(file: File | Blob): Promise<boolean> {
   video.volume = 1;
   video.src = url;
 
-  return await new Promise<boolean>((resolve) => {
-    const cleanup = () => URL.revokeObjectURL(url);
-    const finalize = () => {
-      const audioTracks = (video as HTMLVideoElement & { audioTracks?: { length: number } }).audioTracks;
-      const mozHasAudio = (video as HTMLVideoElement & { mozHasAudio?: boolean }).mozHasAudio;
-      const webkitAudioDecodedByteCount = (video as HTMLVideoElement & { webkitAudioDecodedByteCount?: number }).webkitAudioDecodedByteCount;
-      const hasAudio = Boolean(
-        mozHasAudio ||
-        webkitAudioDecodedByteCount ||
-        (audioTracks && audioTracks.length > 0)
-      );
-      cleanup();
-      resolve(hasAudio);
-    };
+  return await withTimeout(
+    new Promise<boolean>((resolve) => {
+      const cleanup = () => URL.revokeObjectURL(url);
+      const finalize = () => {
+        const audioTracks = (video as HTMLVideoElement & { audioTracks?: { length: number } }).audioTracks;
+        const mozHasAudio = (video as HTMLVideoElement & { mozHasAudio?: boolean }).mozHasAudio;
+        const webkitAudioDecodedByteCount = (video as HTMLVideoElement & { webkitAudioDecodedByteCount?: number }).webkitAudioDecodedByteCount;
+        const hasAudio = Boolean(
+          mozHasAudio ||
+          webkitAudioDecodedByteCount ||
+          (audioTracks && audioTracks.length > 0)
+        );
+        cleanup();
+        resolve(hasAudio);
+      };
 
-    video.onloadedmetadata = finalize;
-    video.oncanplay = finalize;
-    video.onerror = () => {
-      cleanup();
-      resolve(false);
-    };
-    video.load();
-  });
+      video.onloadedmetadata = finalize;
+      video.oncanplay = finalize;
+      video.onerror = () => {
+        cleanup();
+        resolve(false);
+      };
+      video.load();
+    }),
+    12000,
+    "Audio detection timed out while probing source video metadata."
+  );
 }
 
 /** Lazily loads & caches a single ffmpeg.wasm instance (core files are self-hosted in /public/ffmpeg). */
 async function loadFFmpeg(): Promise<FFmpeg> {
-  const ffmpeg = new FFmpeg();
-  const coreJsUrl = await toBlobURL("/ffmpeg/ffmpeg-core.js", "text/javascript");
-  const wasmUrl = await toBlobURL("/ffmpeg/ffmpeg-core.wasm", "application/wasm");
+  return await withTimeout((async () => {
+    const ffmpeg = new FFmpeg();
+    const coreJsUrl = await toBlobURL("/ffmpeg/ffmpeg-core.js", "text/javascript");
+    const wasmUrl = await toBlobURL("/ffmpeg/ffmpeg-core.wasm", "application/wasm");
 
-  await ffmpeg.load({
-    coreURL: coreJsUrl,
-    wasmURL: wasmUrl,
-  });
-  return ffmpeg;
+    await ffmpeg.load({
+      coreURL: coreJsUrl,
+      wasmURL: wasmUrl,
+    });
+    return ffmpeg;
+  })(), 45000, "FFmpeg core failed to initialize in time.");
 }
 
 /**
@@ -313,15 +362,54 @@ function estimatedMontageDuration(segments: Segment[], recipe: StyleRecipe): num
   return Math.max(0, raw - transitionPenalty);
 }
 
+function collapseMomentClusters(bestMoments: BestMoment[], videoDurations: number[]): BestMoment[] {
+  const bySource = new Map<number, BestMoment[]>();
+  for (const moment of bestMoments) {
+    const sourceMoments = bySource.get(moment.sourceIndex) ?? [];
+    sourceMoments.push(moment);
+    bySource.set(moment.sourceIndex, sourceMoments);
+  }
+
+  const kept: BestMoment[] = [];
+  for (const [sourceIndex, moments] of bySource.entries()) {
+    const sorted = [...moments].sort((a, b) => a.startSeconds - b.startSeconds || (b.confidence ?? 0) - (a.confidence ?? 0));
+    const clusterWindow = getSourceClusterWindow(videoDurations[sourceIndex] ?? 0);
+    let run: BestMoment[] = [];
+
+    for (const moment of sorted) {
+      if (run.length === 0) {
+        run = [moment];
+        continue;
+      }
+      const previous = run[run.length - 1];
+      if (Math.abs(previous.startSeconds - moment.startSeconds) <= clusterWindow) {
+        run.push(moment);
+        continue;
+      }
+      kept.push(run.reduce((best, current) => ((current.confidence ?? 0) > (best.confidence ?? 0) ? current : best), run[0]));
+      run = [moment];
+    }
+
+    if (run.length > 0) {
+      kept.push(run.reduce((best, current) => ((current.confidence ?? 0) > (best.confidence ?? 0) ? current : best), run[0]));
+    }
+  }
+
+  return kept.sort((a, b) => a.sourceIndex - b.sourceIndex || a.startSeconds - b.startSeconds);
+}
+
 /** Picks clips for a Reel up to `targetDurationSeconds`, allowing non-consecutive reuse when needed. */
 export function planReelSegments(
   bestMoments: BestMoment[],
   recipe: StyleRecipe,
   videoDurations: number[],
-  targetDurationSeconds: number
+  targetDurationSeconds: number,
+  mobileSafe: boolean = false
 ): Segment[] {
+  const requiredDurationSeconds = mobileSafe ? Math.max(30, Math.min(targetDurationSeconds, 45)) : Math.max(targetDurationSeconds, 60);
+  const dedupedMoments = collapseMomentClusters(bestMoments, videoDurations);
   const byVideo = new Map<number, BestMoment[]>();
-  for (const m of bestMoments) {
+  for (const m of dedupedMoments) {
     const list = byVideo.get(m.sourceIndex);
     if (list) list.push(m);
     else byVideo.set(m.sourceIndex, [m]);
@@ -335,11 +423,33 @@ export function planReelSegments(
   const [targetMinSeconds, targetMaxSeconds] = recipe.targetReelSeconds;
   const targetForStyle = perClipNet > 0 ? Math.round(((targetMinSeconds + targetMaxSeconds) / 2) / perClipNet) : recipe.reelClipCount;
   const clipCap = recipe === STYLE_RECIPES.sport ? 48 : 12;
-  // Never exceed the reel duration target or the render-performance clip cap, even if a style target/lots of footage would suggest more.
-  const hardCapFromDuration = perClipNet > 0 ? Math.floor(targetDurationSeconds / perClipNet) : clipCap;
-  const targetCount = Math.max(1, Math.min(clipCap, hardCapFromDuration, Math.max(recipe.reelClipCount, targetForStyle)));
+  // Never let the final montage collapse below a full minute even when the
+  // source footage or the style recipe is shorter than the target. This keeps
+  // the export readable and preserves the hook visibility requirement.
+  const hardCapFromDuration = perClipNet > 0 ? Math.floor(requiredDurationSeconds / perClipNet) : clipCap;
+  const targetCount = Math.max(1, Math.min(clipCap, hardCapFromDuration, Math.max(recipe.reelClipCount, targetForStyle, Math.ceil(requiredDurationSeconds / Math.max(1.2, perClipNet)))));
 
   const activeSources = Array.from(byVideo.keys()).sort((a, b) => a - b);
+  const clusteredSourceIndexes = new Set<number>();
+  for (const sourceIndex of activeSources) {
+    const sourceMoments = [...bestMoments].filter((moment) => moment.sourceIndex === sourceIndex).sort((a, b) => a.startSeconds - b.startSeconds);
+    let run: BestMoment[] = [];
+    for (const moment of sourceMoments) {
+      if (run.length === 0) {
+        run = [moment];
+        continue;
+      }
+      const previous = run[run.length - 1];
+      const clusterWindow = getSourceClusterWindow(videoDurations[sourceIndex] ?? 0);
+      if (Math.abs(previous.startSeconds - moment.startSeconds) <= clusterWindow) {
+        run.push(moment);
+      } else {
+        if (run.length > 1) clusteredSourceIndexes.add(sourceIndex);
+        run = [moment];
+      }
+    }
+    if (run.length > 1) clusteredSourceIndexes.add(sourceIndex);
+  }
   const selected: BestMoment[] = [];
   const selectedIds = new Set<string>();
 
@@ -384,9 +494,11 @@ export function planReelSegments(
   const MIN_SOURCE_SPREAD_FRACTION = 0.12;
   function isFarEnoughFromSameSourcePicks(sourceIndex: number, startSeconds: number): boolean {
     const videoDuration = videoDurations[sourceIndex] ?? 0;
-    const minGapSeconds = recipe === STYLE_RECIPES.sport
-      ? Math.max(0.75, videoDuration * 0.008)
-      : Math.max(3, videoDuration * MIN_SOURCE_SPREAD_FRACTION);
+    const minGapSeconds = activeSources.length <= 1
+      ? getSameSourceSpreadMinGap(videoDuration, recipe, activeSources.length)
+      : recipe === STYLE_RECIPES.sport
+        ? Math.max(0.75, videoDuration * 0.008)
+        : Math.max(3, videoDuration * MIN_SOURCE_SPREAD_FRACTION);
     const claimedTimes = perSourceSelectedTimes.get(sourceIndex) ?? [];
     return claimedTimes.every((t) => Math.abs(t - startSeconds) >= minGapSeconds);
   }
@@ -408,7 +520,7 @@ export function planReelSegments(
       const list = byVideo.get(src)!;
       return round < list.length && (perSourceCount.get(src) ?? 0) < maxPerSource;
     });
-    if (activeSources.length > 1 && stillCapable.length <= 1 && selected.length >= Math.min(4, targetCount)) break;
+    if (activeSources.length > 1 && stillCapable.length <= 1 && selected.length >= targetCount) break;
     for (const src of activeSources) {
       if (selected.length >= targetCount) break;
       const list = byVideo.get(src)!;
@@ -452,111 +564,150 @@ export function planReelSegments(
     );
   }
 
-  const sourceDiversity = new Set(baseMoments.map((m) => m.sourceIndex)).size;
-  const jitterPattern = [-1.4, 1.1, -0.8, 1.6, -2.0, 2.2, -1.1, 0.9];
-  // Keep browser-side ffmpeg composition stable: a larger xfade chain is
-  // much more likely to fail near the end of export in wasm than a slightly
-  // shorter, better-paced montage. Sport is the worst offender because it
-  // creates a high cut density and long transition graph.
-  // Increased from 16 to 24 to accommodate 60s SPORT reels with more moments.
   const maxSegments = recipe === STYLE_RECIPES.sport ? 24 : 20;
-  let cursor = 0;
-  let guard = 0;
-  while (
-    estimatedMontageDuration(segments, recipe) < targetDurationSeconds &&
-    segments.length < maxSegments &&
-    guard < 240
-  ) {
-    guard += 1;
-    const sourceMoment = baseMoments[cursor % baseMoments.length];
-    const shiftBase = jitterPattern[cursor % jitterPattern.length];
-    const shift = shiftBase + Math.floor(cursor / jitterPattern.length) * 0.35 * (cursor % 2 === 0 ? 1 : -1);
-    cursor += 1;
-
-    const candidate = buildSegmentFromMoment(sourceMoment, recipe, videoDurations, shift);
-    if (!candidate) continue;
-    const previous = segments[segments.length - 1];
-    if (previous) {
-      const sameSourceConsecutive = sourceDiversity > 1 && previous.sourceIndex === candidate.sourceIndex;
-      const tooSimilarConsecutive = isImmediatelyRepeatedShot(previous, candidate);
-      if (sameSourceConsecutive || tooSimilarConsecutive) continue;
-    }
-    segments.push(candidate);
+  const usedSourceMoments = new Map<number, number[]>();
+  const claimSourceClusterUsage = (sourceIndex: number, startSeconds: number): void => {
+    const list = usedSourceMoments.get(sourceIndex) ?? [];
+    list.push(startSeconds);
+    usedSourceMoments.set(sourceIndex, list);
+  };
+  const isSourceClusterUsed = (sourceIndex: number, startSeconds: number): boolean => {
+    const clusterWindow = getSourceClusterWindow(videoDurations[sourceIndex] ?? 0);
+    const timestamps = usedSourceMoments.get(sourceIndex) ?? [];
+    return timestamps.some((usedStart) => Math.abs(usedStart - startSeconds) <= clusterWindow);
+  };
+  for (const moment of selected) {
+    claimSourceClusterUsage(moment.sourceIndex, moment.startSeconds);
   }
 
   let dedupedSegments = avoidBackToBackSameSource(removeNearDuplicateSegments(enforceSameSourceSpread(segments, videoDurations, recipe)));
   dedupedSegments = dedupedSegments.slice(0, maxSegments);
 
-  if (recipe === STYLE_RECIPES.sport && videoDurations.length > 1) {
-    const seenSources = new Set(dedupedSegments.map((segment) => segment.sourceIndex));
-    if (seenSources.size < Math.min(3, videoDurations.length)) {
-      const coverageSegments = planStorySegments(videoDurations, recipe, targetDurationSeconds);
-      const merged = [...dedupedSegments];
-      const seen = new Set(merged.map((segment) => `${segment.sourceIndex}:${segment.start.toFixed(3)}`));
-      for (const segment of coverageSegments) {
-        const key = `${segment.sourceIndex}:${segment.start.toFixed(3)}`;
-        if (seen.has(key) || seenSources.has(segment.sourceIndex) && seenSources.size >= Math.min(3, videoDurations.length)) continue;
-        if (seenSources.size < Math.min(3, videoDurations.length) && !seenSources.has(segment.sourceIndex)) {
-          seenSources.add(segment.sourceIndex);
-        }
-        merged.push(segment);
-        seen.add(key);
-        if (seenSources.size >= Math.min(3, videoDurations.length)) break;
-      }
-      dedupedSegments = avoidBackToBackSameSource(removeNearDuplicateSegments(merged));
-    }
-  }
+  const minimumFillCount = Math.max(
+    8,
+    Math.min(maxSegments, Math.ceil(requiredDurationSeconds / Math.max(4.8, recipe.clipDuration / recipe.speed)))
+  );
 
-  if (recipe === STYLE_RECIPES.sport && estimatedMontageDuration(dedupedSegments, recipe) < targetDurationSeconds * 0.88) {
-    const coverageSegments = planStorySegments(videoDurations, recipe, targetDurationSeconds);
+  if (dedupedSegments.length < minimumFillCount || estimatedMontageDuration(dedupedSegments, recipe) < requiredDurationSeconds * 0.88) {
+    const coverageSegments = planStorySegments(videoDurations, recipe, requiredDurationSeconds);
     const merged = [...dedupedSegments];
     const seen = new Set(merged.map((segment) => `${segment.sourceIndex}:${segment.start.toFixed(3)}`));
+    const sourceUsage = new Map<number, number>();
+    for (const segment of merged) {
+      sourceUsage.set(segment.sourceIndex, (sourceUsage.get(segment.sourceIndex) ?? 0) + 1);
+    }
 
-    for (const segment of coverageSegments) {
+    for (const segment of [...coverageSegments].sort((a, b) => {
+      const aUsage = sourceUsage.get(a.sourceIndex) ?? 0;
+      const bUsage = sourceUsage.get(b.sourceIndex) ?? 0;
+      return aUsage - bUsage || a.start - b.start;
+    })) {
       const key = `${segment.sourceIndex}:${segment.start.toFixed(3)}`;
-      if (seen.has(key)) continue;
+      const sourceAlreadyUsed = (sourceUsage.get(segment.sourceIndex) ?? 0) > 0 && activeSources.length > 1 && clusteredSourceIndexes.has(segment.sourceIndex);
+      const clusterAlreadyUsed = activeSources.length > 1 && isSourceClusterUsed(segment.sourceIndex, segment.start);
+      if (seen.has(key) || clusterAlreadyUsed || sourceAlreadyUsed) continue;
       merged.push(segment);
       seen.add(key);
+      sourceUsage.set(segment.sourceIndex, (sourceUsage.get(segment.sourceIndex) ?? 0) + 1);
+      claimSourceClusterUsage(segment.sourceIndex, segment.start);
       const normalized = avoidBackToBackSameSource(removeNearDuplicateSegments(merged)).slice(0, maxSegments);
-      if (estimatedMontageDuration(normalized, recipe) >= targetDurationSeconds * 0.96 || normalized.length >= maxSegments) {
-        dedupedSegments = normalized;
+      dedupedSegments = normalized;
+      if (normalized.length >= minimumFillCount && estimatedMontageDuration(normalized, recipe) >= requiredDurationSeconds * 0.9) {
         break;
       }
-      dedupedSegments = normalized;
     }
   }
 
-  // If the best-moment plan still collapses to a single segment, fall back to
-  // an even coverage cut so SPORT (and other montage modes) cannot degrade into
-  // a raw one-clip playback.
   if (dedupedSegments.length < 2) {
-    const coverageSegments = planStorySegments(videoDurations, recipe, targetDurationSeconds);
+    const coverageSegments = planStorySegments(videoDurations, recipe, requiredDurationSeconds);
     const merged = [...dedupedSegments];
     const seen = new Set(merged.map((segment) => `${segment.sourceIndex}:${segment.start.toFixed(3)}`));
     for (const segment of coverageSegments) {
       const key = `${segment.sourceIndex}:${segment.start.toFixed(3)}`;
-      if (seen.has(key)) continue;
+      const clusterAlreadyUsed = activeSources.length > 1 && isSourceClusterUsed(segment.sourceIndex, segment.start);
+      if (seen.has(key) || clusterAlreadyUsed) continue;
       merged.push(segment);
       seen.add(key);
+      claimSourceClusterUsage(segment.sourceIndex, segment.start);
       if (merged.length >= Math.max(3, Math.min(targetCount, coverageSegments.length))) break;
     }
     dedupedSegments = avoidBackToBackSameSource(removeNearDuplicateSegments(merged));
   }
 
   dedupedSegments = avoidBackToBackSameSource(removeNearDuplicateSegments(dedupedSegments)).slice(0, maxSegments);
+  dedupedSegments = collapseTightSourceClusters(dedupedSegments, videoDurations);
+  const baseEstimatedDuration = estimatedMontageDuration(dedupedSegments, recipe);
+
+  if (baseEstimatedDuration > 0 && baseEstimatedDuration < requiredDurationSeconds) {
+    const stretchFactor = requiredDurationSeconds / baseEstimatedDuration;
+    const stretched = dedupedSegments.map((segment) => {
+      const sourceDuration = videoDurations[segment.sourceIndex] ?? 0;
+      const maxLength = Math.max(segment.length, Math.max(0, sourceDuration - (segment.start ?? 0)));
+      const nextLength = Math.min(segment.length * stretchFactor, maxLength);
+      return { ...segment, length: Math.max(segment.length, nextLength) };
+    });
+    dedupedSegments = collapseTightSourceClusters(avoidBackToBackSameSource(removeNearDuplicateSegments(stretched)), videoDurations).slice(0, maxSegments);
+  }
+
   return applySlowMoToStandoutMoments(dedupedSegments, baseMoments);
+}
+
+function collapseTightSourceClusters(segments: Segment[], videoDurations: number[]): Segment[] {
+  const activeSourceCount = new Set(segments.map((segment) => segment.sourceIndex)).size;
+  if (activeSourceCount <= 1) {
+    return [...segments].sort((a, b) => a.start - b.start || a.sourceIndex - b.sourceIndex);
+  }
+  const bySource = new Map<number, Segment[]>();
+  for (const segment of segments) {
+    const list = bySource.get(segment.sourceIndex) ?? [];
+    list.push(segment);
+    list.sort((a, b) => (a.start ?? 0) - (b.start ?? 0));
+    bySource.set(segment.sourceIndex, list);
+  }
+
+  const kept: Segment[] = [];
+  for (const [sourceIndex, sourceSegments] of bySource.entries()) {
+    if (sourceSegments.length <= 1) {
+      kept.push(...sourceSegments);
+      continue;
+    }
+    const sourceDuration = videoDurations[sourceIndex] ?? 0;
+    const clusterWindow = getSourceClusterWindow(sourceDuration);
+    const sorted = [...sourceSegments].sort((a, b) => (a.confidence ?? 0) - (b.confidence ?? 0));
+    const clusterRepresentatives: Segment[] = [];
+    let run: Segment[] = [];
+    for (const segment of sorted) {
+      if (run.length === 0) {
+        run = [segment];
+        continue;
+      }
+      const previous = run[run.length - 1];
+      const delta = Math.abs((previous.start ?? 0) - (segment.start ?? 0));
+      if (delta <= clusterWindow) {
+        run.push(segment);
+      } else {
+        clusterRepresentatives.push(run.reduce((best, current) => ((current.confidence ?? 0) > (best.confidence ?? 0) ? current : best), run[0]));
+        run = [segment];
+      }
+    }
+    if (run.length > 0) {
+      clusterRepresentatives.push(run.reduce((best, current) => ((current.confidence ?? 0) > (best.confidence ?? 0) ? current : best), run[0]));
+    }
+    kept.push(...clusterRepresentatives);
+  }
+
+  return kept.sort((a, b) => a.start - b.start || a.sourceIndex - b.sourceIndex);
 }
 
 function enforceSameSourceSpread(segments: Segment[], videoDurations: number[], recipe: StyleRecipe): Segment[] {
   const kept: Segment[] = [];
   const acceptedTimesBySource = new Map<number, number[]>();
+  const activeSourceCount = new Set(segments.map((segment) => segment.sourceIndex)).size;
 
   for (const segment of [...segments].sort((a, b) => a.sourceIndex - b.sourceIndex || a.start - b.start)) {
     const sourceIndex = segment.sourceIndex;
     const videoDuration = videoDurations[sourceIndex] ?? 0;
-    const minGapSeconds = recipe === STYLE_RECIPES.sport
-      ? Math.max(0.75, videoDuration * 0.008)
-      : Math.max(3, videoDuration * 0.12);
+    const minGapSeconds = getSameSourceSpreadMinGap(videoDuration, recipe, activeSourceCount);
     const claimedTimes = acceptedTimesBySource.get(sourceIndex) ?? [];
     const overlaps = claimedTimes.some((time) => Math.abs(time - segment.start) < minGapSeconds);
 
@@ -603,6 +754,10 @@ function isImmediatelyRepeatedShot<T extends { sourceIndex: number; start?: numb
 }
 
 function avoidBackToBackSameSource<T extends { sourceIndex: number; start?: number; length?: number }>(segments: T[]): T[] {
+  const uniqueSourceCount = new Set(segments.map((segment) => segment.sourceIndex)).size;
+  if (uniqueSourceCount <= 1) {
+    return [...segments];
+  }
   const out = [...segments];
   for (let i = 1; i < out.length; i++) {
     const prev = out[i - 1];
@@ -1501,14 +1656,12 @@ function ensureNonEmptyVideoBlob(data: Uint8Array, mimeType: string) {
 }
 
 /**
- * Instagram's currently published max length for a Reel — a hard technical
- * ceiling, not a target (see `StyleRecipe.targetReelSeconds` for the actual
- * per-style duration goal, chosen per editorial best practices rather than
- * always maxing out this number). Kept as a single named constant since Meta
- * has changed this a few times (30s → 60s → 90s) — bump this one number
- * if/when Instagram raises the limit again.
+ * Local export budget used by the app. The route intro + final montage can run
+ * longer than a strict social Reel cap when we're delivering a premium
+ * cinematic recap, so we keep a higher local ceiling here and still let the
+ * style recipe decide the actual editorial target.
  */
-export const INSTAGRAM_REEL_MAX_SECONDS = 60;
+export const INSTAGRAM_REEL_MAX_SECONDS = 90;
 
 /**
  * Renders a real, style-matched montage (cuts + Ken Burns zoom + randomized
@@ -1568,8 +1721,8 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     style,
     mode,
     bestMoments,
-    maxStorySeconds = 60,
-    maxReelSeconds = 60,
+    maxStorySeconds = 90,
+    maxReelSeconds = 90,
     quality = "720p",
     watermark = false,
     keepOriginalAudio = true,
@@ -1588,37 +1741,43 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     onPhaseChange,
   } = params;
 
+  const mobileSafeRender = isMobileRenderDevice();
+  const effectiveRenderSpeedProfile = mobileSafeRender ? "fast" : renderSpeedProfile;
+  const effectiveQuality = mobileSafeRender ? "720p" : quality;
+  const { w, h } = QUALITY_DIMENSIONS[effectiveQuality];
+  const RENDER_FPS = effectiveRenderSpeedProfile === "fast" ? 18 : 24;
+
   // Determine Ken Burns mode: use tier, or auto-detect from renderSpeedProfile
-  const effectiveKenBurnsTier: KenBurnsTier = kenBurnsTier !== "standard" ? kenBurnsTier : (renderSpeedProfile === "fast" ? "skip" : "standard");
+  const effectiveKenBurnsTier: KenBurnsTier = mobileSafeRender
+    ? "skip"
+    : (kenBurnsTier !== "standard" ? kenBurnsTier : (effectiveRenderSpeedProfile === "fast" ? "skip" : "standard"));
   const fastMode = effectiveKenBurnsTier === "skip";
 
   const recipe = STYLE_RECIPES[style];
   const transitionPool = STYLE_TRANSITIONS[style];
-  const { w, h } = QUALITY_DIMENSIONS[quality];
-  const RENDER_FPS = renderSpeedProfile === "fast" ? 18 : 24;
   
   // Detect hardware acceleration and select optimal codec
   const hwAccelResult = await detectHardwareAcceleration();
   const selectedCodec: HardwareCodec = hwAccelResult.codec;
   const encoderArgs = buildEncoderArgs(
     selectedCodec,
-    renderSpeedProfile === "fast" ? "fast" : "medium",
-    renderSpeedProfile === "fast" ? 25 : 23
+    effectiveRenderSpeedProfile === "fast" ? "fast" : "medium",
+    effectiveRenderSpeedProfile === "fast" ? 25 : 23
   );
   // Phase 1 uses more aggressive settings for speed
   const phase1EncoderArgs = buildEncoderArgs(selectedCodec, "fast", 27);
   const renderCodecProfile = encoderArgs.join(" ");
   const phase1CodecProfile = phase1EncoderArgs.join(" ");
-  const effectiveRenderFps = renderSpeedProfile === "fast" ? 18 : 24;
+  const effectiveRenderFps = effectiveRenderSpeedProfile === "fast" ? 18 : 24;
   
   const audioSampleRate = 48000;
   const sourceAudioEnabled = await Promise.all(
     files.map(async (file, index) => {
       const explicit = videoAudioEnabled?.[index];
       if (typeof explicit === "boolean") {
-        return explicit && (await detectVideoHasAudio(file));
+        return explicit;
       }
-      return keepOriginalAudio && (await detectVideoHasAudio(file));
+      return keepOriginalAudio;
     })
   );
   const watermarkLeft = Math.round(w * 0.04);
@@ -1658,9 +1817,14 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
 
   const introDuration = introClip?.durationSeconds ?? 0;
   const outroDuration = style === "sport" ? Math.min(outroClip?.durationSeconds ?? 0, 3) : outroClip?.durationSeconds ?? 0;
-  const reelContentTarget = Math.max(12, Math.min(60, maxReelSeconds) - introDuration - outroDuration);
+  const reelContentTarget = resolveReelContentBudget({
+    maxReelSeconds,
+    introDuration,
+    outroDuration,
+    hookTextCount: cleanedOverlayTexts.length,
+  });
   const segments = mode === "reel"
-    ? planReelSegments(bestMoments, recipe, videoDurations, reelContentTarget)
+    ? planReelSegments(bestMoments, recipe, videoDurations, reelContentTarget, mobileSafeRender)
     : planStorySegments(videoDurations, recipe, maxStorySeconds);
   const creativePlan = {
     clips: segments.map((_, index) => ({
@@ -2191,6 +2355,35 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       }
     }
 
+    const ensureOutputFileExists = async (ffmpegInstance: FFmpeg, fileName: string, stageName: string): Promise<void> => {
+      const candidatePaths = [
+        fileName,
+        `/home/${fileName}`,
+        `/tmp/${fileName}`,
+        `home/${fileName}`,
+        `tmp/${fileName}`,
+      ];
+      for (const candidatePath of candidatePaths) {
+        try {
+          const data = await ffmpegInstance.readFile(candidatePath) as Uint8Array;
+          if (data && data.byteLength > 0) return;
+        } catch {
+          // keep checking other candidate locations
+        }
+      }
+
+      try {
+        const rootEntries = await ffmpegInstance.listDir('/');
+        const listedNames = rootEntries.map((entry) => entry.name);
+        const hasMatchingName = listedNames.includes(fileName) || listedNames.some((name) => name.includes(fileName));
+        if (hasMatchingName) return;
+      } catch {
+        // ignore; the output is still absent if listDir fails.
+      }
+
+      throw new Error(`${stageName} did not produce ${fileName} in the FFmpeg in-memory filesystem.`);
+    };
+
     // Keep the final encode and readback on the same FFmpeg instance. The
     // browser-side FS is single-instance and the fresh-instance copy step can
     // leave the output file present in one in-memory FS but unreadable in the
@@ -2350,6 +2543,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
           "yuv420p",
           outputName,
         ]);
+        await ensureOutputFileExists(ffmpeg, outputName, "Single-clip mute fallback");
         tempFiles.push(outputName);
         completedUnits++;
         return finaliseOutput(outputName, finalDurations[0], 1);
@@ -2387,6 +2581,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         "yuv420p",
         outputName,
       ]);
+      await ensureOutputFileExists(ffmpeg, outputName, "Single-clip overlay export");
       completedUnits++;
       tempFiles.push(outputName);
       return finaliseOutput(outputName, finalDurations[0], 1);
@@ -2445,6 +2640,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
           ]),
           COMPACT_EXPORT_TIMEOUT_MS
         );
+        await ensureOutputFileExists(ffmpeg, baseOutputName, "Compact concat base export");
       } catch (error) {
         console.warn("[video-engine] compact-concat copy join failed; falling back to re-encode concat", error);
         const concatFilterParts: string[] = [];
@@ -2526,7 +2722,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       const overlayFilterArgs = [
         "-filter_complex", overlayFilterParts.join(";"),
         "-map", `[${finalLabel}]`,
-        "-an",
+        ...(hasAnyAudioEnabled ? ["-map", "0:a?", "-c:a", "aac", "-b:a", "128k"] : ["-an"]),
       ];
       const overlayEncodingArgs = [
         "-r", String(RENDER_FPS),
@@ -2544,6 +2740,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
 
       try {
         await withTimeout(finalStageFFmpeg.exec(overlayExecArgs), COMPACT_EXPORT_TIMEOUT_MS);
+        await ensureOutputFileExists(finalStageFFmpeg, outputName, "Compact overlay final export");
       } catch (error) {
         console.warn("[video-engine] compact-concat overlay composition timed out or failed; retrying with faster text-burn settings.", error);
         const retryOutputName = `out_fast_${stamp}.mp4`;
@@ -2564,6 +2761,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
             ]),
             COMPACT_TEXT_OVERLAY_TIMEOUT_MS,
           );
+          await ensureOutputFileExists(finalStageFFmpeg, retryOutputName, "Compact overlay fast retry");
         } catch (retryError) {
           console.warn("[video-engine] compact-concat fast overlay retry failed; falling back to base concat output.", retryError);
           return finaliseOutput(baseOutputName, renderDuration, finalClipNames.length);
@@ -2657,10 +2855,32 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     );
 
     try {
-      await ffmpeg.exec(execArgs);
+      await withTimeout(ffmpeg.exec(execArgs), 180_000, "Final xfade composition timed out after 180 seconds.");
+      await ensureOutputFileExists(ffmpeg, outputName, "Final xfade export");
     } catch (error) {
-      console.error("[video-engine] xfade final composition failed", error);
-      throw error;
+      console.warn("[video-engine] xfade final composition timed out or failed; falling back to compact concat export.", error);
+      const fallbackManifestName = `concat_fallback_${stamp}.txt`;
+      await ffmpeg.writeFile(fallbackManifestName, buildConcatManifest(finalClipNames));
+      const fallbackOutputName = `out_fallback_${stamp}.mp4`;
+      try {
+        await withTimeout(
+          ffmpeg.exec([
+            "-f", "concat",
+            "-safe", "0",
+            "-i", fallbackManifestName,
+            "-c", "copy",
+            fallbackOutputName,
+          ]),
+          COMPACT_EXPORT_TIMEOUT_MS,
+          "Fallback concat export timed out after 75 seconds."
+        );
+        await ensureOutputFileExists(ffmpeg, fallbackOutputName, "Fallback concat export");
+      } catch (fallbackError) {
+        console.error("[video-engine] fallback concat export also failed", fallbackError);
+        throw fallbackError;
+      }
+      tempFiles.push(fallbackOutputName);
+      return finaliseOutput(fallbackOutputName, Math.max(acc, 60), finalClipNames.length);
     }
     completedUnits++;
     mark("phase2-done");

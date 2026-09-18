@@ -196,10 +196,10 @@ const MAP_LOAD_TIMEOUT_MS = 15_000;
  *   Phase 4 (T_HOLD → end)       Smooth zoom-out back to full-route overview.
  */
 const T_OVERVIEW  = 2.0;  // s — strict static full-route hold
-const T_ZOOMIN    = 5.4; // s — smooth cinematic dive from overview to start (compressed for longer draw)
-const T_DRAW      = 16.4; // s — route draw & scenic tracking (extended to let the head reach 100%)
-const T_HOLD      = 16.8; // s — rise / arrival hold
-const T_OVERVIEW_RETURN = 17.2; // s — complete zoom-out back to the whole route
+const T_ZOOMIN    = 4.6; // s — faster lead-in, red dot starts moving sooner
+const T_DRAW      = 13.8; // s — route draw ends right when the red dot reaches the finish
+const T_HOLD      = 14.4; // s — brief arrival hold
+const T_OVERVIEW_RETURN = 15.2; // s — complete zoom-out back to the whole route
 // Phase 4: T_HOLD → CLIP_DURATION_SECONDS
 
 const CINEMATIC_ROUTE_TONE = {
@@ -670,6 +670,9 @@ function waitForMapIdle(map: maplibregl.Map, timeoutMs: number): Promise<boolean
     let settled = false;
     const safeAreTilesLoaded = () => {
       try {
+        if (!map || typeof map.areTilesLoaded !== "function") return false;
+        const style = map.getStyle?.();
+        if (!style || !style.sources || typeof style.sources !== "object") return false;
         return map.areTilesLoaded();
       } catch (error) {
         console.warn("[RouteMapIntro] areTilesLoaded unavailable during preload timeout.", error);
@@ -1538,7 +1541,9 @@ export default function RouteMapIntro({
         let tileStateWarned = false;
         const areTilesLoadedSafe = () => {
           try {
-            if (!map) return false;
+            if (!map || typeof map.areTilesLoaded !== "function") return false;
+            const style = map.getStyle?.();
+            if (!style || !style.sources || typeof style.sources !== "object") return false;
             return map.areTilesLoaded();
           } catch (error) {
             if (!tileStateWarned) {

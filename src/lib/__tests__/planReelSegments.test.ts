@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getComposeClipCap, planReelSegments, shouldUseCompactConcatFallback, type Segment } from "../video-engine";
+import { getComposeClipCap, planReelSegments, resolveReelContentBudget, shouldUseCompactConcatFallback, type Segment } from "../video-engine";
 import { buildSportHookSequence, planSportHookWindows } from "../sport-style";
 import { STYLE_RECIPES } from "@/data/styleRecipes";
 import type { BestMoment } from "@/types";
@@ -76,6 +76,23 @@ describe("planReelSegments", () => {
     expect(segments.length).toBeGreaterThan(1);
   });
 
+  it("keeps a single-source viral reel from collapsing to a tiny duration", () => {
+    const sourceMoments: BestMoment[] = [
+      moment("single-a", 0, 3, 96),
+      moment("single-b", 0, 8, 95),
+      moment("single-c", 0, 13, 94),
+      moment("single-d", 0, 18, 93),
+      moment("single-e", 0, 24, 92),
+      moment("single-f", 0, 30, 91),
+    ];
+    const recipe = STYLE_RECIPES.viral;
+    const segments: Segment[] = planReelSegments(sourceMoments, recipe, [45], 60);
+    const plannedDuration = segments.reduce((sum, segment) => sum + segment.length / recipe.speed, 0);
+
+    expect(segments.length).toBeGreaterThanOrEqual(5);
+    expect(plannedDuration).toBeGreaterThanOrEqual(25);
+  });
+
   it("sport mode does not stop at four clips when only one source is available", () => {
     const sourceMoments: BestMoment[] = [
       moment("sport-a", 0, 8, 95),
@@ -147,11 +164,12 @@ describe("planReelSegments", () => {
     expect(shouldUseCompactConcatFallback("viral", 8)).toBe(false);
   });
 
-  it("does not trim compact sport renders back down to five final clips", () => {
+  it("keeps non-sport reels long enough to reach a full minute instead of trimming them to ~34s", () => {
     expect(getComposeClipCap("sport", 3)).toBeNull();
     expect(getComposeClipCap("sport", 12)).toBeNull();
-    expect(getComposeClipCap("sport", 2)).toBe(5);
-    expect(getComposeClipCap("viral", 7)).toBe(6);
+    expect(getComposeClipCap("sport", 2)).toBeNull();
+    expect(getComposeClipCap("viral", 7)).toBe(12);
+    expect(getComposeClipCap("travel", 12)).toBe(12);
   });
 
   it("keeps the sport hook wording user-driven and strips extra editorial labels", () => {
@@ -185,6 +203,44 @@ describe("planReelSegments", () => {
     expect(beats.every((beat) => beat.subtitle === "")).toBe(true);
   });
 
+  it("keeps a three-hook final export long enough for the last hook to stay visible", () => {
+    const targetSeconds = resolveReelContentBudget({
+      maxReelSeconds: 24,
+      introDuration: 6.2,
+      outroDuration: 1.2,
+      hookTextCount: 3,
+    });
+
+    expect(targetSeconds).toBeGreaterThanOrEqual(18);
+    expect(targetSeconds).toBeGreaterThan(24 - 6.2 - 1.2);
+  });
+
+  it("keeps the final montage above a 40s budget when a route intro and outro are included", () => {
+    const targetSeconds = resolveReelContentBudget({
+      maxReelSeconds: 90,
+      introDuration: 18,
+      outroDuration: 8,
+      hookTextCount: 3,
+    });
+
+    expect(targetSeconds).toBeGreaterThanOrEqual(40);
+    expect(targetSeconds).toBeGreaterThanOrEqual(90 - 18 - 8);
+  });
+
+  it("fills the reel back up to a near-minute duration when early best-moment picks are too short", () => {
+    const recipe = STYLE_RECIPES.travel;
+    const sparseMoments: BestMoment[] = [
+      moment("travel-1", 0, 7, 96),
+      moment("travel-2", 0, 14, 94),
+      moment("travel-3", 1, 10, 93),
+      moment("travel-4", 1, 18, 90),
+    ];
+    const segments = planReelSegments(sparseMoments, recipe, [90, 90], 60);
+    const plannedDuration = segments.reduce((sum, segment) => sum + segment.length / recipe.speed, 0);
+
+    expect(segments.length).toBeGreaterThanOrEqual(2);
+    expect(plannedDuration).toBeGreaterThanOrEqual(45);
+  });
   it("keeps the three sport hook slots within the visible window instead of letting the final card fall outside the reel", () => {
     const beats = buildSportHookSequence({
       customTexts: ["Launch hard", "Hold the line", "No brake"],

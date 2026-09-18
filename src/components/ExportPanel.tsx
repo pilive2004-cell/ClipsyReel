@@ -11,6 +11,8 @@ interface ExportPanelProps {
   videoUrl: string;
   videoBlob: Blob | null;
   videoName: string;
+  audioBlob?: Blob | null;  // Generated background music
+  musicGenerationProgress?: "idle" | "generating" | "ready" | "error";
   onLockedClick: () => void;
 }
 
@@ -28,11 +30,17 @@ interface ExportPanelProps {
  * only for Free-plan users) and stream/link to the rendered MP4 once the
  * job completes, instead of rendering on-device.
  */
-export default function ExportPanel({ videoUrl, videoBlob, videoName, onLockedClick }: ExportPanelProps) {
+export default function ExportPanel({ videoUrl, videoBlob, videoName, audioBlob, musicGenerationProgress = "idle", onLockedClick }: ExportPanelProps) {
   const { plan, isFree } = usePlan();
   const { copy } = useLocale();
   const [isExporting, setIsExporting] = useState(false);
   const [done, setDone] = useState(false);
+  const [includeAudio, setIncludeAudio] = useState(true); // Export with music by default
+  const [isMuxing, setIsMuxing] = useState(false);
+
+  const musicStatusLabel =
+    audioBlob ? "Ready" : musicGenerationProgress === "generating" ? "Generating..." : musicGenerationProgress === "error" ? "Unavailable" : "Off";
+  const canIncludeAudio = !!audioBlob && musicGenerationProgress !== "error";
 
   const quality = "720p";
 
@@ -49,9 +57,47 @@ export default function ExportPanel({ videoUrl, videoBlob, videoName, onLockedCl
     setIsExporting(true);
     setDone(false);
     const filename = `clipsyreel-${videoName.replace(/\.[^.]+$/, "")}.mp4`;
+
     try {
-      if (videoBlob) {
-        await saveVideoToDevice(videoBlob, filename);
+      let finalBlob = videoBlob;
+
+      // Mux audio if requested and available
+      if (includeAudio && audioBlob && videoBlob) {
+        setIsMuxing(true);
+        const formData = new FormData();
+        formData.append("video", videoBlob, "video.mp4");
+        formData.append("audio", audioBlob, "audio.wav");
+        const controller = new AbortController();
+        const timeoutId = window.setTimeout(() => controller.abort(), 300000);
+
+        try {
+          const response = await fetch("/api/mux-audio", {
+            method: "POST",
+            body: formData,
+            signal: controller.signal,
+          });
+
+          if (response.ok) {
+            finalBlob = await response.blob();
+          } else {
+            console.warn("Audio muxing failed, exporting without audio", await response.text());
+            finalBlob = videoBlob;
+          }
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "AbortError") {
+            console.warn("Audio muxing timed out, exporting base video instead.");
+          } else {
+            console.warn("Audio muxing failed, exporting base video instead.", error);
+          }
+          finalBlob = videoBlob;
+        } finally {
+          window.clearTimeout(timeoutId);
+          setIsMuxing(false);
+        }
+      }
+
+      if (finalBlob) {
+        await saveVideoToDevice(finalBlob, filename);
       } else {
         // Fallback for the (rare) case a montage blob isn't available — the raw uploaded clip preview.
         const response = await fetch(videoUrl);
@@ -68,6 +114,7 @@ export default function ExportPanel({ videoUrl, videoBlob, videoName, onLockedCl
       a.remove();
     }
     setIsExporting(false);
+    setIsMuxing(false);
     setDone(true);
   };
 
@@ -91,6 +138,27 @@ export default function ExportPanel({ videoUrl, videoBlob, videoName, onLockedCl
         </span>
       </div>
 
+      <div className="flex items-center justify-between rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-3 text-left">
+        <div className="flex items-center gap-2 text-xs text-white/70">
+          <span>🎵</span>
+          Background Music
+        </div>
+        {canIncludeAudio ? (
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={includeAudio}
+              onChange={(e) => setIncludeAudio(e.target.checked)}
+              className="cursor-pointer"
+              disabled={isExporting || isMuxing}
+            />
+            <span className="font-semibold text-emerald-400">{musicStatusLabel}</span>
+          </label>
+        ) : (
+          <span className={musicGenerationProgress === "error" ? "text-xs font-semibold text-amber-300" : "text-xs font-semibold text-white/40"}>{musicStatusLabel}</span>
+        )}
+      </div>
+
       <button
         onClick={() => (plan !== "business" ? undefined : onLockedClick())}
         disabled={plan === "business"}
@@ -111,17 +179,17 @@ export default function ExportPanel({ videoUrl, videoBlob, videoName, onLockedCl
 
       <button
         onClick={handleExport}
-        disabled={isExporting}
+        disabled={isExporting || isMuxing}
         className="flex w-full items-center justify-center gap-2 rounded-2xl brand-gradient py-3.5 text-sm font-semibold text-white shadow-lg shadow-fuchsia-500/25 transition disabled:opacity-70"
       >
-        {isExporting ? (
+        {isExporting || isMuxing ? (
           <motion.span animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 0.8, ease: "linear" }}>
             <Sparkles className="h-4 w-4" />
           </motion.span>
         ) : (
           <Download className="h-4 w-4" />
         )}
-        {isExporting ? copy.export.rendering : copy.export.download}
+        {isMuxing ? "Adding Music..." : isExporting ? copy.export.rendering : copy.export.download}
       </button>
 
       {done && (
