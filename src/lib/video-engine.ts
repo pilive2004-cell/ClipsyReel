@@ -7,7 +7,12 @@ import { STYLE_RECIPES, StyleRecipe } from "@/data/styleRecipes";
 import { pickTransitionName, randomTransitionDuration, STYLE_TRANSITIONS } from "@/data/transitions";
 import { detectHardwareAcceleration, buildEncoderArgs, HardwareCodec } from "@/lib/hw-acceleration";
 import { buildRenderCacheKey, fingerprintFile, getCachedBinaryAsset, putCachedBinaryAsset } from "@/lib/render-asset-cache";
-import { filterCoherentDisplayTexts, isCoherentDisplayText } from "@/lib/display-text";
+import {
+  filterCoherentDisplayTexts,
+  isCoherentDisplayText,
+  resolveDisplayTitleText,
+  resolveNonSportOverlayTexts,
+} from "@/lib/display-text";
 import {
   buildSportHookSequence,
   resolveSportHookPalette,
@@ -16,6 +21,10 @@ import {
   type SportHookEffect,
   type SportHookWindow,
 } from "@/lib/sport-style";
+import {
+  composeFinalRenderWithRemotion,
+  generateRemotionCompositeAsset,
+} from "@/modules/remotion/final-compositor";
 
 const ENABLE_MT_FFMPEG = process.env.NEXT_PUBLIC_ENABLE_MT_FFMPEG === "true";
 const INTRO_TRANSCODE_TIMEOUT_MS_FAST = 75_000;
@@ -1639,6 +1648,7 @@ export interface BuildMontageResult {
   blob: Blob;
   durationSeconds: number;
   clipCount: number;
+  usedRemotionComposite?: boolean;
   /** Human-readable list of creative effects actually applied — for a post-render "what changed" summary in the UI. */
   appliedEffects: string[];
   /** Effects this style wanted but were stripped because the render wasn't on a Pro plan — a concrete, specific upsell list. */
@@ -1782,9 +1792,15 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
   );
   const watermarkLeft = Math.round(w * 0.04);
   const watermarkTop = Math.round(h * 0.07);
+  const fallbackTitleText = resolveDisplayTitleText({
+    preferredTitle: reelTitle?.text,
+    hookText: openerHookText,
+    routeLabel,
+    fallback: "ClipsyReel",
+  });
   const sportDefaultTitleText = style === "sport"
     ? (reelTitle?.text.trim() || (routeLabel && isCoherentDisplayText(routeLabel) ? routeLabel : (openerHookText && isCoherentDisplayText(openerHookText) ? openerHookText : "SPORT MODE")))
-    : reelTitle?.text.trim() || "";
+    : fallbackTitleText;
   const cleanedReelTitle = sportDefaultTitleText.trim()
     ? {
         ...reelTitle,
@@ -1813,7 +1829,13 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
   ];
   const cleanedOverlayTexts = style === "sport"
     ? normalizedSportHookSequence.map((beat) => beat.text || beat.title)
-    : filterCoherentDisplayTexts(overlayTexts).slice(0, 3);
+    : resolveNonSportOverlayTexts({
+        hookText: openerHookText,
+        reelTitle: cleanedReelTitle?.text ?? reelTitle?.text,
+        customTextOverlays: params.customTextOverlays ?? [],
+        overlayTexts,
+        fallback: fallbackTitleText,
+      });
 
   const introDuration = introClip?.durationSeconds ?? 0;
   const outroDuration = style === "sport" ? Math.min(outroClip?.durationSeconds ?? 0, 3) : outroClip?.durationSeconds ?? 0;
@@ -1920,6 +1942,45 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       await ffmpeg.writeFile(reelTitleName, cloneFFmpegData(data));
     }
   }
+
+  let remotionOverlayName: string | null = null;
+  const shouldUseRemotionOverlay = !!cleanedReelTitle || !!openerHookText || cleanedOverlayTexts.length > 0 || style === "sport";
+  console.log(`[video-engine] Remotion overlay check: title=${!!cleanedReelTitle}, hook=${!!openerHookText}, texts=${cleanedOverlayTexts.length}, style=${style}, shouldUse=${shouldUseRemotionOverlay}`);
+  if (shouldUseRemotionOverlay) {
+    remotionOverlayName = `remotion_overlay_${stamp}.png`;
+    const remotionCacheKey = await buildRenderCacheKey("remotion-overlay-v1", [
+      w,
+      h,
+      style,
+      cleanedReelTitle?.text ?? "",
+      openerHookText ?? "",
+      cleanedOverlayTexts.join("||"),
+    ]);
+    const cachedRemotionOverlay = getCachedBinaryAsset(remotionCacheKey);
+    if (cachedRemotionOverlay) {
+      console.log(`[video-engine] Using cached remotion overlay: ${remotionOverlayName}`);
+      await ffmpeg.writeFile(remotionOverlayName, cloneFFmpegData(cachedRemotionOverlay));
+    } else {
+      console.log(`[video-engine] Generating new remotion overlay...`);
+      const data = await generateRemotionCompositeAsset({
+        width: w,
+        height: h,
+        style,
+        title: cleanedReelTitle?.text,
+        hookText: openerHookText,
+        overlayTexts: cleanedOverlayTexts,
+      });
+      console.log(`[video-engine] Generated remotion overlay: ${data.byteLength} bytes`);
+      if (data.byteLength > 0) {
+        putCachedBinaryAsset(remotionCacheKey, data, "image/png");
+        await ffmpeg.writeFile(remotionOverlayName, cloneFFmpegData(data));
+      } else {
+        console.log(`[video-engine] Remotion overlay generation returned 0 bytes, disabling overlay (titles/texts will use separate PNG files)`);
+        remotionOverlayName = null;
+      }
+    }
+  }
+
   const sportTelemetryOverlayNames: string[] = [];
   if (style === "sport") {
     for (const focus of [0, 1, 2] as const) {
@@ -1995,6 +2056,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     ...(outroSourceName ? [outroSourceName] : []),
     ...(watermarkName ? [watermarkName] : []),
     ...(reelTitleName ? [reelTitleName] : []),
+    ...(remotionOverlayName ? [remotionOverlayName] : []),
     ...sportTelemetryOverlayNames,
   ];
   const overlayTextNames: string[] = [];
@@ -2049,7 +2111,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
           )
         : null;
       const sportWindows = planSportTelemetryWindows(durationSeconds);
-      if (overlayTextNames.length === 0 && !titleWindow && sportWindows.length === 0) {
+      if (overlayTextNames.length === 0 && !titleWindow && sportWindows.length === 0 && !remotionOverlayName) {
         return { finalLabel: baseLabel, overlaysUsed: 0, usedTitle: false, usedSport: false };
       }
 
@@ -2072,6 +2134,16 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
 
       let currentLabel = baseLabel;
       let nextInputIndex = firstInputIndex;
+
+      if (remotionOverlayName) {
+        const inputIndex = nextInputIndex;
+        nextInputIndex += 1;
+        const remotionLabel = `${labelPrefix}_remotion_src`;
+        const remotionOutLabel = `${labelPrefix}_remotion`;
+        filterParts.push(`[${inputIndex}:v]format=rgba[${remotionLabel}]`);
+        filterParts.push(`[${currentLabel}][${remotionLabel}]overlay=0:0:enable='between(t,0,999999)'[${remotionOutLabel}]`);
+        currentLabel = remotionOutLabel;
+      }
 
       if (style !== "sport") {
         sportWindows.forEach((window, index) => {
@@ -2497,7 +2569,15 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       }
       onProgress?.(0.97);
       onPhaseChange?.("Verifying export…");
-      const blob = ensureNonEmptyVideoBlob(data, "video/mp4");
+      const ffmpegBlob = ensureNonEmptyVideoBlob(data, "video/mp4");
+      const remotionResult = await composeFinalRenderWithRemotion(ffmpegBlob, {
+        moments: bestMoments,
+        style,
+        title: cleanedReelTitle?.text,
+        hookText: openerHookText,
+        overlayTexts: cleanedOverlayTexts,
+      });
+      const blob = remotionResult.blob ?? ffmpegBlob;
       onProgress?.(0.99);
       const url = URL.createObjectURL(blob);
       mark("done");
@@ -2516,7 +2596,8 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         blob,
         durationSeconds,
         clipCount,
-        appliedEffects: style === "sport" ? ["Editorial sport telemetry overlay"] : [],
+        usedRemotionComposite: remotionResult.usedRemotionComposite,
+        appliedEffects: style === "sport" ? ["Editorial sport telemetry overlay", remotionResult.usedRemotionComposite ? "Remotion hybrid overlay" : "FFmpeg master render"] : remotionResult.usedRemotionComposite ? ["Remotion hybrid overlay"] : [],
         proLockedEffects: [],
         editingPattern: { name: style, description: "" },
       };
@@ -2552,10 +2633,11 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       const outputName = `out_${stamp}.mp4`;
       const filterParts: string[] = [];
       const { finalLabel: afterInsertLabel, inputsUsed: sportInsertInputs } = appendSportInsertFilters("0:v");
+      const remotionInputOffset = remotionOverlayName ? 1 : 0;
       const { finalLabel, overlaysUsed, usedTitle, usedSport } = appendOverlayFilters(
         filterParts,
         afterInsertLabel,
-        1 + sportInsertInputs,
+        1 + remotionInputOffset + sportInsertInputs,
         finalDurations[0],
         "single"
       );
@@ -2563,25 +2645,31 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         return finaliseOutput(finalClipNames[0], finalDurations[0], 1);
       }
       onPhaseChange?.("Burning in overlay text…");
-      await ffmpeg.exec([
-        "-i",
-        finalClipNames[0],
-        ...(style !== "sport" ? sportTelemetryOverlayNames.flatMap((name) => ["-i", name]) : []),
-        ...(reelTitleName ? ["-i", reelTitleName] : []),
-        ...overlayTextNames.slice(0, overlaysUsed).flatMap((name) => ["-i", name]),
-        "-filter_complex",
-        filterParts.join(";"),
-        "-map",
-        `[${finalLabel}]`,
-        "-r",
-        String(RENDER_FPS),
-        ...encoderArgs,
-        ...(sourceAudioEnabled[0] ?? true ? ["-map", "0:a?", "-c:a", "aac", "-b:a", "128k"] : ["-an"]),
-        "-pix_fmt",
-        "yuv420p",
-        outputName,
-      ]);
-      await ensureOutputFileExists(ffmpeg, outputName, "Single-clip overlay export");
+      try {
+        await ffmpeg.exec([
+          "-i",
+          finalClipNames[0],
+          ...(remotionOverlayName ? ["-i", remotionOverlayName] : []),
+          ...(style !== "sport" ? sportTelemetryOverlayNames.flatMap((name) => ["-i", name]) : []),
+          ...(reelTitleName ? ["-i", reelTitleName] : []),
+          ...overlayTextNames.slice(0, overlaysUsed).flatMap((name) => ["-i", name]),
+          "-filter_complex",
+          filterParts.join(";"),
+          "-map",
+          `[${finalLabel}]`,
+          "-r",
+          String(RENDER_FPS),
+          ...encoderArgs,
+          ...(sourceAudioEnabled[0] ?? true ? ["-map", "0:a?", "-c:a", "aac", "-b:a", "128k"] : ["-an"]),
+          "-pix_fmt",
+          "yuv420p",
+          outputName,
+        ]);
+        await ensureOutputFileExists(ffmpeg, outputName, "Single-clip overlay export");
+      } catch (error) {
+        console.warn("[video-engine] Single-clip overlay export failed; falling back to the original source clip without overlays.", error);
+        return finaliseOutput(finalClipNames[0], finalDurations[0], 1);
+      }
       completedUnits++;
       tempFiles.push(outputName);
       return finaliseOutput(outputName, finalDurations[0], 1);
@@ -2591,25 +2679,41 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     if (finalClipNames.length === 1 && watermark) {
       onPhaseChange?.("Applying watermark…");
       const outputName = `out_${stamp}.mp4`;
-      const filterParts = [`[1:v]format=rgba[wm]`, `[0:v][wm]overlay=${watermarkLeft}:${watermarkTop}[vwm]`];
+      const filterParts: string[] = [];
+      let overlayBaseLabel = "0:v";
+      if (remotionOverlayName) {
+        filterParts.push(`[1:v]format=rgba[remotion_base]`);
+        filterParts.push(`[${overlayBaseLabel}][remotion_base]overlay=0:0:enable='between(t,0,999999)'[vremotion]`);
+        overlayBaseLabel = "vremotion";
+      }
+      const watermarkInputIndex = remotionOverlayName ? 2 : 1;
+      filterParts.push(`[${watermarkInputIndex}:v]format=rgba[wm]`);
+      filterParts.push(`[${overlayBaseLabel}][wm]overlay=${watermarkLeft}:${watermarkTop}[vwm]`);
       const { finalLabel: afterInsertLabel, inputsUsed: sportInsertInputs } = appendSportInsertFilters("vwm");
-      const { finalLabel, overlaysUsed } = appendOverlayFilters(filterParts, afterInsertLabel, 2 + sportInsertInputs, finalDurations[0], "singlewm");
-      await ffmpeg.exec([
-        "-i", finalClipNames[0],
-        "-i", watermarkName as string,
-        ...(style !== "sport" ? sportTelemetryOverlayNames.flatMap((name) => ["-i", name]) : []),
-        ...(reelTitleName ? ["-i", reelTitleName] : []),
-        ...overlayTextNames.slice(0, overlaysUsed).flatMap((name) => ["-i", name]),
-        "-filter_complex",
-        filterParts.join(";"),
-        "-map",
-        `[${finalLabel}]`,
-        "-r", String(RENDER_FPS),
-        ...encoderArgs,
-        ...(sourceAudioEnabled[0] ?? true ? ["-map", "0:a?", "-c:a", "aac", "-b:a", "128k"] : ["-an"]),
-        "-pix_fmt", "yuv420p",
-        outputName,
-      ]);
+      const { finalLabel, overlaysUsed } = appendOverlayFilters(filterParts, afterInsertLabel, (remotionOverlayName ? 3 : 2) + sportInsertInputs, finalDurations[0], "singlewm");
+      try {
+        await ffmpeg.exec([
+          "-i", finalClipNames[0],
+          ...(remotionOverlayName ? ["-i", remotionOverlayName] : []),
+          "-i", watermarkName as string,
+          ...(style !== "sport" ? sportTelemetryOverlayNames.flatMap((name) => ["-i", name]) : []),
+          ...(reelTitleName ? ["-i", reelTitleName] : []),
+          ...overlayTextNames.slice(0, overlaysUsed).flatMap((name) => ["-i", name]),
+          "-filter_complex",
+          filterParts.join(";"),
+          "-map",
+          `[${finalLabel}]`,
+          "-r", String(RENDER_FPS),
+          ...encoderArgs,
+          ...(sourceAudioEnabled[0] ?? true ? ["-map", "0:a?", "-c:a", "aac", "-b:a", "128k"] : ["-an"]),
+          "-pix_fmt", "yuv420p",
+          outputName,
+        ]);
+        await ensureOutputFileExists(ffmpeg, outputName, "Single-clip watermark export");
+      } catch (error) {
+        console.warn("[video-engine] Single-clip watermark export failed; falling back to the original source clip without watermark.", error);
+        return finaliseOutput(finalClipNames[0], finalDurations[0], 1);
+      }
       completedUnits++;
       tempFiles.push(outputName);
       return finaliseOutput(outputName, finalDurations[0], 1);
@@ -2673,6 +2777,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         baseOutputName,
         ...(watermark ? [watermarkName as string] : []),
         ...(reelTitleName ? [reelTitleName] : []),
+        ...(remotionOverlayName ? [remotionOverlayName] : []),
         ...sportTelemetryOverlayNames,
         ...overlayTextNames,
       ];
@@ -2688,22 +2793,29 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       const overlayFilterParts: string[] = [];
       const overlayExecArgs = ["-i", baseOutputName];
       let currentLabel = "0:v";
-      let overlayStartIndex = 1;
+      let nextOverlayInputIndex = 1;
+
+      if (remotionOverlayName) {
+        overlayExecArgs.push("-i", remotionOverlayName);
+        overlayFilterParts.push(`[${nextOverlayInputIndex}:v]format=rgba[remotion_base]`);
+        overlayFilterParts.push(`[${currentLabel}][remotion_base]overlay=0:0:enable='between(t,0,999999)'[vremotion]`);
+        currentLabel = "vremotion";
+        nextOverlayInputIndex += 1;
+      }
 
       if (watermark) {
         overlayExecArgs.push("-i", watermarkName as string);
-        overlayFilterParts.push(`[1:v]format=rgba[wm]`);
-        overlayFilterParts.push(`[0:v][wm]overlay=${watermarkLeft}:${watermarkTop}[vwm]`);
+        overlayFilterParts.push(`[${nextOverlayInputIndex}:v]format=rgba[wm]`);
+        overlayFilterParts.push(`[${currentLabel}][wm]overlay=${watermarkLeft}:${watermarkTop}[vwm]`);
         currentLabel = "vwm";
-        overlayStartIndex = 2;
+        nextOverlayInputIndex += 1;
       }
 
       const { finalLabel: afterInsertLabel, inputsUsed: multiSportInsertInputs } = appendSportInsertFilters(currentLabel);
-      overlayStartIndex += multiSportInsertInputs;
       const { finalLabel, overlaysUsed } = appendOverlayFilters(
         overlayFilterParts,
         afterInsertLabel,
-        overlayStartIndex,
+        nextOverlayInputIndex + multiSportInsertInputs,
         renderDuration,
         "multi"
       );
@@ -2788,6 +2900,8 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     let prevTransitionName: string | null = null;
     const transitionDurations: number[] = [];
 
+    console.log(`[video-engine] Building xfade composition: ${finalClipNames.length} clips, style=${style}, pool=${transitionPool.names.join("|")}`);
+
     for (let i = 1; i < finalClipNames.length; i++) {
       const transitionName = pickTransitionName(transitionPool, prevTransitionName);
       const transitionDuration = capTransitionDuration(
@@ -2800,29 +2914,40 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
 
       const offset = Math.max(0, acc - transitionDuration);
       const outLabel = i === finalClipNames.length - 1 ? "vpre" : `x${i}`;
-      filterParts.push(
-        `[${prevLabel}][${i}:v]xfade=transition=${transitionName}:duration=${transitionDuration.toFixed(3)}:offset=${offset.toFixed(3)}[${outLabel}]`
-      );
+      const filterString = `[${prevLabel}][${i}:v]xfade=transition=${transitionName}:duration=${transitionDuration.toFixed(3)}:offset=${offset.toFixed(3)}[${outLabel}]`;
+      filterParts.push(filterString);
+      console.log(`[video-engine]   Transition ${i}: ${transitionName} (${transitionDuration.toFixed(3)}s at offset ${offset.toFixed(3)}s)`);
       acc = acc + finalDurations[i] - transitionDuration;
       prevLabel = outLabel;
     }
 
+    console.log(`[video-engine] Filter parts for xfade: ${filterParts.length} filters built`);
+
     const execArgs = finalClipNames.flatMap((name) => ["-i", name]);
     let mapTarget = "[vpre]";
     let overlayStartIndex = finalClipNames.length + (watermark ? 1 : 0);
+    if (remotionOverlayName) {
+      const remotionInputIndex = finalClipNames.length + (watermark ? 1 : 0);
+      execArgs.push("-i", remotionOverlayName);
+      filterParts.push(`[${remotionInputIndex}:v]format=rgba[remotion_base]`);
+      filterParts.push(`[${mapTarget}][remotion_base]overlay=0:0:enable='between(t,0,999999)'[vremotion]`);
+      console.log(`[video-engine] Added remotion overlay filter (input ${remotionInputIndex}): ${remotionOverlayName}`);
+      mapTarget = "[vremotion]";
+      overlayStartIndex += 1;
+    }
     if (watermark) {
-      const wmInputIndex = finalClipNames.length;
+      const wmInputIndex = finalClipNames.length + (remotionOverlayName ? 1 : 0);
       execArgs.push("-i", watermarkName as string);
       filterParts.push(`[${wmInputIndex}:v]format=rgba[wm]`);
-      filterParts.push(`[vpre][wm]overlay=${watermarkLeft}:${watermarkTop}[vout]`);
+      filterParts.push(`[${mapTarget}][wm]overlay=${watermarkLeft}:${watermarkTop}[vout]`);
       mapTarget = "[vout]";
+      overlayStartIndex += 1;
     }
     const { finalLabel: afterInsertLabel, inputsUsed: multiSportInsertInputs } = appendSportInsertFilters(mapTarget.slice(1, -1));
-    overlayStartIndex += multiSportInsertInputs;
     const { finalLabel, overlaysUsed } = appendOverlayFilters(
       filterParts,
       afterInsertLabel,
-      overlayStartIndex,
+      overlayStartIndex + multiSportInsertInputs,
       Math.max(acc, 0.5),
       "multi"
     );
@@ -2855,9 +2980,14 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     );
 
     try {
+      console.log(`[video-engine] Executing xfade with ${execArgs.length} arguments, filter_complex has ${filterParts.join(";").length} characters`);
       await withTimeout(ffmpeg.exec(execArgs), 180_000, "Final xfade composition timed out after 180 seconds.");
+      console.log(`[video-engine] xfade execution succeeded, checking output file: ${outputName}`);
       await ensureOutputFileExists(ffmpeg, outputName, "Final xfade export");
+      console.log(`[video-engine] xfade output file verified: ${outputName}`);
     } catch (error) {
+      console.error(`[video-engine] xfade final composition FAILED with error:`, error);
+      console.error(`[video-engine] Error message:`, error instanceof Error ? error.message : String(error));
       console.warn("[video-engine] xfade final composition timed out or failed; falling back to compact concat export.", error);
       const fallbackManifestName = `concat_fallback_${stamp}.txt`;
       await ffmpeg.writeFile(fallbackManifestName, buildConcatManifest(finalClipNames));
