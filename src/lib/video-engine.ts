@@ -147,7 +147,9 @@ export function capTransitionDuration(baseTransitionDuration: number, prevClipLe
 }
 
 export function shouldUseCompactConcatFallback(style: ReelStyle, clipCount: number): boolean {
-  if (style === "sport") return clipCount >= 3;
+  // Viral and Sport use compact concat for stability and speed
+  // xfade is complex and can fail silently with large filter graphs
+  if (style === "viral" || style === "sport") return clipCount >= 2;
   return false;
 }
 
