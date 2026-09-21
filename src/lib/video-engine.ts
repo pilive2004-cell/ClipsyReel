@@ -27,8 +27,8 @@ import {
 } from "@/modules/remotion/final-compositor";
 
 const ENABLE_MT_FFMPEG = process.env.NEXT_PUBLIC_ENABLE_MT_FFMPEG === "true";
-const INTRO_TRANSCODE_TIMEOUT_MS_FAST = 75_000;
-const INTRO_TRANSCODE_TIMEOUT_MS_QUALITY = 110_000;
+const INTRO_TRANSCODE_TIMEOUT_MS_FAST = 180_000;  // Increased from 75s: browser FFmpeg is slow
+const INTRO_TRANSCODE_TIMEOUT_MS_QUALITY = 240_000;  // Increased from 110s: more time for quality
 const COMPACT_EXPORT_TIMEOUT_MS = 75_000;
 const COMPACT_TEXT_OVERLAY_TIMEOUT_MS = 150_000;
 
@@ -2244,7 +2244,9 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     };
 
     let introName: string | null = null;
-    if (introSourceName) {
+    // Skip intro map for Viral mode - it's a route map which doesn't fit Viral's aesthetic
+    const shouldSkipIntroForViral = style === "viral" && introSourceName;
+    if (introSourceName && !shouldSkipIntroForViral) {
       onPhaseChange?.("Transcoding map intro…");
       mark("intro-start");
       const introTimeoutMs = renderSpeedProfile === "fast" ? INTRO_TRANSCODE_TIMEOUT_MS_FAST : INTRO_TRANSCODE_TIMEOUT_MS_QUALITY;
