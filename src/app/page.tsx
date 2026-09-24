@@ -18,22 +18,40 @@ import PricingModal from "@/components/PricingModal";
 import UpgradePrompt from "@/components/UpgradePrompt";
 import ExportPanel from "@/components/ExportPanel";
 import CreationExtrasPanel from "@/components/CreationExtrasPanel";
+import ViralCreativityPanel from "@/components/ViralCreativityPanel";
 import RouteMapIntro, { RouteIntroClip, type RouteCinematicProfile } from "@/components/gpx/RouteMapIntro";
 
 import { usePlan } from "@/lib/plan-context";
 import { useLocale } from "@/lib/i18n";
 import { buildAdventureReelOverlay, buildAdventureSetupSessionKey, createEmptyAdventureSetup } from "@/lib/adventure-setup";
 import { loadAdventureSetupDraft, saveAdventureSetupDraft } from "@/lib/adventure-setup-storage";
+import { createEditingSeed } from "@/lib/creative-variability";
 import { computeRouteMetrics } from "@/modules/route3d/routeMetrics";
 import RouteStoryPlayer from "@/modules/route3d/RouteStoryPlayer";
 import { generateGearSummaryClip, GearSummaryClip } from "@/lib/gear-summary-clip";
-import { filterCoherentDisplayTexts, isCoherentDisplayText } from "@/lib/display-text";
+import { filterCoherentDisplayTexts, isCoherentDisplayText, isExplicitDisplayText } from "@/lib/display-text";
 import { buildSportHookSequence } from "@/lib/sport-style";
 import { buildAnalysisResult, generateMockAnalysisMulti } from "@/data/mock";
 import { buildMontage, preloadRenderPipeline, qualityForPlan } from "@/lib/video-engine";
 import { buildGearSummaryEntries, DEFAULT_GEAR_SELECTIONS } from "@/data/gearCatalog";
 import { useMusicGen } from "@/lib/musicgen-hooks";
-import { AdventureSetup, AppStep, BestMoment, GpxRouteStats, GpxTrackPoint, MontageResult, ReelAnalysisResult, ReelStyle, ReelTitleColor, ReelTitleFont, ReelTitleSize, RouteLabel, UploadedVideo } from "@/types";
+import {
+  AdventureSetup,
+  AppStep,
+  BestMoment,
+  GpxRouteStats,
+  GpxTrackPoint,
+  MontageResult,
+  ReelAnalysisResult,
+  ReelStyle,
+  ReelTitleColor,
+  ReelTitleFont,
+  ReelTitleSize,
+  RenderCreativityLevel,
+  RouteLabel,
+  UploadedVideo,
+  ViralStyleDNA,
+} from "@/types";
 
 const STEP_ORDER: AppStep[] = ["upload", "style", "analyze", "render", "preview"];
 const NO_HOOK_ID = "__no_hook__";
@@ -110,6 +128,12 @@ export default function Home() {
   const [overlayFonts, setOverlayFonts] = useState<[ReelTitleFont, ReelTitleFont, ReelTitleFont]>(["bold", "bold", "bold"]);
   const [overlaySizes, setOverlaySizes] = useState<[ReelTitleSize, ReelTitleSize, ReelTitleSize]>(["md", "md", "md"]);
   const [overlayColors, setOverlayColors] = useState<[ReelTitleColor, ReelTitleColor, ReelTitleColor]>(["white", "white", "white"]);
+  const [renderCreativityLevel, setRenderCreativityLevel] = useState<RenderCreativityLevel>("MEDIUM");
+  const [viralStyleDNA, setViralStyleDNA] = useState<ViralStyleDNA>("TIKTOK_FAST");
+  const [generateVersions, setGenerateVersions] = useState(3);
+  const [editingSeed, setEditingSeed] = useState(() => createEditingSeed());
+  const [autoSeedPerRender, setAutoSeedPerRender] = useState(true);
+  const [activeEditingSeed, setActiveEditingSeed] = useState(() => createEditingSeed());
   const [routeIntroClip, setRouteIntroClip] = useState<RouteIntroClip | null>(null);
   const [hasRouteIntro, setHasRouteIntro] = useState(false);
   const [routeIntroStatus, setRouteIntroStatus] = useState<"idle" | "rendering" | "ready" | "error">("idle");
@@ -168,6 +192,49 @@ export default function Home() {
       }
     };
   }, [previewMusicUrl]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem("clipsyreel:viral-creativity-v1");
+      if (!raw) return;
+      const stored = JSON.parse(raw) as {
+        renderCreativityLevel?: RenderCreativityLevel;
+        viralStyleDNA?: ViralStyleDNA;
+        generateVersions?: number;
+        editingSeed?: string;
+        autoSeedPerRender?: boolean;
+      };
+      if (stored.renderCreativityLevel) setRenderCreativityLevel(stored.renderCreativityLevel);
+      if (stored.viralStyleDNA) setViralStyleDNA(stored.viralStyleDNA);
+      if (typeof stored.generateVersions === "number") setGenerateVersions(Math.max(1, Math.min(5, Math.round(stored.generateVersions))));
+      if (stored.editingSeed) {
+        setEditingSeed(stored.editingSeed);
+        setActiveEditingSeed(stored.editingSeed);
+      }
+      if (typeof stored.autoSeedPerRender === "boolean") setAutoSeedPerRender(stored.autoSeedPerRender);
+    } catch (error) {
+      console.warn("[ClipsyReel] Failed to restore Viral creativity settings.", error);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        "clipsyreel:viral-creativity-v1",
+        JSON.stringify({
+          renderCreativityLevel,
+          viralStyleDNA,
+          generateVersions,
+          editingSeed,
+          autoSeedPerRender,
+        })
+      );
+    } catch (error) {
+      console.warn("[ClipsyReel] Failed to persist Viral creativity settings.", error);
+    }
+  }, [autoSeedPerRender, editingSeed, generateVersions, renderCreativityLevel, viralStyleDNA]);
 
   const sportTelemetry = useMemo(() => {
     if (!routeIntroPoints || routeIntroPoints.length < 2) return null;
@@ -266,8 +333,18 @@ export default function Home() {
     setStep("analyze");
   };
 
+  const prepareSeedForRender = () => {
+    const nextSeed = autoSeedPerRender || !editingSeed.trim() ? createEditingSeed() : editingSeed.trim();
+    setEditingSeed(nextSeed);
+    setActiveEditingSeed(nextSeed);
+    return nextSeed;
+  };
+
   const startRender = () => {
     if (!analysis || !style) return;
+    if (style === "viral") {
+      prepareSeedForRender();
+    }
     if (hasRouteIntro && routeIntroPoints && routeIntroPoints.length > 1) {
       setRouteIntroClip(null);
       setRouteIntroStatus("rendering");
@@ -280,15 +357,19 @@ export default function Home() {
   const shouldRenderGearSummary = style === "sport" || equipmentSummary.length > 0 || !!gearPortraitFile;
   const selectedHookTextRaw = analysis?.hooks.find((h) => h.id === selectedHookId)?.text ?? "";
   const selectedOverlayTexts = filterCoherentDisplayTexts(overlayTexts);
-  const customHookTextFromInputs = customHookText || selectedOverlayTexts[0] || "";
-  const selectedHookText = customHookTextFromInputs || (isCoherentDisplayText(selectedHookTextRaw) ? selectedHookTextRaw : "");
+  const customHookTextFromInputs = customHookText;
+  const selectedHookText =
+    customHookTextFromInputs ||
+    (selectedHookId !== NO_HOOK_ID && isCoherentDisplayText(selectedHookTextRaw) ? selectedHookTextRaw : "");
+  const explicitReelTitle = reelTitle.trim();
+  const exportTitleText = isExplicitDisplayText(explicitReelTitle) ? explicitReelTitle : "";
   const sportHookBeats = useMemo(
     () => buildSportHookSequence({ routeLabel, gpxStats, sportTelemetry, fallbackText: selectedHookText, customTexts: selectedOverlayTexts }),
     [gpxStats, routeLabel, selectedHookText, selectedOverlayTexts, sportTelemetry]
   );
   const sportOverlayTexts = style === "sport" ? sportHookBeats.map((beat) => beat.text) : selectedOverlayTexts;
   const selectedOverlayTextKey = sportOverlayTexts.join("\n");
-  const reelTitleKey = `${reelTitle.trim()}|${reelTitleFont}|${reelTitleSize}|${reelTitleColor}`;
+  const reelTitleKey = `${exportTitleText}|${reelTitleFont}|${reelTitleSize}|${reelTitleColor}`;
   const adventureOverlay = buildAdventureReelOverlay(adventureSetup);
   const adventureOverlaySignature = adventureOverlay ? `${adventureOverlay.title}|${adventureOverlay.lines.join("|")}` : "";
 
@@ -351,10 +432,12 @@ export default function Home() {
       return () => window.clearTimeout(resetTimeout);
     }
 
+    const routeIntroWaitMs = 180_000;
+    const gearWaitMs = 15_000;
     const timeout = window.setTimeout(() => {
       setRenderGateTimedOut(true);
       setRenderPhase("Optional assets are taking too long — starting export without them…");
-    }, 15000);
+    }, introPending ? routeIntroWaitMs : gearWaitMs);
 
     return () => window.clearTimeout(timeout);
   }, [step, hasRouteIntro, routeIntroStatus, gearSummaryStatus, shouldRenderGearSummary]);
@@ -376,7 +459,7 @@ export default function Home() {
         ? buildAnalysisResult(combinedName, totalDuration, style, realBestMoments, gpxStats)
         : generateMockAnalysisMulti(videos, style, gpxStats);
     setAnalysis(result);
-    setSelectedHookId("");
+    setSelectedHookId(NO_HOOK_ID);
     setStep("render");
   };
 
@@ -394,6 +477,7 @@ export default function Home() {
       routeIntroClip ? `${routeIntroClip.durationSeconds.toFixed(2)}:${hasRouteIntro}` : "no-intro",
       gearSummaryClip ? `${gearSummaryClip.durationSeconds.toFixed(2)}` : "no-gear",
       reelTitleKey,
+      selectedHookText,
       selectedOverlayTextKey,
       shouldRenderGearSummary ? "gear" : "no-gear",
     ].join("||");
@@ -409,7 +493,7 @@ export default function Home() {
     activeRenderSignature = renderSignature;
     renderInProgressRef.current = true;
     const hookTextForThisRender = selectedHookText;
-    const storyTextsForThisRender = storyTexts;
+    const storyTextsForThisRender = selectedOverlayTexts;
     const sportAudioDisabled = style === "sport";
     const renderSpeedProfile: "standard" | "fast" = style === "sport" ? "standard" : "fast";
     const videoAudioEnabled = sportAudioDisabled ? videos.map(() => false) : videos.map((v) => v.keepAudio);
@@ -428,7 +512,7 @@ export default function Home() {
       videoAudioEnabled,
       keepOriginalAudio: !sportAudioDisabled,
       reelTitle: {
-        text: reelTitle.trim(),
+        text: exportTitleText,
         font: reelTitleFont,
         size: reelTitleSize,
         color: reelTitleColor,
@@ -448,6 +532,10 @@ export default function Home() {
       metadataCardLines,
       emotionalStory: analysis.emotionalStory,
       adventureSetupOverlay: adventureOverlay,
+      renderCreativityLevel,
+      viralStyleDNA,
+      editingSeed: style === "viral" ? activeEditingSeed : undefined,
+      generateVersions,
     };
 
     (async () => {
@@ -553,6 +641,8 @@ export default function Home() {
           setCreditConsumed(true);
         }
         setRenderFallbackNotice(null);
+        setRenderProgress(null);
+        setRenderPhase("");
         setStep("preview");
       } catch (e) {
         if (cancelled) return;
@@ -575,13 +665,16 @@ export default function Home() {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, videos, analysis, style, routeIntroClip, hasRouteIntro, routeIntroStatus, gearSummaryClip, isFree, shouldRenderGearSummary, gearSummaryStatus, renderGateTimedOut, selectedOverlayTextKey, reelTitleKey]);
+  }, [step, videos, analysis, style, routeIntroClip, hasRouteIntro, routeIntroStatus, gearSummaryClip, isFree, shouldRenderGearSummary, gearSummaryStatus, renderGateTimedOut, selectedOverlayTextKey, reelTitleKey, renderCreativityLevel, viralStyleDNA, activeEditingSeed, generateVersions]);
 
   // Re-runs the render with whatever hook text is currently selected —
   // used when the user changes their hook pick/custom text on the Preview
   // screen *after* the first render, so that choice actually ends up baked
   // into the exported MP4 instead of only ever showing in the live preview.
   const regenerateWithCurrentHook = () => {
+    if (style === "viral") {
+      prepareSeedForRender();
+    }
     setStep("render");
   };
 
@@ -602,7 +695,7 @@ export default function Home() {
     setVideos([]);
     setStyle(null);
     setAnalysis(null);
-    setSelectedHookId("");
+    setSelectedHookId(NO_HOOK_ID);
     setGearSelections(DEFAULT_GEAR_SELECTIONS);
     setGearPortraitFile(null);
     setReelTitle("");
@@ -895,6 +988,26 @@ export default function Home() {
           </div>
         )}
 
+        {analysis && style === "viral" && (
+          <ViralCreativityPanel
+            renderCreativityLevel={renderCreativityLevel}
+            viralStyleDNA={viralStyleDNA}
+            generateVersions={generateVersions}
+            editingSeed={editingSeed}
+            autoSeedPerRender={autoSeedPerRender}
+            onChangeCreativityLevel={setRenderCreativityLevel}
+            onChangeViralStyleDNA={setViralStyleDNA}
+            onChangeGenerateVersions={setGenerateVersions}
+            onChangeEditingSeed={setEditingSeed}
+            onChangeAutoSeedPerRender={setAutoSeedPerRender}
+            onRegenerateSeed={() => {
+              const seed = createEditingSeed();
+              setEditingSeed(seed);
+              setActiveEditingSeed(seed);
+            }}
+          />
+        )}
+
         <div className="flex gap-2">
           <BackButton onClick={() => setStep("upload")} />
           {!analysis ? (
@@ -986,7 +1099,7 @@ export default function Home() {
                 hookText={selectedHookText}
                 bestMoments={analysis.bestMoments}
                 watermark={isFree && !montage}
-                reelTitle={reelTitle.trim()}
+                reelTitle={exportTitleText}
                 reelTitleFont={reelTitleFont}
                 reelTitleSize={reelTitleSize}
                 reelTitleColor={reelTitleColor}
@@ -997,6 +1110,7 @@ export default function Home() {
                 introDurationSeconds={routeIntroClip?.durationSeconds ?? 0}
                 outroDurationSeconds={analysis.style === "sport" ? Math.min(gearSummaryClip?.durationSeconds ?? 0, 3) : gearSummaryClip?.durationSeconds ?? 0}
                 montageInfo={montage ? { clipCount: montage.clipCount, durationSeconds: montage.durationSeconds } : undefined}
+                creativeMetadata={montage?.creativeMetadata}
                 routeLabel={routeLabel}
                 sportTelemetry={sportTelemetry}
               />

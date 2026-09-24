@@ -122,9 +122,11 @@ function disambiguateRouteLabels(labels: RouteLabel[]): RouteLabel[] {
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   return labels.map((label) => {
-    if ((counts.get(normaliseText(label.name)) ?? 0) < 2) return label;
-    const suffix = label.region ?? label.country ?? null;
-    return suffix ? { ...label, name: `${label.name}, ${suffix}` } : label;
+    const key = normaliseText(label.name);
+    if ((counts.get(key) ?? 0) < 2) return label;
+    const suffix = [label.region, label.country].filter(Boolean).join(", ");
+    if (!suffix || label.name.toLowerCase().endsWith(suffix.toLowerCase())) return label;
+    return { ...label, name: `${label.name}, ${suffix}` };
   });
 }
 
@@ -409,13 +411,15 @@ async function reverseGeocodeLabel(
     );
     window.clearTimeout(tid);
     if (!res.ok) return null;
-    const data: { city?: string; region?: string | null; country?: string } = await res.json();
-    const name = data.city ?? "";
+    const data: { city?: string; region?: string | null; country?: string; display_name?: string } = await res.json();
+    const name =
+      data.city?.trim() ||
+      data.display_name?.split(",")[0]?.trim() ||
+      "";
     if (!name) return null;
     const region = data.region ?? null;
     const country = data.country ?? null;
-    const priority: "major" | "minor" = name ? "major" : "minor";
-    return { name, region, country, priority };
+    return { name, region, country, priority: "major" };
   } catch {
     return null;
   }
@@ -532,7 +536,12 @@ export async function detectRouteLabels(
         region: result.region,
         country: result.country,
       } satisfies Waypoint;
-    if (rawLabels.some((l) => normaliseText(l.name) === normaliseText(verifiedWaypoint.name))) continue;
+    const duplicateIndex = rawLabels.findIndex(
+      (l) =>
+        normaliseText(l.name) === normaliseText(verifiedWaypoint.name) &&
+        Math.abs(l.progress - progress) < 0.02,
+    );
+    if (duplicateIndex >= 0) continue;
     rawLabels.push(
       createRouteLabelForWaypoint(points, verifiedWaypoint, {
         priority: result.priority,

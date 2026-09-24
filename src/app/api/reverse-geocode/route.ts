@@ -12,10 +12,6 @@ const preloadedCities = new Map<string, any>(
   Object.entries(cityCache.cache).map(([key, value]: [string, any]) => [key, value])
 );
 
-async function delay(ms: number) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 // Find closest pre-cached city within ~50km
 function findNearbyCache(lat: number, lng: number): any | null {
   let closest = null;
@@ -79,69 +75,68 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(result);
   }
 
-  // Try to fetch from Nominatim in background (don't block response)
-  (async () => {
-    try {
-      // Wait a bit to avoid hammering Nominatim
-      await delay(5000);
-      
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 4500);
 
-      console.log(`[reverse-geocode] Attempting Nominatim fetch: lat=${lat}, lon=${lng}`);
-      
-      const response = await fetch(
-        `${NOMINATIM_URL}?lat=${lat}&lon=${lng}&format=jsonv2`,
-        {
-          signal: controller.signal,
-          headers: {
-            "Accept": "application/json",
-            "User-Agent": "ClipsyReel/1.0",
-          },
-        }
-      );
+    console.log(`[reverse-geocode] Attempting Nominatim fetch: lat=${lat}, lon=${lng}`);
 
-      clearTimeout(timeoutId);
-
-      if (response.status === 429) {
-        console.warn(`[reverse-geocode] Rate limited (429) for ${cacheKey}`);
-        return;
+    const response = await fetch(
+      `${NOMINATIM_URL}?lat=${lat}&lon=${lng}&format=jsonv2`,
+      {
+        signal: controller.signal,
+        headers: {
+          "Accept": "application/json",
+          "User-Agent": "ClipsyReel/1.0",
+        },
       }
+    );
 
-      if (!response.ok) {
-        console.error(`[reverse-geocode] Nominatim error: ${response.status}`);
-        return;
-      }
+    clearTimeout(timeoutId);
 
-      const data = await response.json();
-      
-      // Extract relevant fields
-      const address = data.address || {};
-      const city = address.city || address.town || address.village || address.municipality || address.county || "";
-      const country = address.country || "";
-      
-      const result = {
-        lat: lat_num,
-        lng: lng_num,
-        city,
-        country,
-        region: address.state || address.province || null,
-        display_name: data.display_name || "",
-      };
-
-      console.log("[reverse-geocode] Nominatim success:", result);
-
-      // Cache the result
-      geocodeCache.set(cacheKey, {
-        data: result,
-        expires: Date.now() + CACHE_TTL_MS,
-      });
-    } catch (error) {
-      console.error("[reverse-geocode] Nominatim error:", error);
+    if (response.status === 429) {
+      console.warn(`[reverse-geocode] Rate limited (429) for ${cacheKey}`);
+      return NextResponse.json({ city: "", country: "", region: null, display_name: "" });
     }
-  })();
-  
-  // Return placeholder immediately
-  return NextResponse.json({ city: "", country: "", region: null, display_name: "" });
-}
 
+    if (!response.ok) {
+      console.error(`[reverse-geocode] Nominatim error: ${response.status}`);
+      return NextResponse.json({ city: "", country: "", region: null, display_name: "" });
+    }
+
+    const data = await response.json();
+
+    const address = data.address || {};
+    const city =
+      address.city ||
+      address.town ||
+      address.village ||
+      address.municipality ||
+      address.borough ||
+      address.suburb ||
+      address.county ||
+      "";
+    const country = address.country || "";
+
+    const result = {
+      lat: lat_num,
+      lng: lng_num,
+      city,
+      country,
+      region: address.state || address.region || address.province || address.state_district || null,
+      display_name: data.display_name || "",
+    };
+
+    console.log("[reverse-geocode] Nominatim success:", result);
+
+    geocodeCache.set(cacheKey, {
+      data: result,
+      expires: Date.now() + CACHE_TTL_MS,
+    });
+
+    return NextResponse.json(result);
+  } catch (error) {
+    console.error("[reverse-geocode] Nominatim error:", error);
+    return NextResponse.json({ city: "", country: "", region: null, display_name: "" });
+  }
+}

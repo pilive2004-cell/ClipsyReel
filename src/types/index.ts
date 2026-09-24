@@ -33,6 +33,17 @@ export type ReelStyle =
   | "sport"
   | "luxury";
 
+export type RenderCreativityLevel = "LOW" | "MEDIUM" | "HIGH" | "EXTREME";
+
+export type ViralStyleDNA =
+  | "TIKTOK_FAST"
+  | "CAPCUT_TRENDING"
+  | "REDBULL_ACTION"
+  | "DJI_TRAVEL"
+  | "GO_PRO_ADVENTURE"
+  | "CINEMATIC_EPIC"
+  | "MOTORCYCLE_RALLY";
+
 export interface StyleDefinition {
   id: ReelStyle;
   label: string;
@@ -63,6 +74,14 @@ export interface BestMoment {
     targetSubject?: number;
     /** 0-1, MobileNet scene-classifier boost for frames containing a recognizable landmark/scenic vista (castle, cliff, volcano, etc.). */
     landmark?: number;
+    /** OpenCV-style visual analysis: how much the scene is changing over time, from 0 to 1. */
+    sceneChange?: number;
+    /** OpenCV-style motion intensity, independent from the main ML subject score. */
+    motionIntensity?: number;
+    brightness?: number;
+    contrast?: number;
+    sharpness?: number;
+    stability?: number;
   };
 }
 
@@ -433,4 +452,20 @@ export interface MontageResult {
   proLockedEffects: string[];
   /** The Editing Pattern (structural template) chosen for this render — see `src/data/editingPatterns.ts`. */
   editingPattern: { name: string; description: string };
+  /** Seeded Viral creative-variation metadata for reproducibility and UI summaries. */
+  creativeMetadata?: ViralCreativeMetadata | null;
+}
+
+export interface ViralCreativeMetadata {
+  editingSeed: string;
+  renderCreativityLevel: RenderCreativityLevel;
+  viralStyleDNA: ViralStyleDNA;
+  generateVersions: number;
+  selectedVersionIndex: number;
+  selectedVersionLabel: string;
+  dominantTransition: string;
+  storytellingRhythm: string;
+  colorLut: string;
+  beatSyncTolerance: number;
+  versionScore: number;
 }

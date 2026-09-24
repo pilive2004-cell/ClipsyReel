@@ -4,12 +4,22 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { Clapperboard, Film } from "lucide-react";
 import HookTitle from "@/components/HookTitle";
+import { RemotionPreview } from "@/components/RemotionPreview";
 import ScratchTransition from "@/components/ScratchTransition";
 import { STYLES } from "@/data/mock";
 import { filterCoherentDisplayTexts, isCoherentDisplayText } from "@/lib/display-text";
 import { useLocale } from "@/lib/i18n";
+import {
+  resolveReelTitleColorValue,
+  resolveReelTitleFontFamily,
+  resolveReelTitleFontStyle,
+  resolveReelTitleFontWeight,
+  resolveReelTitleLetterSpacing,
+  resolveReelTitlePreviewPixelSize,
+  resolveReelTitleTextTransform,
+} from "@/lib/reel-title-style";
 import { buildSportHookSequence, planSportHookWindows } from "@/lib/sport-style";
-import { BestMoment, ReelStyle, ReelTitleColor, ReelTitleFont, ReelTitleSize, SportTelemetry } from "@/types";
+import { BestMoment, ReelStyle, ReelTitleColor, ReelTitleFont, ReelTitleSize, SportTelemetry, ViralCreativeMetadata } from "@/types";
 
 interface ReelPreviewProps {
   videoUrl: string;
@@ -37,6 +47,7 @@ interface ReelPreviewProps {
   proLockedEffects?: string[];
   /** The Editing Pattern (structural template) chosen for this render — see `src/data/editingPatterns.ts`. */
   editingPattern?: { name: string; description: string };
+  creativeMetadata?: ViralCreativeMetadata | null;
   onUpgradeClick?: () => void;
   routeLabel?: string | null;
   sportTelemetry?: SportTelemetry | null;
@@ -61,6 +72,7 @@ export default function ReelPreview({
   introDurationSeconds = 0,
   outroDurationSeconds = 0,
   montageInfo,
+  creativeMetadata,
   routeLabel,
   sportTelemetry,
 }: ReelPreviewProps) {
@@ -151,76 +163,13 @@ export default function ReelPreview({
       return { text, start, end };
     });
   }, [introDurationSeconds, montageInfo?.durationSeconds, outroDurationSeconds, overlayTexts, sportHookWindows, style]);
-  const titleFontClass = reelTitleFont === "classic"
-    ? "font-serif"
-    : reelTitleFont === "modern"
-      ? "font-sans tracking-wide"
-      : reelTitleFont === "bold"
-        ? "font-sans font-black tracking-tight"
-        : reelTitleFont === "minimal"
-          ? "font-sans font-light tracking-[0.12em]"
-          : reelTitleFont === "handwritten"
-            ? "font-serif italic tracking-[0.02em]"
-              : reelTitleFont === "elegant"
-                ? "font-serif font-medium tracking-[0.06em]"
-                : reelTitleFont === "impact"
-                  ? "font-sans font-extrabold uppercase tracking-tight"
-                  : reelTitleFont === "mono"
-                    ? "font-mono tracking-[0.08em]"
-                    : reelTitleFont === "rounded"
-                      ? "font-sans font-semibold tracking-[0.04em]"
-              : "font-serif italic tracking-[0.08em]";
-  const titleSizeClass = reelTitleSize === "sm"
-    ? "text-base"
-    : reelTitleSize === "lg"
-      ? "text-2xl"
-      : "text-xl";
-  const titleColorClass = reelTitleColor === "gold"
-    ? "text-slate-900"
-    : reelTitleColor === "coral"
-      ? "text-slate-800"
-      : reelTitleColor === "cyan"
-        ? "text-slate-900"
-        : reelTitleColor === "lime"
-          ? "text-slate-900"
-          : reelTitleColor === "violet"
-            ? "text-violet-50"
-            : reelTitleColor === "pink"
-              ? "text-rose-950"
-              : reelTitleColor === "red"
-                ? "text-red-50"
-                : reelTitleColor === "blue"
-                  ? "text-blue-50"
-                  : reelTitleColor === "emerald"
-                    ? "text-emerald-950"
-                    : reelTitleColor === "peach"
-                      ? "text-slate-800"
-                      : reelTitleColor === "silver"
-                        ? "text-slate-900"
-                        : "text-white";
-  const titleFrameColor = reelTitleColor === "gold"
-    ? "#fbbf24"
-    : reelTitleColor === "coral"
-      ? "#fdba74"
-      : reelTitleColor === "cyan"
-        ? "#67e8f9"
-        : reelTitleColor === "lime"
-          ? "#bef264"
-          : reelTitleColor === "violet"
-            ? "#c4b5fd"
-            : reelTitleColor === "pink"
-              ? "#f9a8d4"
-              : reelTitleColor === "red"
-                ? "#f87171"
-                : reelTitleColor === "blue"
-                  ? "#60a5fa"
-                  : reelTitleColor === "emerald"
-                    ? "#6ee7b7"
-                    : reelTitleColor === "peach"
-                      ? "#fed7aa"
-                      : reelTitleColor === "silver"
-                        ? "#cbd5e1"
-                        : "#ffffff";
+  const titleFrameColor = resolveReelTitleColorValue(reelTitleColor);
+  const titleFontFamily = resolveReelTitleFontFamily(reelTitleFont);
+  const titleFontStyle = resolveReelTitleFontStyle(reelTitleFont);
+  const titleFontWeight = resolveReelTitleFontWeight(reelTitleFont);
+  const titleLetterSpacing = resolveReelTitleLetterSpacing(reelTitleFont);
+  const titleTextTransform = resolveReelTitleTextTransform(reelTitleFont);
+  const titlePreviewFontSize = resolveReelTitlePreviewPixelSize(reelTitleSize);
   const trimmedHookText = hookText.trim();
   const coherentHookText = isCoherentDisplayText(trimmedHookText) ? trimmedHookText : "";
   const hookTextLength = coherentHookText.length;
@@ -476,7 +425,7 @@ export default function ReelPreview({
         )}
 
         {/* Overlay texts with cinematic animations and styling */}
-        {showPreviewChrome && style !== "sport" && !montageInfo && overlayWindows.length > 0 && activeOverlayIndex !== null && (
+        {showPreviewChrome && style !== "sport" && style !== "viral" && !montageInfo && overlayWindows.length > 0 && activeOverlayIndex !== null && (
           <div className="pointer-events-none absolute inset-x-4 bottom-[18%] flex justify-start">
             {(() => {
               const overlay = overlayWindows[activeOverlayIndex];
@@ -561,6 +510,7 @@ export default function ReelPreview({
           </div>
         )}
         {showPreviewChrome &&
+          style !== "viral" &&
           reelTitle.trim().length > 0 &&
           titleWindow &&
           currentTimeSeconds >= titleWindow.start &&
@@ -572,13 +522,24 @@ export default function ReelPreview({
               className="inline-flex items-center justify-center rounded-xl border border-[1.5px] bg-white/20 px-3 py-1.5 shadow-[0_0_0_1px_rgba(255,255,255,0.04)]"
               style={{ borderColor: titleFrameColor }}
             >
-              <p className={`text-center leading-tight drop-shadow-[0_2px_6px_rgba(0,0,0,0.8)] ${titleColorClass} ${titleFontClass} ${titleSizeClass}`}>
+              <p
+                className="text-center leading-tight drop-shadow-[0_2px_6px_rgba(0,0,0,0.8)]"
+                style={{
+                  color: titleFrameColor,
+                  fontFamily: titleFontFamily,
+                  fontStyle: titleFontStyle,
+                  fontWeight: titleFontWeight,
+                  letterSpacing: titleLetterSpacing,
+                  textTransform: titleTextTransform,
+                  fontSize: `${titlePreviewFontSize}px`,
+                }}
+              >
                 {reelTitle}
               </p>
             </motion.div>
           </div>
         )}
-        {showPreviewChrome && style !== "sport" && !montageInfo && hookTextLength > 0 && overlayWindows.length === 0 && (
+        {showPreviewChrome && style !== "sport" && style !== "viral" && !montageInfo && hookTextLength > 0 && overlayWindows.length === 0 && (
           <div className="pointer-events-none absolute inset-x-4 top-[30%] flex justify-center" style={{ opacity: hookTimeline.opacity, transition: "opacity 120ms linear" }}>
             <p className={`relative max-w-[95%] text-center font-extrabold tracking-[0.01em] text-white drop-shadow-[0_2px_14px_rgba(0,0,0,0.92)] ${hookTextSizeClass}`}>
               <span className="invisible">{trimmedHookText}</span>
@@ -610,10 +571,21 @@ export default function ReelPreview({
         )}
       </div>
 
+      <div className="w-full">
+        <RemotionPreview
+          moments={bestMoments}
+          style={style}
+          title={reelTitle || undefined}
+          hookText={coherentOverlayTexts[0] || hookText || undefined}
+          creativeMetadata={creativeMetadata}
+        />
+      </div>
+
       {montageInfo && (
-        <div className="flex items-center gap-1.5 text-[11px] text-white/40">
+        <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-white/40">
           <Film className="h-3 w-3" />
         {copy.preview.ready} · {montageInfo.clipCount} clips cross-faded · {montageInfo.durationSeconds.toFixed(1)}s
+          {creativeMetadata && style === "viral" ? ` · ${creativeMetadata.viralStyleDNA.replaceAll("_", " ")} · seed ${creativeMetadata.editingSeed}` : ""}
         </div>
       )}
 

@@ -1,6 +1,7 @@
 import { BestMoment } from "@/types";
 import { DetectionFrameResult, fetchOptionalObjectDetections, scoreLandmarkFrame, scoreLocalSubjectFrame, scoreTargetSubjectFrame } from "@/lib/object-detection";
 import { classifySceneOnFrame, detectFaceExpression, detectObjectsOnFrame, FaceExpressionResult, MlDetectedObject, SceneClassification } from "@/lib/ml-detection";
+import { summarizeOpenCvMetrics } from "@/lib/opencv-analysis";
 
 /**
  * Real, fully client-side "best moment" detection.
@@ -423,6 +424,15 @@ export async function analyzeVideoMoments(
     (_, i) => 0.6 * visualImpact[i] + 0.22 * subjectFocus[i] + 0.18 * landmarkDetections[i].score
   );
 
+  const opencvSummary = summarizeOpenCvMetrics(
+    samples.map((sample) => ({
+      brightness: sample.brightness,
+      contrast: sample.contrast / 1.1,
+      sharpness: sample.sharpness / 10000,
+      motion: sample.motion,
+    }))
+  );
+
   const composite = samples.map(
     (_, i) =>
       0.25 * retention[i] +
@@ -484,6 +494,16 @@ export async function analyzeVideoMoments(
     const length = momentLengthForScore(smoothed[idx]);
     const start = Math.max(0, Math.min(peakT - length * 0.35, total - length));
     const end = Math.min(total, start + length);
+    const opencvMetrics = opencvSummary.frameMetrics[idx] ?? {
+      brightness: samples[idx].brightness,
+      contrast: samples[idx].contrast / 1.1,
+      sharpness: samples[idx].sharpness / 10000,
+      motionIntensity: motionNorm[idx],
+      sceneChange: 0,
+      stability: 1,
+      dynamicEnergy: motionNorm[idx],
+    };
+
     return {
       id: `moment-${sourceIndex}-${order}-${Math.random().toString(36).slice(2, 7)}`,
       startSeconds: start,
@@ -516,6 +536,12 @@ export async function analyzeVideoMoments(
         subjectFocus: subjectFocus[idx],
         targetSubject: targetSubjectDetections[idx].score,
         landmark: landmarkDetections[idx].score,
+        sceneChange: opencvMetrics.sceneChange,
+        motionIntensity: opencvMetrics.motionIntensity,
+        brightness: opencvMetrics.brightness,
+        contrast: opencvMetrics.contrast,
+        sharpness: opencvMetrics.sharpness,
+        stability: opencvMetrics.stability,
       },
     };
   });

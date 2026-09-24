@@ -176,10 +176,10 @@ const RECORD_FPS = 30;
 const TILE_PRELOAD_VIEWS = 4;
 const TILE_IDLE_TIMEOUT_MS = 300;  // Reduced from 600ms for faster iteration
 const TILE_READY_STABLE_FRAMES = 4;
-const TILE_GLOBAL_PRELOAD_TIMEOUT_MS = 4_000;  // Reduced from 8s — tiles will load during animation
+const TILE_GLOBAL_PRELOAD_TIMEOUT_MS = 9_000;
 const ENABLE_TERRAIN_DEM = false;
-const ROUTE_INTRO_HARD_TIMEOUT_MS = 75_000;
-const MAP_LOAD_TIMEOUT_MS = 15_000;
+const ROUTE_INTRO_HARD_TIMEOUT_MS = 240_000;
+const MAP_LOAD_TIMEOUT_MS = 90_000;
 
 /**
  * 5-phase cinematic timeline (all values in seconds):
@@ -495,13 +495,13 @@ async function reverseGeocode(lat: number, lng: number): Promise<string> {
       { signal: ctrl.signal, headers: { Accept: "application/json" } },
     );
     window.clearTimeout(tid);
-    if (!res.ok) return `${lat.toFixed(2)}, ${lng.toFixed(2)}`;
+    if (!res.ok) return "";
     const data: { city?: string; country?: string } = await res.json();
     const city = data.city ?? "";
     const country = data.country ?? "";
-    return [city, country].filter(Boolean).join(", ") || `${lat.toFixed(2)}, ${lng.toFixed(2)}`;
+    return [city, country].filter(Boolean).join(", ");
   } catch {
-    return `${lat.toFixed(2)}, ${lng.toFixed(2)}`;
+    return "";
   }
 }
 
@@ -555,6 +555,19 @@ function buildVisitedCountriesText(labels: RenderRouteLabel[]): string {
   const countries = uniqueNonEmpty(labels.map((label) => label.country));
   if (countries.length === 0) return "";
   return countries.join(" · ");
+}
+
+function buildRenderLabelKey(label: Pick<RenderRouteLabel, "name" | "progress" | "isStart" | "isEnd">): string {
+  const role = label.isStart ? "start" : label.isEnd ? "end" : "mid";
+  return `${role}:${label.name.trim().toLowerCase()}:${Math.round(clamp(label.progress, 0, 1) * 1000)}`;
+}
+
+function hasRenderLabel(
+  labels: RenderRouteLabel[],
+  candidate: RenderRouteLabel,
+): boolean {
+  const candidateKey = buildRenderLabelKey(candidate);
+  return labels.some((label) => buildRenderLabelKey(label) === candidateKey);
 }
 
 function findNearestPointIndex(points: GpxTrackPoint[], lat: number, lng: number): number {
@@ -1188,7 +1201,8 @@ export default function RouteMapIntro({
         const pointProgress = computeProgressPerPoint(points);
         const labelCount = Math.min(6, Math.max(2, Math.ceil(points.length / 40)));
         const waypoints = pickWaypoints(points, labelCount);
-        labelData = await Promise.all(
+        labelData = (
+          await Promise.all(
           waypoints.map(async (wp, i) => {
             const name = await reverseGeocode(wp.lat, wp.lng);
             const ptIdx = points.findIndex((p) => p.lat === wp.lat && p.lng === wp.lng);
@@ -1202,10 +1216,11 @@ export default function RouteMapIntro({
               progress,
               isStart: i === 0,
               isEnd: i === waypoints.length - 1,
-              priority: i === 0 || i === waypoints.length - 1 || i % 2 === 0 ? "major" : "minor",
-            };
+              priority: (i === 0 || i === waypoints.length - 1 || i % 2 === 0 ? "major" : "minor") as "major" | "minor",
+            } satisfies RenderRouteLabel;
           }),
-        );
+          )
+        ).filter((label) => label.name.trim().length > 0);
       }
 
       labelData = [...labelData, ...buildPassLabels(resampled)];
@@ -1215,15 +1230,18 @@ export default function RouteMapIntro({
           .map((label) => label.name.trim().toLowerCase())
           .filter(Boolean),
       );
+      const visibleLabelData = labelData
+        .filter((label) => label.name.trim().length > 0)
+        .sort((a, b) => a.progress - b.progress);
       const majorLabelData = pickMajorLabels(
-        labelData.filter(
+        visibleLabelData.filter(
           (label) =>
-            label.priority === "major" &&
-            !label.isStart &&
-            !label.isEnd &&
-            !endpointNames.has(label.name.trim().toLowerCase()),
+            label.isStart ||
+            label.isEnd ||
+            label.priority === "major" ||
+            (!endpointNames.has(label.name.trim().toLowerCase()) && label.progress > 0.05 && label.progress < 0.95),
         ),
-        5,
+        Math.max(5, Math.min(9, visibleLabelData.length || 5)),
       );
       const toRouteProgress = buildAdaptiveProgressMapper(resampled, labelData, profile.citySlowBoost);
       const visitedCountries = buildVisitedCountriesText(labelData);
@@ -1530,8 +1548,9 @@ export default function RouteMapIntro({
 
         // Pre-show the START label immediately (Phase 0 / overview hold) so the
         // viewer can read the departure location while the title card is visible.
+        const startLabels = labelData.filter((label) => label.isStart);
         (map.getSource("place-labels") as GeoJSONSource | undefined)?.setData(
-          buildLabelsGeoJSON(majorLabelData.filter((label) => label.isStart)),
+          buildLabelsGeoJSON(startLabels),
         );
 
         // Force tile/DEM preloading across key camera views before recording.
@@ -1660,7 +1679,7 @@ export default function RouteMapIntro({
         let prevFrameTime: number | null = null;
         let warmupFrames = 0;
         let lastRevealedIdx = 2;
-        let shownLabels: typeof labelData = majorLabelData.filter((l) => l.isStart);
+        let shownLabels: typeof labelData = labelData.filter((l) => l.isStart);
         let lastLabelsLen = shownLabels.length;
         let endLabelShown = false;
         // Dynamic zoom-in state — true while the head is close to a place name
@@ -1830,7 +1849,7 @@ export default function RouteMapIntro({
             // Reveal intermediate place-name labels as the route draw head passes them.
             // Start label is already shown from Phase 0; end label is added in Phase 3.
             const newlyVisible = labelData.filter(
-              (l) => !l.isStart && !l.isEnd && l.progress <= headProgress && !shownLabels.find((s) => s.name === l.name),
+              (l) => !l.isStart && !l.isEnd && l.progress <= headProgress && !hasRenderLabel(shownLabels, l),
             );
             if (newlyVisible.length > 0 || shownLabels.length !== lastLabelsLen) {
               shownLabels = [...shownLabels, ...newlyVisible];
@@ -1907,7 +1926,7 @@ export default function RouteMapIntro({
             if (!endLabelShown) {
               endLabelShown = true;
               const endLabel = labelData.find((l) => l.isEnd);
-              if (endLabel && !shownLabels.find((s) => s.name === endLabel.name)) {
+              if (endLabel && !hasRenderLabel(shownLabels, endLabel)) {
                 shownLabels = [...shownLabels, endLabel];
                 lastLabelsLen = shownLabels.length;
                 (map.getSource("place-labels") as GeoJSONSource | undefined)?.setData(
@@ -2022,8 +2041,8 @@ export default function RouteMapIntro({
   const hostDiv = (
     <div
       ref={hostRef}
-      className="fixed left-0 top-0 overflow-hidden pointer-events-none opacity-0"
-      style={{ width: MAP_WIDTH, height: MAP_HEIGHT }}
+      className="fixed left-0 top-0 overflow-hidden pointer-events-none"
+      style={{ width: MAP_WIDTH, height: MAP_HEIGHT, opacity: 0.01, transform: "scale(0.05)", transformOrigin: "top left", zIndex: -1 }}
       aria-hidden="true"
     />
   );

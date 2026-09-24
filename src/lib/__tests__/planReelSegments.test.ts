@@ -157,18 +157,20 @@ describe("planReelSegments", () => {
     }
   });
 
-  it("uses the compact concat path for sport reels as soon as three clips are in play", () => {
-    expect(shouldUseCompactConcatFallback("sport", 3)).toBe(true);
+  it("uses the compact concat path only for larger viral and sport reels", () => {
     expect(shouldUseCompactConcatFallback("sport", 2)).toBe(false);
-    expect(shouldUseCompactConcatFallback("viral", 7)).toBe(false);
-    expect(shouldUseCompactConcatFallback("viral", 8)).toBe(false);
+    expect(shouldUseCompactConcatFallback("sport", 3)).toBe(false);
+    expect(shouldUseCompactConcatFallback("sport", 4)).toBe(true);
+    expect(shouldUseCompactConcatFallback("viral", 3)).toBe(false);
+    expect(shouldUseCompactConcatFallback("viral", 4)).toBe(true);
   });
 
-  it("keeps non-sport reels long enough to reach a full minute instead of trimming them to ~34s", () => {
-    expect(getComposeClipCap("sport", 3)).toBeNull();
+  it("keeps non-compact styles capped while large viral and sport reels stay on the compact path", () => {
+    expect(getComposeClipCap("sport", 3)).toBe(12);
     expect(getComposeClipCap("sport", 12)).toBeNull();
-    expect(getComposeClipCap("sport", 2)).toBeNull();
-    expect(getComposeClipCap("viral", 7)).toBe(12);
+    expect(getComposeClipCap("sport", 4)).toBeNull();
+    expect(getComposeClipCap("viral", 3)).toBe(12);
+    expect(getComposeClipCap("viral", 4)).toBeNull();
     expect(getComposeClipCap("travel", 12)).toBe(12);
   });
 

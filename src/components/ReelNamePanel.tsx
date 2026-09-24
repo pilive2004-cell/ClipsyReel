@@ -5,6 +5,15 @@ import { useState } from "react";
 import { Type } from "lucide-react";
 import { ReelTitleColor, ReelTitleFont, ReelTitleSize } from "@/types";
 import { useLocale } from "@/lib/i18n";
+import {
+  resolveReelTitleColorValue,
+  resolveReelTitleFontFamily,
+  resolveReelTitleFontStyle,
+  resolveReelTitleFontWeight,
+  resolveReelTitleLetterSpacing,
+  resolveReelTitlePreviewFontSize,
+  resolveReelTitleTextTransform,
+} from "@/lib/reel-title-style";
 
 interface ReelNamePanelProps {
   reelTitle: string;
@@ -44,59 +53,13 @@ export default function ReelNamePanel({
     { value: "silver", swatchClass: "bg-slate-300" },
   ];
   const selectedColorSwatch = colorOptions.find((option) => option.value === reelTitleColor)?.swatchClass ?? "bg-white";
-  const previewTextColor = reelTitleColor === "gold"
-    ? "#fcd34d"
-    : reelTitleColor === "coral"
-      ? "#fdba74"
-      : reelTitleColor === "cyan"
-        ? "#67e8f9"
-        : reelTitleColor === "lime"
-          ? "#bef264"
-          : reelTitleColor === "violet"
-            ? "#c4b5fd"
-            : reelTitleColor === "pink"
-              ? "#f9a8d4"
-              : reelTitleColor === "red"
-                ? "#f87171"
-                : reelTitleColor === "blue"
-                  ? "#60a5fa"
-                  : reelTitleColor === "emerald"
-                    ? "#6ee7b7"
-                    : reelTitleColor === "peach"
-                      ? "#fed7aa"
-                      : reelTitleColor === "silver"
-                        ? "#cbd5e1"
-                      : "#ffffff";
-  const previewFontFamily = reelTitleFont === "classic"
-    ? `Georgia, "Times New Roman", serif`
-    : reelTitleFont === "modern"
-      ? `"Inter", "Arial", "Helvetica Neue", sans-serif`
-      : reelTitleFont === "bold"
-        ? `"Arial Black", "Inter", "Segoe UI", sans-serif`
-        : reelTitleFont === "minimal"
-          ? `"Avenir Next", "Inter", "Helvetica Neue", sans-serif`
-          : reelTitleFont === "handwritten"
-            ? `"Brush Script MT", "Snell Roundhand", "Comic Sans MS", cursive`
-            : reelTitleFont === "elegant"
-              ? `"Garamond", "Baskerville", Georgia, serif`
-              : reelTitleFont === "impact"
-                ? `"Impact", "Arial Black", sans-serif`
-                : reelTitleFont === "mono"
-                  ? `"SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace`
-                  : reelTitleFont === "rounded"
-                    ? `"Trebuchet MS", "Avenir Next", "Segoe UI", sans-serif`
-                    : `"Bodoni MT", "Didot", Georgia, serif`;
-  const previewFontStyle = reelTitleFont === "handwritten" || reelTitleFont === "elegant" || reelTitleFont === "cinematic" ? "italic" : "normal";
-  const previewFontWeight = reelTitleFont === "bold" || reelTitleFont === "impact" ? 800 : 600;
-  const previewLetterSpacing = reelTitleFont === "impact"
-    ? "-0.03em"
-    : reelTitleFont === "mono"
-      ? "0.06em"
-      : reelTitleFont === "minimal"
-        ? "0.12em"
-        : "0.02em";
-  const previewTextTransform = reelTitleFont === "impact" ? "uppercase" : "none";
-  const previewFontSize = reelTitleSize === "sm" ? "1rem" : reelTitleSize === "lg" ? "1.45rem" : "1.2rem";
+  const previewTextColor = resolveReelTitleColorValue(reelTitleColor);
+  const previewFontFamily = resolveReelTitleFontFamily(reelTitleFont);
+  const previewFontStyle = resolveReelTitleFontStyle(reelTitleFont);
+  const previewFontWeight = resolveReelTitleFontWeight(reelTitleFont);
+  const previewLetterSpacing = resolveReelTitleLetterSpacing(reelTitleFont);
+  const previewTextTransform = resolveReelTitleTextTransform(reelTitleFont);
+  const previewFontSize = resolveReelTitlePreviewFontSize(reelTitleSize);
 
   return (
     <div className="space-y-4">
