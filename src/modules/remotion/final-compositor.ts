@@ -28,13 +28,15 @@ export interface HybridRenderInput {
   moments?: BestMoment[];
   style: ReelStyle;
   durationSeconds?: number;
+  width?: number;
+  height?: number;
   title?: string;
   titleStyle?: ViralRemotionTitleStyle | null;
   hookText?: string;
   overlayTexts?: string[];
   titleWindow?: RemotionTitleWindow | null;
   overlayWindows?: RemotionOverlayWindow[];
-  transitionMarkers?: number[];
+  transitionMarkers?: ViralRemotionTransitionMarker[];
   creativitySettings?: CreativeVariabilitySettings;
 }
 
@@ -55,27 +57,23 @@ const CHROMA_KEY_GREEN = "#00ff00";
 
 async function renderViralRemotionOnServer(
   ffmpegOutput: Blob,
-  input: HybridRenderInput,
-  plan: RemotionTimelinePlan
+  input: HybridRenderInput
 ): Promise<Blob> {
   const overlayTexts = resolveNonSportOverlayTexts({
     hookText: input.hookText,
     reelTitle: input.title,
     overlayTexts: input.overlayTexts ?? [],
   });
-  const transitionMarkers: ViralRemotionTransitionMarker[] = (input.transitionMarkers ?? []).map((atSeconds, index) => {
-    const plannedTransition = plan.transitions[index % Math.max(plan.transitions.length, 1)];
-    return {
-      atSeconds,
-      type: plannedTransition?.type ?? "glitch",
-      direction: plannedTransition?.direction ?? "left",
-      durationFrames: 18,
-    };
-  });
+  const transitionMarkers: ViralRemotionTransitionMarker[] = (input.transitionMarkers ?? []).map((marker) => ({
+    ...marker,
+    durationFrames: Math.max(1, marker.durationFrames ?? 18),
+  }));
 
   const formData = new FormData();
   formData.append("video", ffmpegOutput, "viral-base.mp4");
   formData.set("durationSeconds", String(input.durationSeconds ?? 0));
+  formData.set("width", String(input.width ?? 1080));
+  formData.set("height", String(input.height ?? 1920));
   formData.set("title", input.title ?? "");
   formData.set("titleStyle", JSON.stringify(input.titleStyle ?? null));
   formData.set("hookText", input.hookText ?? "");
@@ -85,7 +83,10 @@ async function renderViralRemotionOnServer(
   formData.set("transitionMarkers", JSON.stringify(transitionMarkers));
 
   const controller = new AbortController();
-  const timeoutMs = 240_000;
+  // The final hybrid pass is optional. A slow or blocked Remotion render must
+  // never leave the user staring at 97% for several minutes; fail fast to the
+  // FFmpeg base export instead of freezing the whole app.
+  const timeoutMs = 45_000;
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
@@ -520,22 +521,22 @@ function drawOverlayHookFrame(
 function remotionTransitionTypeForVariant(variant: CreativeTransitionOverlayVariant): RemotionTransitionType {
   switch (variant) {
     case "glitch":
-      return "glitch";
+      return "film-burn";
     case "speed-ramp":
-      return "speed-ramp";
+      return "cross-zoom";
     case "whip-pan":
-      return "whip-pan";
+      return "cross-zoom";
     case "zoom":
-      return "fast-zoom";
+      return "cross-zoom";
     case "motion-blur":
-      return "motion-blur";
+      return "cross-zoom";
     case "blur":
-      return "directional-blur";
+      return "cross-zoom";
     case "flash":
-      return "flash-cut";
+      return "film-burn";
     case "swipe":
     default:
-      return "slide";
+      return "film-burn";
   }
 }
 
@@ -568,13 +569,9 @@ function drawViralTransitionFrame(
   ctx.restore();
   ctx.filter = "none";
 
-  if (state.flashOpacity > 0) {
-    ctx.save();
-    ctx.globalAlpha = state.flashOpacity;
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, width, height);
-    ctx.restore();
-  }
+  // Viral film-burn and cross-zoom are intentionally subtle motion accents.
+  // A full white flash is reserved for true flash-cut transitions only; never
+  // apply it here to keep the mid-shot effect clean and premium.
 }
 
 async function recordAnimatedCanvasClip({
@@ -747,7 +744,17 @@ export async function composeFinalRenderWithRemotion(
     }
 
     if (input.style === "viral") {
-      const remotionBlob = await renderViralRemotionOnServer(ffmpegOutput, input, plan);
+      const hasTitle = !!input.title?.trim();
+      const hasTitleWindow = !!input.titleWindow && input.titleWindow.end > input.titleWindow.start;
+      const hasHookText = !!(input.hookText ?? "").trim() || (input.overlayTexts ?? []).some((text) => !!text?.trim());
+      const hasOverlayWindows = (input.overlayWindows ?? []).some((window) => !!window.text?.trim() && window.end > window.start);
+      const hasTransitionMarkers = (input.transitionMarkers ?? []).length > 0;
+
+      if (!hasTitle && !hasTitleWindow && !hasHookText && !hasOverlayWindows && !hasTransitionMarkers) {
+        return { plan, usedRemotionComposite: false, blob: ffmpegOutput };
+      }
+
+      const remotionBlob = await renderViralRemotionOnServer(ffmpegOutput, input);
       return {
         plan,
         usedRemotionComposite: true,

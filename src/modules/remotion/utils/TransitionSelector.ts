@@ -6,8 +6,10 @@ export type RemotionTransitionType =
   | "dissolve"
   | "zoom"
   | "fast-zoom"
+  | "cross-zoom"
   | "motion-blur"
   | "flash-cut"
+  | "film-burn"
   | "speed-ramp"
   | "whip-pan"
   | "swipe"
@@ -37,15 +39,18 @@ const DIRECTION_ORDER: Array<"left" | "right" | "up" | "down"> = ["left", "right
 const LOW_ENERGY_TRANSITIONS: RemotionTransitionType[] = ["dissolve", "slide", "dynamic-scale", "zoom"];
 const MEDIUM_ENERGY_TRANSITIONS: RemotionTransitionType[] = ["fast-zoom", "motion-blur", "swipe", "directional-blur"];
 const HIGH_ENERGY_TRANSITIONS: RemotionTransitionType[] = ["flash-cut", "speed-ramp", "whip-pan", "camera-shake", "glitch"];
+const VIRAL_LOW_ENERGY_TRANSITIONS: RemotionTransitionType[] = ["cross-zoom", "film-burn"];
+const VIRAL_MEDIUM_ENERGY_TRANSITIONS: RemotionTransitionType[] = ["cross-zoom", "film-burn"];
+const VIRAL_HIGH_ENERGY_TRANSITIONS: RemotionTransitionType[] = ["film-burn", "cross-zoom"];
 
 function transitionPoolFor(style: RemotionTemplateStyle, energy: number): RemotionTransitionType[] {
   if (style === "sport") {
     return energy >= 0.7 ? ["whip-pan", "camera-shake", "glitch"] : ["slide", "fast-zoom", "motion-blur"];
   }
   if (style === "viral") {
-    if (energy >= 0.72) return HIGH_ENERGY_TRANSITIONS;
-    if (energy >= 0.42) return MEDIUM_ENERGY_TRANSITIONS;
-    return LOW_ENERGY_TRANSITIONS;
+    if (energy >= 0.72) return VIRAL_HIGH_ENERGY_TRANSITIONS;
+    if (energy >= 0.42) return VIRAL_MEDIUM_ENERGY_TRANSITIONS;
+    return VIRAL_LOW_ENERGY_TRANSITIONS;
   }
   return energy >= 0.55 ? ["zoom", "dynamic-scale", "dissolve"] : ["slide", "dissolve"];
 }

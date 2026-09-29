@@ -1,24 +1,44 @@
 import { NextRequest, NextResponse } from "next/server";
-import { execFile } from "child_process";
-import { promisify } from "util";
 import { randomUUID } from "crypto";
-import { tmpdir } from "os";
+import { tmpdir, availableParallelism } from "os";
 import { resolve, join } from "path";
-import { readFile, rm, writeFile } from "fs/promises";
+import { mkdir, readFile, rm, writeFile } from "fs/promises";
+import { existsSync } from "fs";
 import type {
   RemotionOverlayWindow,
   RemotionTitleWindow,
+  ViralRemotionCompositionProps,
   ViralRemotionRenderProps,
   ViralRemotionTitleStyle,
   ViralRemotionTransitionMarker,
+} from "@/modules/remotion/render-contract";
+import {
+  VIRAL_REMOTION_COMPOSITION_ID,
+  VIRAL_REMOTION_HEIGHT,
+  VIRAL_REMOTION_WIDTH,
 } from "@/modules/remotion/render-contract";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-const execFileAsync = promisify(execFile);
-const renderScriptPath = resolve(process.cwd(), "server", "render-viral-remotion.mjs");
+const REMOTION_ENTRY = resolve(process.cwd(), "src", "modules", "remotion", "server", "Root.tsx");
+const REMOTION_BUNDLE_DIR = resolve(process.cwd(), ".remotion-bundles", "viral-export");
+const REMOTION_PUBLIC_TEMP_DIR = resolve(process.cwd(), "public", "remotion-temp");
+const REMOTION_ASSET_BASE_URL = process.env.REMOTION_ASSET_BASE_URL?.trim() || "http://127.0.0.1:3000";
+const CHROME_EXECUTABLE =
+  process.env.REMOTION_BROWSER_EXECUTABLE?.trim() ||
+  (existsSync("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+    ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    : null);
+const REMOTION_RENDER_CONCURRENCY = Math.max(1, Math.min(6, availableParallelism()));
+
+let remotionBundlePromise: Promise<string> | null = null;
+type RendererModule = typeof import("@remotion/renderer");
+const runtimeImport = <T>(specifier: string) =>
+  new Function("modulePath", "return import(modulePath)")(
+    specifier
+  ) as Promise<T>;
 
 class InvalidRenderRequestError extends Error {}
 
@@ -51,9 +71,114 @@ const parseDurationSeconds = (value: FormDataEntryValue | null) => {
   return parsed;
 };
 
+const parseDimension = (
+  value: FormDataEntryValue | null,
+  fallback: number,
+  fieldName: "width" | "height"
+) => {
+  if (value === null) {
+    return fallback;
+  }
+  if (typeof value !== "string") {
+    throw new InvalidRenderRequestError(`Missing or invalid ${fieldName}.`);
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new InvalidRenderRequestError(`${fieldName} must be a positive number.`);
+  }
+  return Math.max(1, Math.round(parsed));
+};
+
+async function getRemotionServeUrl(): Promise<string> {
+  if (remotionBundlePromise) {
+    return remotionBundlePromise;
+  }
+
+  remotionBundlePromise = (async () => {
+    const bundlerModuleName = "@remotion/bundler";
+    const { bundle } = await runtimeImport<typeof import("@remotion/bundler")>(bundlerModuleName);
+    await mkdir(REMOTION_BUNDLE_DIR, { recursive: true });
+    return bundle({
+      entryPoint: REMOTION_ENTRY,
+      outDir: REMOTION_BUNDLE_DIR,
+      enableCaching: true,
+      onProgress: () => undefined,
+      webpackOverride: (config) => ({
+        ...config,
+        resolve: {
+          ...config.resolve,
+          alias: {
+            ...(config.resolve?.alias ?? {}),
+            "@": resolve(process.cwd(), "src"),
+          },
+        },
+      }),
+    });
+  })();
+
+  try {
+    return await remotionBundlePromise;
+  } catch (error) {
+    remotionBundlePromise = null;
+    throw error;
+  }
+}
+
+async function renderViralRemotionVideo(video: File, outputPath: string, props: ViralRemotionRenderProps) {
+  const requestId = randomUUID();
+  const publicFileName = `viral-base-${requestId}.mp4`;
+  const publicFilePath = resolve(REMOTION_PUBLIC_TEMP_DIR, publicFileName);
+  const publicVideoPath = `remotion-temp/${publicFileName}`;
+  const outputWidth = Math.max(1, Math.round(props.width ?? VIRAL_REMOTION_WIDTH));
+  const outputHeight = Math.max(1, Math.round(props.height ?? VIRAL_REMOTION_HEIGHT));
+  const isCompactExport = outputWidth <= 720 || outputHeight <= 1280;
+  const jpegQuality = isCompactExport ? 80 : 88;
+  const crf = isCompactExport ? 23 : 20;
+  const x264Preset = isCompactExport ? "ultrafast" : "veryfast";
+
+  try {
+    const rendererModuleName = "@remotion/renderer";
+    const { renderMedia, selectComposition } = await runtimeImport<RendererModule>(rendererModuleName);
+    await mkdir(REMOTION_PUBLIC_TEMP_DIR, { recursive: true });
+    await writeFile(publicFilePath, Buffer.from(await video.arrayBuffer()));
+
+    const serveUrl = await getRemotionServeUrl();
+    const inputProps: ViralRemotionCompositionProps = {
+      ...props,
+      baseVideoSrc: `${REMOTION_ASSET_BASE_URL.replace(/\/+$/, "")}/${publicVideoPath}`,
+    };
+
+    const composition = await selectComposition({
+      serveUrl,
+      id: VIRAL_REMOTION_COMPOSITION_ID,
+      inputProps,
+      logLevel: "error",
+      browserExecutable: CHROME_EXECUTABLE,
+    });
+
+    await renderMedia({
+      serveUrl,
+      composition,
+      inputProps,
+      codec: "h264",
+      outputLocation: outputPath,
+      overwrite: true,
+      imageFormat: "jpeg",
+      jpegQuality,
+      pixelFormat: "yuv420p",
+      crf,
+      x264Preset,
+      logLevel: "error",
+      licenseKey: "free-license",
+      browserExecutable: CHROME_EXECUTABLE,
+      concurrency: REMOTION_RENDER_CONCURRENCY,
+    });
+  } finally {
+    await rm(publicFilePath, { force: true });
+  }
+}
+
 export async function POST(request: NextRequest) {
-  let inputPath: string | null = null;
-  let propsPath: string | null = null;
   let outputPath: string | null = null;
 
   try {
@@ -65,6 +190,8 @@ export async function POST(request: NextRequest) {
 
     const props: ViralRemotionRenderProps = {
       durationSeconds: parseDurationSeconds(formData.get("durationSeconds")),
+      width: parseDimension(formData.get("width"), VIRAL_REMOTION_WIDTH, "width"),
+      height: parseDimension(formData.get("height"), VIRAL_REMOTION_HEIGHT, "height"),
       title: parseOptionalString(formData.get("title")),
       titleStyle: parseJsonField<ViralRemotionTitleStyle | null>(formData.get("titleStyle"), "titleStyle"),
       hookText: parseOptionalString(formData.get("hookText")),
@@ -77,21 +204,9 @@ export async function POST(request: NextRequest) {
       ),
     };
 
-    const videoBuffer = new Uint8Array(await video.arrayBuffer());
     const requestId = randomUUID();
-    inputPath = join(tmpdir(), `viral-remotion-input-${requestId}.mp4`);
-    propsPath = join(tmpdir(), `viral-remotion-props-${requestId}.json`);
     outputPath = join(tmpdir(), `viral-remotion-output-${requestId}.mp4`);
-
-    await writeFile(inputPath, Buffer.from(videoBuffer));
-    await writeFile(propsPath, JSON.stringify(props));
-
-    await execFileAsync(process.execPath, [
-      renderScriptPath,
-      inputPath,
-      propsPath,
-      outputPath,
-    ]);
+    await renderViralRemotionVideo(video, outputPath, props);
 
     const rendered = await readFile(outputPath);
 
@@ -112,7 +227,7 @@ export async function POST(request: NextRequest) {
     );
   } finally {
     await Promise.allSettled(
-      [inputPath, propsPath, outputPath]
+      [outputPath]
         .filter((value): value is string => Boolean(value))
         .map((filePath) => rm(filePath, { force: true }))
     );

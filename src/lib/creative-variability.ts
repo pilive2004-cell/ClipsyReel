@@ -48,8 +48,10 @@ export interface CreativeTransitionDecision {
     | "dissolve"
     | "zoom"
     | "fast-zoom"
+    | "cross-zoom"
     | "motion-blur"
     | "flash-cut"
+    | "film-burn"
     | "speed-ramp"
     | "whip-pan"
     | "swipe"
@@ -333,14 +335,13 @@ function pickDistinct<T>(preferred: T[], fallback: T[], count: number, rng: () =
 }
 
 function mapVariantToRemotionType(variant: CreativeTransitionOverlayVariant, rng: () => number): CreativeTransitionDecision["remotionType"] {
-  if (variant === "zoom") return rng() > 0.45 ? "fast-zoom" : "dynamic-scale";
-  if (variant === "whip-pan") return rng() > 0.35 ? "whip-pan" : "camera-shake";
-  if (variant === "blur") return rng() > 0.45 ? "directional-blur" : "dissolve";
-  if (variant === "glitch") return "glitch";
-  if (variant === "flash") return "flash-cut";
-  if (variant === "swipe") return rng() > 0.45 ? "swipe" : "slide";
-  if (variant === "motion-blur") return "motion-blur";
-  return "speed-ramp";
+  if (variant === "flash" || variant === "glitch") return "film-burn";
+  if (variant === "zoom") return "cross-zoom";
+  if (variant === "whip-pan") return rng() > 0.45 ? "cross-zoom" : "film-burn";
+  if (variant === "blur") return rng() > 0.45 ? "cross-zoom" : "film-burn";
+  if (variant === "swipe") return rng() > 0.45 ? "film-burn" : "cross-zoom";
+  if (variant === "motion-blur") return "cross-zoom";
+  return rng() > 0.5 ? "cross-zoom" : "film-burn";
 }
 
 function normalizedEnergy(moment: BestMoment | undefined): number {
@@ -414,10 +415,11 @@ function buildVersionPlan(
   const profile = STYLE_DNA_PROFILES[styleDNA];
   const levelProfile = CREATIVITY_LEVEL_PROFILES[creativityLevel];
   const rng = mulberry32(hashString(`${seed}:${styleDNA}:${creativityLevel}:${index}`));
+  const viralSafeTransitions = profile.transitions.filter((variant) => variant !== "flash");
   const availableTransitions = pickDistinct(
-    profile.transitions,
-    ALL_TRANSITIONS,
-    Math.min(profile.transitions.length + levelProfile.extraTransitions, ALL_TRANSITIONS.length),
+    viralSafeTransitions,
+    ALL_TRANSITIONS.filter((variant) => variant !== "flash"),
+    Math.min(viralSafeTransitions.length + levelProfile.extraTransitions, ALL_TRANSITIONS.filter((variant) => variant !== "flash").length),
     rng
   );
   const availableCameras = pickDistinct(

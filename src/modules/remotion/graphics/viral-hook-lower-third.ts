@@ -106,7 +106,9 @@ export function splitViralHookLowerThirdText(text: string) {
 export function resolveViralHookLowerThirdLayout(
   text: string,
   ctx: TextMeasurer,
-  maxBarWidth: number
+  maxBarWidth: number,
+  widthScale = 1,
+  heightScale = widthScale
 ) {
   const { primary, secondary } = splitViralHookLowerThirdText(text);
   const maxLabelLength = Math.max(primary.length, secondary.length, 1);
@@ -121,8 +123,8 @@ export function resolveViralHookLowerThirdLayout(
       ctx,
       primary || secondary || text.trim(),
       targetTextWidth,
-      secondary ? 36 : 40,
-      secondary ? 56 : 60,
+      Math.max(24, Math.round((secondary ? 36 : 40) * widthScale)),
+      Math.max(32, Math.round((secondary ? 56 : 60) * widthScale)),
       "Inter, system-ui, -apple-system, 'Segoe UI', sans-serif"
     )
   );
@@ -131,8 +133,8 @@ export function resolveViralHookLowerThirdLayout(
     primary,
     secondary,
     barWidth,
-    barHeight: 84,
-    barGap: 8,
+    barHeight: Math.max(58, Math.round(84 * heightScale)),
+    barGap: Math.max(6, Math.round(8 * heightScale)),
     paddingX,
     fontSize,
   };

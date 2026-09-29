@@ -10,6 +10,7 @@ const REMOTION_PUBLIC_TEMP_DIR = resolve(process.cwd(), "public", "remotion-temp
 const REMOTION_ENTRY = resolve(process.cwd(), "src", "modules", "remotion", "server", "Root.tsx");
 const VIRAL_REMOTION_COMPOSITION_ID = "ViralExportComposition";
 const REMOTION_ASSET_BASE_URL = process.env.REMOTION_ASSET_BASE_URL?.trim() || "http://127.0.0.1:3000";
+const REMOTION_BUNDLE_DIR = resolve(process.cwd(), ".remotion-bundles", "viral-export");
 const CHROME_EXECUTABLE =
   process.env.REMOTION_BROWSER_EXECUTABLE?.trim() ||
   (existsSync("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
@@ -29,16 +30,16 @@ async function main() {
   const publicFilePath = resolve(REMOTION_PUBLIC_TEMP_DIR, publicFileName);
   const publicVideoPath = `remotion-temp/${publicFileName}`;
   const tempOutputPath = outputPath || join(tmpdir(), `viral-remotion-output-${sessionId}.mp4`);
-  const bundleDir = resolve(process.cwd(), ".remotion-bundles", `viral-export-${sessionId}`);
 
   try {
     await mkdir(REMOTION_PUBLIC_TEMP_DIR, { recursive: true });
+    await mkdir(REMOTION_BUNDLE_DIR, { recursive: true });
     await writeFile(publicFilePath, await readFile(inputPath));
 
     const serveUrl = await bundle({
       entryPoint: REMOTION_ENTRY,
-      outDir: bundleDir,
-      enableCaching: false,
+      outDir: REMOTION_BUNDLE_DIR,
+      enableCaching: true,
       onProgress: () => undefined,
       webpackOverride: (config) => ({
         ...config,
@@ -84,7 +85,6 @@ async function main() {
   } finally {
     await Promise.allSettled([
       rm(publicFilePath, { force: true }),
-      rm(bundleDir, { recursive: true, force: true }),
       outputPath === tempOutputPath ? Promise.resolve() : rm(tempOutputPath, { force: true }),
     ]);
   }

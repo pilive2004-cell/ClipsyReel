@@ -14,6 +14,68 @@ interface AIAnalysisPanelProps {
   gpxPoints?: { lat: number; lng: number }[] | null;
 }
 
+const ANALYSIS_CACHE_STORAGE_KEY = "clipsyreel:analysis-cache:v1";
+const ANALYSIS_CACHE_VERSION = "analysis-v2";
+const MAX_ANALYSIS_CACHE_ENTRIES = 8;
+
+type CachedAnalysisEntry = {
+  key: string;
+  moments: BestMoment[];
+  createdAt: number;
+};
+
+function fingerprintVideo(video: UploadedVideo) {
+  const file = video.file;
+  return [file.name, file.size, file.type, file.lastModified, Math.round(video.durationSeconds * 1000)].join("|");
+}
+
+function buildGpxSignature(gpxPoints?: { lat: number; lng: number }[] | null) {
+  if (!gpxPoints || gpxPoints.length === 0) return "no-gpx";
+  const first = gpxPoints[0];
+  const mid = gpxPoints[Math.floor(gpxPoints.length / 2)];
+  const last = gpxPoints[gpxPoints.length - 1];
+  return [
+    gpxPoints.length,
+    first.lat.toFixed(4), first.lng.toFixed(4),
+    mid.lat.toFixed(4), mid.lng.toFixed(4),
+    last.lat.toFixed(4), last.lng.toFixed(4),
+  ].join("|");
+}
+
+function buildAnalysisCacheKey(videos: UploadedVideo[], gpxPoints?: { lat: number; lng: number }[] | null) {
+  return `${ANALYSIS_CACHE_VERSION}::${videos.map(fingerprintVideo).join("||")}::${buildGpxSignature(gpxPoints)}`;
+}
+
+function readCachedAnalysis(key: string): BestMoment[] | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(ANALYSIS_CACHE_STORAGE_KEY);
+    if (!raw) return null;
+    const entries = JSON.parse(raw) as CachedAnalysisEntry[];
+    const match = Array.isArray(entries) ? entries.find((entry) => entry.key === key) : null;
+    return Array.isArray(match?.moments) ? match.moments : null;
+  } catch (error) {
+    console.warn("[analysis-cache] Failed to read cached analysis.", error);
+    return null;
+  }
+}
+
+function writeCachedAnalysis(key: string, moments: BestMoment[]) {
+  if (typeof window === "undefined" || moments.length === 0) return;
+  try {
+    const raw = window.localStorage.getItem(ANALYSIS_CACHE_STORAGE_KEY);
+    const parsed = raw ? (JSON.parse(raw) as CachedAnalysisEntry[]) : [];
+    const entries = Array.isArray(parsed) ? parsed.filter((entry) => entry.key !== key) : [];
+    entries.unshift({ key, moments, createdAt: Date.now() });
+    window.localStorage.setItem(
+      ANALYSIS_CACHE_STORAGE_KEY,
+      JSON.stringify(entries.slice(0, MAX_ANALYSIS_CACHE_ENTRIES))
+    );
+  } catch (error) {
+    console.warn("[analysis-cache] Failed to persist cached analysis.", error);
+  }
+}
+
 export default function AIAnalysisPanel({ videos, onComplete, gpxPoints }: AIAnalysisPanelProps) {
   const [progress, setProgress] = useState(0);
   const onCompleteRef = useRef(onComplete);
@@ -27,8 +89,10 @@ export default function AIAnalysisPanel({ videos, onComplete, gpxPoints }: AIAna
     let watchdogTimer: number | null = null;
     let finishTimer: number | null = null;
     const startedAt = Date.now();
-    const MIN_VISIBLE_MS = 1800;
+    const MIN_VISIBLE_MS = 500;
     const ANALYSIS_TIMEOUT_MS = estimateAnalysisBudgetMs(videos);
+    const cacheKey = buildAnalysisCacheKey(videos, gpxPoints);
+    const cachedMoments = readCachedAnalysis(cacheKey);
     let latestRealRatio = 0;
     // If the real (in-browser ML) analysis doesn't finish before the
     // timeout, we move on with fallback moments — but without this signal
@@ -45,6 +109,16 @@ export default function AIAnalysisPanel({ videos, onComplete, gpxPoints }: AIAna
       const optimistic = Math.min(0.92, elapsed / 18000);
       setProgress((prev) => Math.max(prev, latestRealRatio, optimistic));
     };
+    if (cachedMoments) {
+      setProgress(1);
+      finishTimer = window.setTimeout(() => {
+        if (!cancelled) onCompleteRef.current(cachedMoments);
+      }, MIN_VISIBLE_MS);
+      return () => {
+        cancelled = true;
+        if (finishTimer !== null) window.clearTimeout(finishTimer);
+      };
+    }
     heartbeat();
     watchdogTimer = window.setInterval(heartbeat, 300);
 
@@ -80,6 +154,9 @@ export default function AIAnalysisPanel({ videos, onComplete, gpxPoints }: AIAna
         });
       }
       if (cancelled) return;
+      if (moments && moments.length > 0) {
+        writeCachedAnalysis(cacheKey, moments);
+      }
       const elapsed = Date.now() - startedAt;
       const remaining = Math.max(0, MIN_VISIBLE_MS - elapsed);
       setProgress(1);

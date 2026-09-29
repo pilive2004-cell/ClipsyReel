@@ -60,6 +60,7 @@ const SAMPLE_H = 27;
 const ML_SAMPLE_W = 320;
 const ML_SAMPLE_H = 180;
 const MAX_SAMPLES_PER_VIDEO = 36;
+const MAX_ML_INFERENCE_SAMPLES_PER_VIDEO = 12;
 const MIN_SAMPLE_INTERVAL = 0.25;
 const MAX_SAMPLE_INTERVAL = 1.4;
 /** A sample below this normalized clarity is disqualified from being the very first ("opener") moment of a video — a soft/blurry/shaky first beat is one of the fastest ways to lose a viewer. */
@@ -80,6 +81,13 @@ interface FrameSample {
   mlObjects: MlDetectedObject[] | null; // real COCO-SSD detections for this frame, null if the model was unavailable
   mlFace: FaceExpressionResult | null; // real face landmark result for this frame, null if the model was unavailable
   mlScene: SceneClassification[] | null; // real MobileNet scene classifications for this frame, null if the model was unavailable
+}
+
+export function shouldRunMlInferenceForSample(sampleIndex: number, totalSamples: number): boolean {
+  if (totalSamples <= 0) return false;
+  if (sampleIndex <= 0 || sampleIndex >= totalSamples - 1) return true;
+  const stride = Math.max(1, Math.ceil(totalSamples / MAX_ML_INFERENCE_SAMPLES_PER_VIDEO));
+  return sampleIndex % stride === 0;
 }
 
 function seekTo(video: HTMLVideoElement, time: number): Promise<void> {
@@ -328,6 +336,9 @@ export async function analyzeVideoMoments(
 
   const samples: FrameSample[] = [];
   let prevGray: Float32Array | null = null;
+  let lastMlObjects: MlDetectedObject[] | null = null;
+  let lastMlFace: FaceExpressionResult | null = null;
+  let lastMlScene: SceneClassification[] | null = null;
 
   try {
     for (let i = 0; i < sampleTimes.length; i++) {
@@ -347,12 +358,20 @@ export async function analyzeVideoMoments(
         ? motionStatsBetween(gray, prevGray)
         : { amount: 0, subjectCenterBias: 0.35, subjectCompactness: 0.35 };
 
-      mlCtx.drawImage(video, 0, 0, ML_SAMPLE_W, ML_SAMPLE_H);
-      const [mlObjects, mlFace, mlScene] = await Promise.all([
-        detectObjectsOnFrame(mlCanvas, ML_SAMPLE_W, ML_SAMPLE_H),
-        detectFaceExpression(mlCanvas, ML_SAMPLE_W, ML_SAMPLE_H),
-        classifySceneOnFrame(mlCanvas),
-      ]);
+      let mlObjects: MlDetectedObject[] | null = lastMlObjects;
+      let mlFace: FaceExpressionResult | null = lastMlFace;
+      let mlScene: SceneClassification[] | null = lastMlScene;
+      if (shouldRunMlInferenceForSample(i, sampleTimes.length)) {
+        mlCtx.drawImage(video, 0, 0, ML_SAMPLE_W, ML_SAMPLE_H);
+        [mlObjects, mlFace, mlScene] = await Promise.all([
+          detectObjectsOnFrame(mlCanvas, ML_SAMPLE_W, ML_SAMPLE_H),
+          detectFaceExpression(mlCanvas, ML_SAMPLE_W, ML_SAMPLE_H),
+          classifySceneOnFrame(mlCanvas),
+        ]);
+        lastMlObjects = mlObjects;
+        lastMlFace = mlFace;
+        lastMlScene = mlScene;
+      }
 
       samples.push({
         t: sampleTimes[i],

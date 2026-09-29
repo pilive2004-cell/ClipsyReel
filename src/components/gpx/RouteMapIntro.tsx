@@ -179,7 +179,7 @@ const TILE_READY_STABLE_FRAMES = 4;
 const TILE_GLOBAL_PRELOAD_TIMEOUT_MS = 9_000;
 const ENABLE_TERRAIN_DEM = false;
 const ROUTE_INTRO_HARD_TIMEOUT_MS = 240_000;
-const MAP_LOAD_TIMEOUT_MS = 90_000;
+const MAP_LOAD_TIMEOUT_MS = 18_000;
 
 /**
  * 5-phase cinematic timeline (all values in seconds):

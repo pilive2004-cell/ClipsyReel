@@ -16,6 +16,7 @@ describe("buildTransitionSequence", () => {
 
     expect(transitions).toHaveLength(3);
     expect(transitions.every((transition) => transition.duration >= 0.15 && transition.duration <= 0.6)).toBe(true);
+    expect(transitions.every((transition) => ["film-burn", "cross-zoom"].includes(transition.type))).toBe(true);
     for (let i = 1; i < transitions.length; i++) {
       expect(transitions[i].type).not.toBe(transitions[i - 1].type);
     }

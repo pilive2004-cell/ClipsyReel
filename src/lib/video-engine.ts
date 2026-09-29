@@ -1,7 +1,7 @@
 "use client";
 
 import { FFmpeg } from "@ffmpeg/ffmpeg";
-import { fetchFile, toBlobURL } from "@ffmpeg/util";
+import { fetchFile } from "@ffmpeg/util";
 import {
   BestMoment,
   GpxRouteStats,
@@ -46,6 +46,7 @@ import {
   generateAnimatedViralTransitionOverlayClip,
   generateRemotionCompositeAsset,
 } from "@/modules/remotion/final-compositor";
+import { VIRAL_REMOTION_FPS, type ViralRemotionTransitionMarker } from "@/modules/remotion/render-contract";
 import { splitViralHookLowerThirdText } from "@/modules/remotion/graphics/viral-hook-lower-third";
 import {
   buildCreativeColorFilter,
@@ -193,10 +194,11 @@ export function capTransitionDuration(baseTransitionDuration: number, prevClipLe
 }
 
 export function shouldUseCompactConcatFallback(style: ReelStyle, clipCount: number): boolean {
-  // Viral and Sport only need compact concat once the transition graph gets
-  // genuinely large. Very small reels are better served by xfade so title/hook
-  // overlays and visible transitions survive the final export path.
-  if (style === "viral" || style === "sport") return clipCount >= 4;
+  // Viral now delegates title, hook, and transition presentations to the final
+  // Remotion pass, so an expensive FFmpeg xfade graph is redundant and slower
+  // than a simple base concat once there is more than one clip.
+  if (style === "viral") return clipCount >= 2;
+  if (style === "sport") return clipCount >= 4;
   return false;
 }
 
@@ -270,31 +272,65 @@ export async function detectVideoHasAudio(file: File | Blob): Promise<boolean> {
   );
 }
 
-const FFMPEG_CORE_JS_PATH = "/api/ffmpeg-core/ffmpeg-core.js";
-const FFMPEG_CORE_WASM_PATH = "/api/ffmpeg-core/ffmpeg-core.wasm";
+const FFMPEG_CORE_CANDIDATES = [
+  {
+    label: "single-thread",
+    coreURL: "/api/ffmpeg-core/ffmpeg-core.js",
+    wasmURL: "/api/ffmpeg-core/ffmpeg-core.wasm",
+    workerURL: undefined as string | undefined,
+  },
+  {
+    label: "multithread",
+    coreURL: "/api/ffmpeg-core/ffmpeg-core-mt.js",
+    wasmURL: "/api/ffmpeg-core/ffmpeg-core-mt.wasm",
+    workerURL: "/api/ffmpeg-core/ffmpeg-core-mt.worker.js",
+  },
+] as const;
+
+const FFMPEG_CORE_JS_PATH = ENABLE_MT_FFMPEG ? FFMPEG_CORE_CANDIDATES[1].coreURL : FFMPEG_CORE_CANDIDATES[0].coreURL;
+const FFMPEG_CORE_WASM_PATH = ENABLE_MT_FFMPEG ? FFMPEG_CORE_CANDIDATES[1].wasmURL : FFMPEG_CORE_CANDIDATES[0].wasmURL;
+const FFMPEG_CORE_WORKER_PATH = ENABLE_MT_FFMPEG ? FFMPEG_CORE_CANDIDATES[1].workerURL : FFMPEG_CORE_CANDIDATES[0].workerURL;
 
 /** Lazily loads & caches a single ffmpeg.wasm instance (core files are self-hosted through a local Next route). */
 async function loadFFmpeg(): Promise<FFmpeg> {
   if (sharedFFmpeg) return sharedFFmpeg;
   if (sharedFFmpegLoadPromise) return sharedFFmpegLoadPromise;
 
-  sharedFFmpegLoadPromise = withTimeout((async () => {
-    const ffmpeg = new FFmpeg();
-    const coreJsUrl = await toBlobURL(FFMPEG_CORE_JS_PATH, "text/javascript");
-    const wasmUrl = await toBlobURL(FFMPEG_CORE_WASM_PATH, "application/wasm");
+  const preferredCandidates = ENABLE_MT_FFMPEG
+    ? [FFMPEG_CORE_CANDIDATES[1], FFMPEG_CORE_CANDIDATES[0]]
+    : [FFMPEG_CORE_CANDIDATES[0], FFMPEG_CORE_CANDIDATES[1]];
 
-    await ffmpeg.load({
-      coreURL: coreJsUrl,
-      wasmURL: wasmUrl,
-    });
-    sharedFFmpeg = ffmpeg;
-    return ffmpeg;
+  sharedFFmpegLoadPromise = withTimeout((async () => {
+    let lastError: unknown;
+    for (const candidate of preferredCandidates) {
+      const ffmpeg = new FFmpeg();
+      try {
+        console.info(`[video-engine] Trying FFmpeg core candidate: ${candidate.label}`);
+        await ffmpeg.load({
+          coreURL: candidate.coreURL,
+          wasmURL: candidate.wasmURL,
+          workerURL: candidate.workerURL,
+        });
+        sharedFFmpeg = ffmpeg;
+        return ffmpeg;
+      } catch (error) {
+        lastError = error;
+        console.warn(`[video-engine] FFmpeg core candidate failed (${candidate.label}):`, error);
+      }
+    }
+
+    throw new Error(
+      lastError instanceof Error
+        ? lastError.message
+        : `FFmpeg core failed to initialize within ${Math.round(FFMPEG_LOAD_TIMEOUT_MS / 1000)} seconds.`
+    );
   })(), FFMPEG_LOAD_TIMEOUT_MS, `FFmpeg core failed to initialize within ${Math.round(FFMPEG_LOAD_TIMEOUT_MS / 1000)} seconds.`);
 
   try {
     return await sharedFFmpegLoadPromise;
   } catch (error) {
     sharedFFmpegLoadPromise = null;
+    sharedFFmpeg = null;
     throw error;
   }
 }
@@ -1364,6 +1400,54 @@ function resolveViralTransitionDuration(previousClipSeconds: number, nextClipSec
   return clamp(bounded, 0.2, 0.42);
 }
 
+export function buildViralRemotionTransitionMarkers({
+  clipDurations,
+  transitionDurations,
+  transitionDecisions = [],
+  contentStartIndex = 0,
+  contentClipCount = clipDurations.length,
+}: {
+  clipDurations: number[];
+  transitionDurations: number[];
+  transitionDecisions?: Array<Pick<CreativeTransitionDecision, "remotionType" | "direction" | "durationSeconds">>;
+  contentStartIndex?: number;
+  contentClipCount?: number;
+}): ViralRemotionTransitionMarker[] {
+  if (clipDurations.length < 2 || contentClipCount < 2) return [];
+
+  const contentEndIndexExclusive = contentStartIndex + contentClipCount;
+  const markers: ViralRemotionTransitionMarker[] = [];
+  let accumulatedDuration = Math.max(0, clipDurations[0] ?? 0);
+
+  for (let nextClipIndex = 1; nextClipIndex < clipDurations.length; nextClipIndex++) {
+    const overlap = clamp(
+      transitionDurations[nextClipIndex - 1] ?? transitionDecisions[nextClipIndex - 1]?.durationSeconds ?? 0.3,
+      0.15,
+      0.6
+    );
+    const previousClipIndex = nextClipIndex - 1;
+    const actualCutAt = accumulatedDuration;
+    const isContentBoundary =
+      previousClipIndex >= contentStartIndex &&
+      nextClipIndex < contentEndIndexExclusive;
+
+    if (isContentBoundary) {
+      const transitionIndex = previousClipIndex - contentStartIndex;
+      const decision = transitionDecisions[transitionIndex];
+      markers.push({
+        atSeconds: Number(actualCutAt.toFixed(3)),
+        type: decision?.remotionType ?? (transitionIndex % 2 === 0 ? "film-burn" : "cross-zoom"),
+        direction: decision?.direction ?? (transitionIndex % 2 === 0 ? "left" : "right"),
+        durationFrames: Math.max(1, Math.round(overlap * VIRAL_REMOTION_FPS)),
+      });
+    }
+
+    accumulatedDuration += Math.max(0, clipDurations[nextClipIndex] ?? 0);
+  }
+
+  return markers;
+}
+
 function planViralTransitionWindows(clipDurations: number[], transitionSequence: CreativeTransitionDecision[] = []): ViralTransitionWindow[] {
   if (clipDurations.length < 2) return [];
   const windows: ViralTransitionWindow[] = [];
@@ -1840,7 +1924,7 @@ export function planOverlayTextWindows(
   const rawDuration = (available - effectiveGap * Math.max(0, visibleTexts.length - 1)) / visibleTexts.length;
   const overlayDuration = clamp(rawDuration, minDuration, maxDuration);
   const totalNeeded = overlayDuration * visibleTexts.length + effectiveGap * Math.max(0, visibleTexts.length - 1);
-  const offset = Math.max(0, (available - totalNeeded) / 2);
+  const offset = style === "viral" ? 0 : Math.max(0, (available - totalNeeded) / 2);
 
   return visibleTexts.map((text, index) => {
     const start = startBoundary + offset + index * (overlayDuration + effectiveGap);
@@ -2003,7 +2087,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     style,
     mode,
     bestMoments,
-    maxStorySeconds = 90,
+    maxStorySeconds = 60,
     maxReelSeconds = 90,
     quality = "720p",
     watermark = false,
@@ -2187,29 +2271,45 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
 
   const stamp = `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
 
-  // Write all source files to ffmpeg FS upfront.
-  // Serialised (not parallel) to keep peak FS memory predictable.
-  const inputNames: string[] = [];
-  for (let i = 0; i < files.length; i++) {
-    const name = `src_${stamp}_${i}.mp4`;
-    await ffmpeg.writeFile(name, await getFileDataForFFmpeg(files[i]));
-    inputNames.push(name);
-    onProgress?.(0.01 + (i + 1) / files.length * 0.03);
-  }
+  // Source files are now written lazily: repeated renders can hit the segment
+  // cache without paying another full browser file-read + FFmpeg FS write for
+  // every upload before we even know which sources are needed.
+  const inputNames = files.map((_, index) => `src_${stamp}_${index}.mp4`);
+  const writtenInputIndexes = new Set<number>();
+  let writtenInputCount = 0;
+  const ensureInputFileWritten = async (sourceIndex: number) => {
+    const inputName = inputNames[sourceIndex];
+    if (writtenInputIndexes.has(sourceIndex)) return inputName;
+    await ffmpeg.writeFile(inputName, await getFileDataForFFmpeg(files[sourceIndex]));
+    writtenInputIndexes.add(sourceIndex);
+    writtenInputCount += 1;
+    onProgress?.(0.01 + writtenInputCount / files.length * 0.03);
+    return inputName;
+  };
   mark("files-written");
   console.log(`[video-engine] File write: ${elapsed("ffmpeg-ready", "files-written")}`);
 
-  let introSourceName: string | null = null;
-  if (introClip) {
-    introSourceName = `intro_${stamp}.webm`;
-    await ffmpeg.writeFile(introSourceName, await getFileDataForFFmpeg(introClip.file));
-  }
+  const introSourceName = introClip ? `intro_${stamp}.webm` : null;
+  let introSourceWritten = false;
+  const ensureIntroSourceWritten = async () => {
+    if (!introClip || !introSourceName) return null;
+    if (!introSourceWritten) {
+      await ffmpeg.writeFile(introSourceName, await getFileDataForFFmpeg(introClip.file));
+      introSourceWritten = true;
+    }
+    return introSourceName;
+  };
 
-  let outroSourceName: string | null = null;
-  if (outroClip) {
-    outroSourceName = `outro_${stamp}.webm`;
-    await ffmpeg.writeFile(outroSourceName, await getFileDataForFFmpeg(outroClip.file));
-  }
+  const outroSourceName = outroClip ? `outro_${stamp}.webm` : null;
+  let outroSourceWritten = false;
+  const ensureOutroSourceWritten = async () => {
+    if (!outroClip || !outroSourceName) return null;
+    if (!outroSourceWritten) {
+      await ffmpeg.writeFile(outroSourceName, await getFileDataForFFmpeg(outroClip.file));
+      outroSourceWritten = true;
+    }
+    return outroSourceName;
+  };
 
   let watermarkName: string | null = null;
   if (watermark) {
@@ -2320,34 +2420,6 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     }
   }
   const viralTransitionOverlayAssetNames = new Map<string, string>();
-  if (style === "viral") {
-    const requiredPairs = new Set<string>(["swipe:left", "swipe:right"]);
-    for (const decision of creativeVariabilityPlan?.selectedVersion.transitions ?? []) {
-      requiredPairs.add(`${decision.variant}:${decision.direction === "right" ? "right" : "left"}`);
-    }
-    const uniquePairs = Array.from(requiredPairs);
-    for (const pair of uniquePairs) {
-      const [variant, direction] = pair.split(":") as [CreativeTransitionOverlayVariant, ViralTransitionDirection];
-      const name = `viral_transition_${variant}_${direction}_${stamp}.webm`;
-      const viralOverlayCacheKey = await buildRenderCacheKey("viral-transition-remotion-v1", [w, h, direction, variant, RENDER_FPS]);
-      const cachedOverlay = getCachedBinaryAsset(viralOverlayCacheKey);
-      if (cachedOverlay) {
-        await ffmpeg.writeFile(name, cloneFFmpegData(cachedOverlay));
-      } else {
-        const clip = await generateAnimatedViralTransitionOverlayClip({
-          width: w,
-          height: h,
-          durationSeconds: 0.6,
-          direction,
-          variant,
-        });
-        const data = clip.data;
-        putCachedBinaryAsset(viralOverlayCacheKey, data, clip.mimeType);
-        await ffmpeg.writeFile(name, cloneFFmpegData(data));
-      }
-      viralTransitionOverlayAssetNames.set(pair, name);
-    }
-  }
 
   const planSportTelemetryWindows = (durationSeconds: number) => {
     if (sportTelemetryOverlayNames.length === 0) return [];
@@ -2469,7 +2541,13 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       clipDurations: number[],
       labelPrefix: string
     ) => {
-      if (style !== "viral" || viralTransitionOverlayAssetNames.size === 0) {
+      // Viral transitions are composited in the final Remotion export, so
+      // burning them into the browser FFmpeg pass only duplicates work and
+      // makes long renders substantially slower.
+      if (style === "viral") {
+        return { finalLabel: baseLabel, inputsUsed: 0 };
+      }
+      if (viralTransitionOverlayAssetNames.size === 0) {
         return { finalLabel: baseLabel, inputsUsed: 0 };
       }
       const windows = planViralTransitionWindows(clipDurations, creativeVariabilityPlan?.selectedVersion.transitions ?? []);
@@ -2707,10 +2785,14 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
           await ffmpeg.writeFile(introName, cloneFFmpegData(cachedIntro));
           console.log("[video-engine] Map intro cache hit");
         } else {
+          const introInputName = await ensureIntroSourceWritten();
+          if (!introInputName) {
+            throw new Error("Map intro source file was unavailable for transcoding.");
+          }
           await withTimeout(
             ffmpeg.exec([
               "-fflags", "+genpts",
-              "-i", introSourceName,
+              "-i", introInputName,
               "-t", introDuration.toFixed(3),
               "-vf", `fps=${RENDER_FPS},scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setpts=PTS-STARTPTS,format=yuv420p`,
               "-r", String(RENDER_FPS),
@@ -2759,11 +2841,15 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         await ffmpeg.writeFile(outroName, cloneFFmpegData(cachedOutro));
         console.log("[video-engine] Outro card cache hit");
       } else {
+        const outroInputName = await ensureOutroSourceWritten();
+        if (!outroInputName) {
+          throw new Error("Outro source file was unavailable for transcoding.");
+        }
         await runFFmpegCommand(
           ffmpeg,
           [
             "-fflags", "+genpts",
-            "-i", outroSourceName,
+            "-i", outroInputName,
             "-t", outroDuration.toFixed(3),
             "-vf", `fps=${RENDER_FPS},scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setpts=PTS-STARTPTS,format=yuv420p`,
             "-r", String(RENDER_FPS),
@@ -2830,11 +2916,12 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         await ffmpeg.writeFile(clipName, cloneFFmpegData(cachedSegment));
         console.log(`[video-engine] Segment cache hit: ${i + 1}/${segments.length}`);
       } else {
+        const sourceInputName = await ensureInputFileWritten(seg.sourceIndex);
         await runFFmpegCommand(
           ffmpeg,
           [
             "-fflags", "+genpts",
-            "-i", inputNames[seg.sourceIndex],
+            "-i", sourceInputName,
             "-ss", seg.start.toFixed(3),
             "-t", seg.length.toFixed(3),
             "-vf", segmentFilter,
@@ -2909,48 +2996,13 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
           plannedRenderDuration,
           introDuration,
           outroDuration,
-          Math.max(24, plannedTitleWindow ? plannedTitleWindow.end + 0.35 : 24),
+          plannedTitleWindow ? plannedTitleWindow.end + 0.35 : 0,
           style
         ),
         plannedRenderDuration,
-        Math.max(24, plannedTitleWindow ? plannedTitleWindow.end + 0.2 : 24)
+        plannedTitleWindow ? plannedTitleWindow.end + 0.2 : 0
       );
 
-      for (let i = 0; i < plannedOverlayWindows.length; i++) {
-        const overlay = plannedOverlayWindows[i];
-        const clipName = `overlay_text_motion_${stamp}_${i}.webm`;
-        const overlayCacheKey = await buildRenderCacheKey("overlay-text-motion-v1", [
-          w,
-          h,
-          style,
-          overlay.text,
-          overlay.end - overlay.start,
-          i,
-          creativeVariabilityPlan?.seed ?? "",
-          creativeVariabilityPlan?.selectedVersion.hookAnimations[i] ?? "",
-          creativeVariabilityPlan?.selectedVersion.hookAnchors[i] ?? "",
-        ]);
-        const cachedOverlay = getCachedBinaryAsset(overlayCacheKey);
-        if (cachedOverlay) {
-          await ffmpeg.writeFile(clipName, cloneFFmpegData(cachedOverlay));
-        } else {
-          const clip = await generateAnimatedTextOverlayClip({
-            width: w,
-            height: h,
-            style,
-            text: overlay.text,
-            durationSeconds: Math.max(0.45, overlay.end - overlay.start),
-            kind: "hook",
-            animationStyle: creativeVariabilityPlan?.selectedVersion.hookAnimations[i],
-            anchor: style === "viral" ? "bottom-left" : creativeVariabilityPlan?.selectedVersion.hookAnchors[i],
-            accentColor: creativeVariabilityPlan?.selectedVersion.dominantTransition === "flash" ? "#fbbf24" : "#f472b6",
-          });
-          putCachedBinaryAsset(overlayCacheKey, clip.data, clip.mimeType);
-          await ffmpeg.writeFile(clipName, cloneFFmpegData(clip.data));
-        }
-        animatedOverlayClipNames.push(clipName);
-        tempFiles.push(clipName);
-      }
     }
 
     const ensureOutputFileExists = async (ffmpegInstance: FFmpeg, fileName: string, stageName: string): Promise<void> => {
@@ -3002,6 +3054,8 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         throw lastError ?? new Error(`Failed to read final output ${fileName}.`);
     };
 
+  let transitionDurations: number[] = [];
+
   const finaliseOutput = async (
     name: string,
     durationSeconds: number,
@@ -3048,10 +3102,23 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       onProgress?.(0.97);
       onPhaseChange?.("Verifying export…");
       const ffmpegBlob = ensureNonEmptyVideoBlob(data, "video/mp4");
+      const remotionTransitionMarkers =
+        style === "viral"
+          ? buildViralRemotionTransitionMarkers({
+              clipDurations: finalDurations,
+              transitionDurations,
+              transitionDecisions: creativeVariabilityPlan?.selectedVersion.transitions ?? [],
+              contentStartIndex: introName ? 1 : 0,
+              contentClipCount: segmentClipNames.length,
+            })
+          : [];
+
       const remotionResult = await composeFinalRenderWithRemotion(ffmpegBlob, {
         moments: bestMoments,
         style,
         durationSeconds,
+        width: w,
+        height: h,
         title: cleanedReelTitle?.text,
         titleStyle: cleanedReelTitle
           ? {
@@ -3064,11 +3131,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         overlayTexts: cleanedOverlayTexts,
         titleWindow: plannedTitleWindow,
         overlayWindows: plannedOverlayWindows,
-        transitionMarkers: finalDurations.slice(0, -1).reduce<number[]>((markers, clipDuration, index) => {
-          const previousBoundary = markers[index - 1] ?? 0;
-          markers.push(previousBoundary + clipDuration);
-          return markers;
-        }, []),
+        transitionMarkers: remotionTransitionMarkers,
         creativitySettings: creativeVariabilityPlan
           ? {
               renderCreativityLevel,
@@ -3262,7 +3325,6 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
       mark("phase2-start");
 
       const baseOutputName = `base_${stamp}.mp4`;
-      let baseOutputData: Uint8Array | null = null;
       const concatManifestName = `concat_${stamp}.txt`;
       await ffmpeg.writeFile(concatManifestName, buildConcatManifest(finalClipNames));
       tempFiles.push(concatManifestName);
@@ -3304,16 +3366,6 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
         await ensureOutputFileExists(ffmpeg, baseOutputName, "Compact concat base re-encode");
       }
       tempFiles.push(baseOutputName);
-      const resolvedBaseOutput = await resolveFFmpegOutputFile(ffmpeg, baseOutputName, {
-        logLabel: "compact-concat base snapshot",
-        logScans: true,
-      });
-      if (!resolvedBaseOutput) {
-        throw new Error(`Compact concat base snapshot could not locate ${baseOutputName} after export.`);
-      }
-      baseOutputData = cloneFFmpegData(resolvedBaseOutput.data);
-      console.log(`[video-engine] Captured compact base output from ${resolvedBaseOutput.path} (${baseOutputData.byteLength} bytes)`);
-
       const renderDuration = Math.max(finalDurations.reduce((sum, d) => sum + d, 0), 0.5);
       const overlayFilterParts: string[] = [];
       const overlayExecArgs = ["-i", baseOutputName];
@@ -3364,7 +3416,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
 
       if (overlayFilterParts.length === 0 && !watermark) {
         tempFiles.push(baseOutputName);
-        return finaliseOutput(baseOutputName, renderDuration, finalClipNames.length, ffmpeg, baseOutputData ?? undefined);
+        return finaliseOutput(baseOutputName, renderDuration, finalClipNames.length, ffmpeg);
       }
 
       const outputName = `out_${stamp}.mp4`;
@@ -3462,7 +3514,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
           }
 
           if (retryFilterParts.length === 0 && !watermark) {
-            return finaliseOutput(baseOutputName, renderDuration, finalClipNames.length, ffmpeg, baseOutputData ?? undefined);
+            return finaliseOutput(baseOutputName, renderDuration, finalClipNames.length, ffmpeg);
           }
 
           await withTimeout(
@@ -3482,7 +3534,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
           await ensureOutputFileExists(ffmpeg, retryOutputName, "Compact overlay fast retry");
         } catch (retryError) {
           console.warn("[video-engine] compact-concat light overlay retry failed; falling back to base concat output.", retryError);
-          return finaliseOutput(baseOutputName, renderDuration, finalClipNames.length, ffmpeg, baseOutputData ?? undefined);
+          return finaliseOutput(baseOutputName, renderDuration, finalClipNames.length, ffmpeg);
         }
         completedUnits++;
         mark("phase2-done");
@@ -3514,7 +3566,7 @@ async function _buildMontage(params: BuildMontageParams): Promise<BuildMontageRe
     let prevLabel = "0:v";
     let acc = finalDurations[0];
     let prevTransitionName: string | null = null;
-    const transitionDurations: number[] = [];
+    transitionDurations = [];
 
     console.log(`[video-engine] Building xfade composition: ${finalClipNames.length} clips, style=${style}, pool=${transitionPool.names.join("|")}`);
 

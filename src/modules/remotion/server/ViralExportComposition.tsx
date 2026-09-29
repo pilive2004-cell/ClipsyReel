@@ -57,7 +57,7 @@ export function ViralExportComposition({
 
       {transitionMarkers.map((marker, index) => {
         const durationInFrames = Math.max(1, marker.durationFrames ?? 18);
-        const from = Math.max(0, toFrames(marker.atSeconds) - Math.floor(durationInFrames / 2));
+        const from = Math.max(0, toFrames(marker.atSeconds));
         return (
           <Sequence
             key={`${marker.type}-${marker.direction}-${index}-${marker.atSeconds}`}

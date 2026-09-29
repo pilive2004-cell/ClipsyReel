@@ -1,6 +1,6 @@
 "use client";
 
-import { useCurrentFrame } from "remotion";
+import { useCurrentFrame, useVideoConfig } from "remotion";
 import { RGBGlitchText } from "@/components/remocn/rgb-glitch-text";
 import {
   resolveReelTitleColorValue,
@@ -22,6 +22,7 @@ export function ActionTitleCard({
   titleStyle?: ViralRemotionTitleStyle | null;
 }) {
   const frame = useCurrentFrame();
+  const { width, height } = useVideoConfig();
   const state = getActionTitleCardState(frame);
   const titleColor = titleStyle ? resolveReelTitleColorValue(titleStyle.color) : "#ffffff";
   const fontFamily = resolveReelTitleFontFamily(titleStyle?.font ?? "bold");
@@ -29,7 +30,7 @@ export function ActionTitleCard({
   const fontWeight = resolveReelTitleFontWeight(titleStyle?.font ?? "bold");
   const letterSpacing = resolveReelTitleLetterSpacing(titleStyle?.font ?? "bold");
   const textTransform = resolveReelTitleTextTransform(titleStyle?.font ?? "bold");
-  const fontSize = Math.round(1080 * resolveReelTitleSizeScale(titleStyle?.size ?? "md"));
+  const fontSize = Math.round(width * resolveReelTitleSizeScale(titleStyle?.size ?? "md"));
   return (
     <div
       style={{
@@ -38,7 +39,7 @@ export function ActionTitleCard({
         display: "flex",
         justifyContent: "center",
         alignItems: "flex-start",
-        paddingTop: 124,
+        paddingTop: Math.round(height * 0.1875),
         opacity: state.opacity,
         transform: `translateY(${state.translateY}px)`,
         pointerEvents: "none",
@@ -60,7 +61,7 @@ export function ActionTitleCard({
         intensity={14}
         seed={title}
         speed={1.15}
-        maxWidth={900}
+        maxWidth={Math.round(width * 0.8333333333)}
       />
     </div>
   );

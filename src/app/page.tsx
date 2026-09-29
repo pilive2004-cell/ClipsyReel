@@ -26,6 +26,7 @@ import { useLocale } from "@/lib/i18n";
 import { buildAdventureReelOverlay, buildAdventureSetupSessionKey, createEmptyAdventureSetup } from "@/lib/adventure-setup";
 import { loadAdventureSetupDraft, saveAdventureSetupDraft } from "@/lib/adventure-setup-storage";
 import { createEditingSeed } from "@/lib/creative-variability";
+import { warmupMlDetection } from "@/lib/ml-detection";
 import { computeRouteMetrics } from "@/modules/route3d/routeMetrics";
 import RouteStoryPlayer from "@/modules/route3d/RouteStoryPlayer";
 import { generateGearSummaryClip, GearSummaryClip } from "@/lib/gear-summary-clip";
@@ -283,9 +284,11 @@ export default function Home() {
 
     let cancelled = false;
     const warmUp = () => {
-      void preloadRenderPipeline().catch((error) => {
-        if (!cancelled) {
-          console.warn("[ClipsyReel] Render pipeline warm-up failed:", error);
+      void Promise.allSettled([preloadRenderPipeline(), warmupMlDetection()]).then((results) => {
+        if (cancelled) return;
+        const rejected = results.find((result) => result.status === "rejected");
+        if (rejected?.status === "rejected") {
+          console.warn("[ClipsyReel] Background warm-up failed:", rejected.reason);
         }
       });
     };
@@ -432,7 +435,7 @@ export default function Home() {
       return () => window.clearTimeout(resetTimeout);
     }
 
-    const routeIntroWaitMs = 180_000;
+    const routeIntroWaitMs = 18_000;
     const gearWaitMs = 15_000;
     const timeout = window.setTimeout(() => {
       setRenderGateTimedOut(true);

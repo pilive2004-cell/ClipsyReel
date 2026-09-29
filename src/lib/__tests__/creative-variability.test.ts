@@ -94,4 +94,23 @@ describe("buildCreativeVariabilityPlan", () => {
 
     expect(first?.selectedVersion.label).not.toBe(second?.selectedVersion.label);
   });
+
+  it("keeps viral transitions on the film-burn / cross-zoom family only", () => {
+    const plan = buildCreativeVariabilityPlan({
+      style: "viral",
+      moments,
+      clipCount: 5,
+      overlayCount: 2,
+      settings: {
+        editingSeed: "viral-flash-guard",
+        renderCreativityLevel: "HIGH",
+        viralStyleDNA: "TIKTOK_FAST",
+        generateVersions: 3,
+      },
+    });
+
+    expect(plan).not.toBeNull();
+    expect(plan?.selectedVersion.transitions.every((transition) => ["film-burn", "cross-zoom"].includes(transition.remotionType))).toBe(true);
+    expect(plan?.selectedVersion.transitions.every((transition) => transition.variant !== "flash")).toBe(true);
+  });
 });

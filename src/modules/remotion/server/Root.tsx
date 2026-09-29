@@ -10,7 +10,9 @@ import { ViralExportComposition } from "@/modules/remotion/server/ViralExportCom
 
 const defaultProps: ViralRemotionCompositionProps = {
   baseVideoSrc: "",
-  durationSeconds: 1,
+  durationSeconds: 30,
+  width: VIRAL_REMOTION_WIDTH,
+  height: VIRAL_REMOTION_HEIGHT,
   title: "",
   titleStyle: null,
   hookText: "",
@@ -21,6 +23,8 @@ const defaultProps: ViralRemotionCompositionProps = {
 };
 
 const RemotionRoot = () => {
+  const defaultDurationFrames = Math.max(1, Math.ceil(defaultProps.durationSeconds * VIRAL_REMOTION_FPS));
+
   return (
     <Composition
       id={VIRAL_REMOTION_COMPOSITION_ID}
@@ -28,15 +32,20 @@ const RemotionRoot = () => {
       width={VIRAL_REMOTION_WIDTH}
       height={VIRAL_REMOTION_HEIGHT}
       fps={VIRAL_REMOTION_FPS}
-      durationInFrames={VIRAL_REMOTION_FPS}
+      durationInFrames={defaultDurationFrames}
       defaultProps={defaultProps}
-      calculateMetadata={({ props }) => ({
-        fps: VIRAL_REMOTION_FPS,
-        width: VIRAL_REMOTION_WIDTH,
-        height: VIRAL_REMOTION_HEIGHT,
-        durationInFrames: Math.max(1, Math.ceil(props.durationSeconds * VIRAL_REMOTION_FPS)),
-        props,
-      })}
+      calculateMetadata={({ props }) => {
+        const nextDurationFrames = Math.max(1, Math.ceil((Number(props.durationSeconds) || defaultProps.durationSeconds) * VIRAL_REMOTION_FPS));
+        const nextWidth = Math.max(1, Math.round(Number(props.width) || defaultProps.width || VIRAL_REMOTION_WIDTH));
+        const nextHeight = Math.max(1, Math.round(Number(props.height) || defaultProps.height || VIRAL_REMOTION_HEIGHT));
+        return {
+          fps: VIRAL_REMOTION_FPS,
+          width: nextWidth,
+          height: nextHeight,
+          durationInFrames: nextDurationFrames,
+          props,
+        };
+      }}
     />
   );
 };

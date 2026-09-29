@@ -61,10 +61,15 @@ describe("overlay timing", () => {
     expect(windows).toHaveLength(3);
   });
 
-  it("keeps viral hooks at or after the 24s mark when requested", () => {
-    const windows = planOverlayTextWindows(["Hook 1", "Hook 2"], 90, 0, 0, 24, "viral");
+  it("starts viral hooks immediately after the title window", () => {
+    const titleWindow = planReelTitleWindow(90, 0, 0, "viral");
+    const minimumStart = (titleWindow?.end ?? 0) + 0.35;
+    const windows = planOverlayTextWindows(["Hook 1", "Hook 2", "Hook 3"], 90, 0, 0, minimumStart, "viral");
 
-    expect(windows[0]?.start ?? 0).toBeGreaterThanOrEqual(24);
+    expect(windows[0]?.start ?? 0).toBeGreaterThanOrEqual(minimumStart);
+    expect((windows[0]?.start ?? 0) - minimumStart).toBeLessThan(0.05);
+    expect(windows[1]?.start ?? 0).toBeGreaterThan(windows[0]?.start ?? 0);
+    expect(windows[2]?.start ?? 0).toBeGreaterThan(windows[1]?.start ?? 0);
   });
 
   it("splits long viral hooks into distinct blue and black lines", () => {

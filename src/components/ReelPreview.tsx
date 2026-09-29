@@ -584,7 +584,7 @@ export default function ReelPreview({
       {montageInfo && (
         <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-white/40">
           <Film className="h-3 w-3" />
-        {copy.preview.ready} · {montageInfo.clipCount} clips cross-faded · {montageInfo.durationSeconds.toFixed(1)}s
+        {copy.preview.ready} · {montageInfo.clipCount} clips composed · {montageInfo.durationSeconds.toFixed(1)}s
           {creativeMetadata && style === "viral" ? ` · ${creativeMetadata.viralStyleDNA.replaceAll("_", " ")} · seed ${creativeMetadata.editingSeed}` : ""}
         </div>
       )}

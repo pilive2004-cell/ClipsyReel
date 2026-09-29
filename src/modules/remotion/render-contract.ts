@@ -33,6 +33,8 @@ export interface ViralRemotionTitleStyle {
 export interface ViralRemotionCompositionProps extends Record<string, unknown> {
   baseVideoSrc: string;
   durationSeconds: number;
+  width?: number;
+  height?: number;
   title?: string;
   titleStyle?: ViralRemotionTitleStyle | null;
   hookText?: string;
@@ -44,6 +46,8 @@ export interface ViralRemotionCompositionProps extends Record<string, unknown> {
 
 export interface ViralRemotionRenderProps extends Record<string, unknown> {
   durationSeconds: number;
+  width?: number;
+  height?: number;
   title?: string;
   titleStyle?: ViralRemotionTitleStyle | null;
   hookText?: string;

@@ -157,11 +157,12 @@ describe("planReelSegments", () => {
     }
   });
 
-  it("uses the compact concat path only for larger viral and sport reels", () => {
+  it("uses the compact concat path immediately for multi-clip viral reels and only for larger sport reels", () => {
     expect(shouldUseCompactConcatFallback("sport", 2)).toBe(false);
     expect(shouldUseCompactConcatFallback("sport", 3)).toBe(false);
     expect(shouldUseCompactConcatFallback("sport", 4)).toBe(true);
-    expect(shouldUseCompactConcatFallback("viral", 3)).toBe(false);
+    expect(shouldUseCompactConcatFallback("viral", 2)).toBe(true);
+    expect(shouldUseCompactConcatFallback("viral", 3)).toBe(true);
     expect(shouldUseCompactConcatFallback("viral", 4)).toBe(true);
   });
 

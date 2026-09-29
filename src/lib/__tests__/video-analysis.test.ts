@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { estimateAnalysisBudgetMs } from "../video-analysis";
+import { estimateAnalysisBudgetMs, shouldRunMlInferenceForSample } from "../video-analysis";
 
 describe("estimateAnalysisBudgetMs", () => {
   it("keeps a sensible minimum budget for short uploads", () => {
@@ -25,5 +25,16 @@ describe("estimateAnalysisBudgetMs", () => {
         { durationSeconds: 240 },
       ])
     ).toBeLessThanOrEqual(120000);
+  });
+
+  it("caps expensive ML inference to a sparse subset of sampled frames", () => {
+    const totalSamples = 36;
+    const indexes = Array.from({ length: totalSamples }, (_, index) => index).filter((index) =>
+      shouldRunMlInferenceForSample(index, totalSamples)
+    );
+
+    expect(indexes[0]).toBe(0);
+    expect(indexes[indexes.length - 1]).toBe(totalSamples - 1);
+    expect(indexes.length).toBeLessThanOrEqual(13);
   });
 });

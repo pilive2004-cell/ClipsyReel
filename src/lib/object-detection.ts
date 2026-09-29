@@ -1,5 +1,6 @@
 const TARGET_LABELS = ["motorcycle", "car"] as const;
 type TargetLabel = (typeof TARGET_LABELS)[number];
+const DETECTION_ENDPOINT_BACKOFF_MS = 60_000;
 
 /**
  * Broader label set scored for the local, in-browser COCO-SSD detector (see
@@ -96,6 +97,8 @@ export interface TargetSubjectFrameScore {
   score: number;
   topLabel: TargetLabel | null;
 }
+
+const endpointFailureBackoffUntil = new Map<string, number>();
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -224,6 +227,9 @@ function parseFrames(payload: unknown): DetectionFrameResult[] | null {
 export async function fetchOptionalObjectDetections(file: File, sampleTimes: number[]): Promise<DetectionFrameResult[] | null> {
   const endpoint = process.env.NEXT_PUBLIC_OBJECT_DETECTION_API_URL?.trim();
   if (!endpoint || sampleTimes.length === 0) return null;
+  const now = Date.now();
+  const backoffUntil = endpointFailureBackoffUntil.get(endpoint) ?? 0;
+  if (backoffUntil > now) return null;
 
   const body = new FormData();
   body.append("video", file, file.name);
@@ -240,8 +246,10 @@ export async function fetchOptionalObjectDetections(file: File, sampleTimes: num
     );
     if (!response.ok) return null;
     const payload = (await response.json()) as unknown;
+    endpointFailureBackoffUntil.delete(endpoint);
     return parseFrames(payload);
   } catch {
+    endpointFailureBackoffUntil.set(endpoint, now + DETECTION_ENDPOINT_BACKOFF_MS);
     return null;
   }
 }

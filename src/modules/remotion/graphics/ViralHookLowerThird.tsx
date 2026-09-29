@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { AbsoluteFill, useCurrentFrame } from "remotion";
+import { AbsoluteFill, useCurrentFrame, useVideoConfig } from "remotion";
 import {
   getViralHookLowerThirdState,
   resolveViralHookLowerThirdLayout,
@@ -15,6 +15,7 @@ export function ViralHookLowerThird({
   durationInFrames: number;
 }) {
   const frame = useCurrentFrame();
+  const { width, height } = useVideoConfig();
   const state = getViralHookLowerThirdState(frame, durationInFrames);
   const measurer = useMemo(() => {
     if (typeof document === "undefined") return null;
@@ -25,19 +26,19 @@ export function ViralHookLowerThird({
     const fallback = {
       primary: text.trim(),
       secondary: "",
-      barWidth: 980,
-      barHeight: 84,
-      barGap: 8,
-      paddingX: 26,
-      fontSize: text.trim().length > 18 ? 40 : 48,
+      barWidth: Math.round(width * 0.9074074074),
+      barHeight: Math.round(height * 0.04375),
+      barGap: Math.max(6, Math.round(height * 0.0041666667)),
+      paddingX: Math.round(width * 0.0240740741),
+      fontSize: Math.round((text.trim().length > 18 ? 40 : 48) * (width / 1080)),
     };
 
     if (!measurer) {
       return fallback;
     }
 
-    return resolveViralHookLowerThirdLayout(text, measurer, 1008);
-  }, [measurer, text]);
+    return resolveViralHookLowerThirdLayout(text, measurer, Math.round(width * 0.9333333333), width / 1080, height / 1920);
+  }, [height, measurer, text, width]);
 
   return (
     <AbsoluteFill
@@ -45,7 +46,7 @@ export function ViralHookLowerThird({
         display: "flex",
         alignItems: "flex-start",
         justifyContent: "flex-end",
-        padding: "0 0 220px 54px",
+        padding: `0 0 ${Math.round(height * 0.1145833333)}px ${Math.round(width * 0.05)}px`,
         pointerEvents: "none",
       }}
     >
@@ -54,7 +55,7 @@ export function ViralHookLowerThird({
           display: "flex",
           flexDirection: "column",
           alignItems: "flex-start",
-          gap: 8,
+          gap: layout.barGap,
           opacity: state.opacity,
           transform: `translateX(${state.translateX}px)`,
           filter: "drop-shadow(0 24px 40px rgba(15, 23, 42, 0.42))",
